@@ -1,0 +1,33 @@
+{
+  "$schema": "./node_modules/oxlint/configuration_schema.json",
+  "plugins": ["eslint", "oxc", "typescript", "unicorn", "react", "import"],
+  "categories": {
+    "correctness": "error"
+  },
+  "rules": {
+    "react/rules-of-hooks": "error",
+    "import/no-commonjs": "error",
+    "paideuo/arrow-functions": "error"
+  },
+  "ignorePatterns": ["dist/", "backend/pb_data/"],
+  "jsPlugins": ["./oxlint-plugin.js"],
+  "overrides": [
+    {
+      "files": ["backend/pb_hooks/**/*.js", "backend/pb_migrations/**/*.js"],
+      "globals": {
+        "migrate": "readonly",
+        "routerAdd": "readonly",
+        "Collection": "readonly",
+        "JSONField": "readonly",
+        "BoolField": "readonly",
+        "SelectField": "readonly",
+        "$security": "readonly",
+        "Record": "readonly",
+        "BadRequestError": "readonly",
+        "NotFoundError": "readonly",
+        "$apis": "readonly",
+        "onRecordValidate": "readonly"
+      }
+    }
+  ]
+}

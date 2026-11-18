@@ -1,0 +1,40 @@
+{
+  "name": "paideuo",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "dev:backend": "pocketbase serve --http=127.0.0.1:8090 --dir=backend/pb_data --migrationsDir=backend/pb_migrations --hooksDir=backend/pb_hooks",
+    "lint": "oxlint",
+    "typecheck": "tsc --noEmit",
+    "build": "pnpm run typecheck && vite build",
+    "fmt": "oxfmt",
+    "fmt:check": "oxfmt --check",
+    "seed:program": "node --env-file-if-exists=.env scripts/seed-program.mjs"
+  },
+  "dependencies": {
+    "@chakra-ui/react": "^3.38.0",
+    "@emotion/react": "^11.14.0",
+    "@tanstack/react-query": "^5.108.0",
+    "pocketbase": "^0.29.0",
+    "react": "^19.3.1",
+    "react-dom": "^19.3.1",
+    "react-router": "^7.18.5"
+  },
+  "devDependencies": {
+    "@types/node": "^24.19.2",
+    "@types/react": "^19.3.0",
+    "@types/react-dom": "^19.3.0",
+    "@vitejs/plugin-react": "^6.3.0",
+    "oxfmt": "^0.79.0",
+    "oxlint": "^1.94.0",
+    "sass-embedded": "^1.108.2",
+    "typescript": "~5.9",
+    "vite": "^8.3.8"
+  },
+  "engines": {
+    "node": "24.x"
+  },
+  "packageManager": "pnpm@11.25.0"
+}
