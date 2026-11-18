@@ -1,3 +1,4 @@
+import { StructuralImpact } from "./StructuralImpact";
 import {
   Button,
   Flex,
@@ -84,6 +85,8 @@ const BlockEditor = ({
           >
             <BlockWeeks
               block={block.data}
+              ownerId={ownerId}
+              programId={programId}
               api={api}
               cacheKey={programKeys.block(ownerId, programId, blockId)}
               sync={sync}
@@ -235,7 +238,7 @@ const DurationForm = ({ block, api, sync, close }: FormProps) => {
         const duration = Number(value);
         if (review && review.duration === duration) {
           resize.mutate(review);
-        } else if (duration < block.durationWeeks) {
+        } else if (duration < block.durationWeeks || block.scheduled) {
           resize.reset();
           preview.mutate(duration);
         } else {
@@ -262,12 +265,13 @@ const DurationForm = ({ block, api, sync, close }: FormProps) => {
             }}
           />
         </FormField>
-        {review && (
+        {review && review.duration < block.durationWeeks && (
           <Notice role="status">
             This will remove {review.confirmation.weekIds.length} weeks and{" "}
             {review.confirmation.prescriptionIds.length} prescriptions from the end of the block.
           </Notice>
         )}
+        {review && <StructuralImpact sessions={review.confirmation.scheduledSessions} />}
         {error && (
           <Notice role="alert">
             {errorMessage(error, "Unable to change the block duration. Try again.")}
@@ -278,13 +282,17 @@ const DurationForm = ({ block, api, sync, close }: FormProps) => {
             type="submit"
             loading={pending}
             disabled={Number(value) === block.durationWeeks && !review}
-            colorPalette={review ? "red" : undefined}
+            colorPalette={review && review.duration < block.durationWeeks ? "red" : undefined}
           >
             {review
-              ? "Confirm shorter block"
+              ? review.duration < block.durationWeeks
+                ? "Confirm shorter block"
+                : "Confirm duration"
               : Number(value) < block.durationWeeks
                 ? "Preview reduction"
-                : "Save duration"}
+                : block.scheduled
+                  ? "Preview duration"
+                  : "Save duration"}
           </Button>
           <Button variant="outline" disabled={pending} onClick={close}>
             Cancel duration change

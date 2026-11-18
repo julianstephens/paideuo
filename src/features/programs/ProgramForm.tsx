@@ -1,7 +1,7 @@
 import { Button, Input, Stack, Textarea } from "@chakra-ui/react";
 import { FormField, Notice } from "../../components/ui";
 import { useState } from "react";
-import type { FormEvent } from "react";
+import type { SubmitEvent } from "react";
 import type { ProgramFields } from "./programs";
 
 type Props = {
@@ -22,7 +22,7 @@ export const ProgramForm = ({ initial, buttonLabel, pending, error, onSave }: Pr
   const setField = (field: keyof ProgramFields, value: string) =>
     setFields((previous) => ({ ...previous, [field]: value }));
 
-  const submit = (event: FormEvent<HTMLFormElement>) => {
+  const submit = (event: SubmitEvent<HTMLFormElement>) => {
     event.preventDefault();
     onSave(fields);
   };

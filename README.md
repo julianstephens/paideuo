@@ -39,13 +39,21 @@ With PocketBase running, set `TEST_EMAIL` and `TEST_PASSWORD` for an existing
 pnpm run seed:program
 ```
 
-The script creates an eight-week climbing program with two blocks, 24 planned
-sessions, and four searchable templates with default durations, intensities, and
-structured targets. It saves a hybrid climbing, strength, and conditioning session
-as a template and copies its defaults and targets into the second block. On
-reruns, the script reuses matching records and upgrades older seed data that
-still matches the original. It prints the program's route. The default PocketBase URL is
-`http://127.0.0.1:8090`. Set `POCKETBASE_URL` to use another instance.
+The script seeds an active eight-week climbing program and an earlier completed
+cycle with two training blocks. The earlier cycle has completed and skipped
+sessions with varied durations, effort ratings, and notes. Daily check-ins cover
+the earlier cycle and recent days, with varied sleep, soreness, readiness,
+nutrition, and occasional gaps.
+
+The active schedule defaults to the current week's Monday in the local
+timezone. Set `SEED_START_DATE` to a Monday in `YYYY-MM-DD` format or
+`SEED_TIMEZONE` to an IANA timezone to override the defaults for a new
+schedule. Reruns reuse existing schedules and fill in missing history while
+preserving existing check-ins and session outcomes. The script prints calendar
+and program routes for both cycles.
+
+The default PocketBase URL is `http://127.0.0.1:8090`. Set `POCKETBASE_URL` to
+use another instance.
 
 ## Verify
 

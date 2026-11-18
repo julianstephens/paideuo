@@ -7,6 +7,7 @@ import { ColorModeControl } from "./ColorModeControl";
 
 const navigation = [
   { to: "/", label: "Calendar" },
+  { to: "/metrics", label: "Metrics" },
   { to: "/programs", label: "Programs" },
   { to: "/library", label: "Library" },
 ];

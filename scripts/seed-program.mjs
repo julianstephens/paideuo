@@ -175,6 +175,95 @@ const blocks = [
   },
 ];
 
+const historyProgram = {
+  name: "Climbing Performance · Previous Foundation Cycle",
+  objective: "Build a base of easy climbing mileage and establish a sustainable training rhythm.",
+  description: "The training cycle leading into the current eight-week project cycle.",
+};
+
+const historyBlocks = [
+  {
+    name: "Base Mileage",
+    objective: "Return to consistent climbing and build aerobic capacity on easy terrain.",
+    weeks: [
+      [
+        "Ease back in",
+        "Find a repeatable starting volume.",
+        [
+          "Climb 5 easy problems with quiet feet.",
+          "Do two light sets per movement.",
+          "Choose familiar problems and keep two attempts in reserve.",
+        ],
+      ],
+      [
+        "Add mileage",
+        "Build volume at a steady pace.",
+        [
+          "Climb 7 easy problems and repeat the best sequence.",
+          "Do two controlled sets of 8 per movement.",
+          "Try three moderate problems with full rests.",
+        ],
+      ],
+      [
+        "Build consistency",
+        "Repeat the workload across three days.",
+        [
+          "Climb 8 easy problems across two wall angles.",
+          "Do three sets of 8 per movement.",
+          "Make four quality efforts on a short crux.",
+        ],
+      ],
+      [
+        "Unload",
+        "Reduce volume and let forearm fatigue settle.",
+        ["Climb 4 easy problems.", "Do one light set per movement.", "Stick to easy traverses."],
+      ],
+    ],
+  },
+  {
+    name: "Strength Foundation",
+    objective: "Build pulling strength and practice harder movement with generous rests.",
+    weeks: [
+      [
+        "Controlled effort",
+        "Set a strength baseline without grinding reps.",
+        [
+          "Repeat 6 easy problems with deliberate hip turns.",
+          "Do two sets of 8 with two reps in reserve.",
+          "Pick one steep problem and rehearse its hardest move.",
+        ],
+      ],
+      [
+        "Increase load",
+        "Make a small progression while keeping movement crisp.",
+        [
+          "Climb 7 problems at a conversational pace.",
+          "Add a small amount of load to two sets of rows.",
+          "Try two links into the crux.",
+        ],
+      ],
+      [
+        "Practice links",
+        "Maintain strength work and prioritize quality attempts.",
+        [
+          "Repeat 5 problems on the project angle.",
+          "Hold the previous week's load for two sets.",
+          "Make up to 4 attempts with full rests.",
+        ],
+      ],
+      [
+        "Finish fresh",
+        "Cut accessory work ahead of the next cycle.",
+        [
+          "Climb 3 easy problems and log a movement cue.",
+          "Do one light set per movement.",
+          "Take two well-rested attempts, then cool down.",
+        ],
+      ],
+    ],
+  },
+];
+
 const hybridTemplateName = "Project Cycle · Technique and Conditioning";
 
 const rpe = (value) => ({ value, scale: "RPE" });
@@ -268,15 +357,137 @@ const matchesTemplate = (record, template) =>
   record.plannedIntensity === (template.plannedIntensity ?? null) &&
   isDeepStrictEqual(componentFields(record.components), componentFields(template.components));
 
-const seed = async () => {
-  const { TEST_EMAIL, TEST_PASSWORD, POCKETBASE_URL = "http://127.0.0.1:8090" } = process.env;
-  if (!TEST_EMAIL || !TEST_PASSWORD) {
-    throw new Error("Set TEST_EMAIL and TEST_PASSWORD for an existing paideuo_users account.");
+const localDate = (timezone) => {
+  const formatter = new Intl.DateTimeFormat("en", {
+    timeZone: timezone,
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+  });
+  const { year, month, day } = Object.fromEntries(
+    formatter.formatToParts(new Date()).map(({ type, value }) => [type, value]),
+  );
+  return `${year}-${month}-${day}`;
+};
+
+const dateValue = (date) => new Date(`${date}T00:00:00Z`);
+
+const shiftDate = (key, days) => {
+  const date = dateValue(key);
+  date.setUTCDate(date.getUTCDate() + days);
+  return date.toISOString().slice(0, 10);
+};
+
+const mondayOf = (date) => shiftDate(date, -((dateValue(date).getUTCDay() + 6) % 7));
+
+const rangeQuery = async (pb, path, start, end, limit) => {
+  const results = [];
+  for (let first = start; first <= end; first = shiftDate(first, limit)) {
+    const last = shiftDate(first, limit - 1);
+    const params = new URLSearchParams({ start: first, end: last < end ? last : end });
+    results.push(...(await pb.send(`${path}?${params}`)));
   }
+  return results;
+};
 
-  const pb = new PocketBase(POCKETBASE_URL);
-  await pb.collection("paideuo_users").authWithPassword(TEST_EMAIL, TEST_PASSWORD);
+const completionNotes = [
+  "",
+  "Felt steady after the warm-up.",
+  "Stopped when footwork started to slip.",
+  "Added a few minutes of easy movement at the end.",
+  "Longer rests helped keep the last attempts sharp.",
+];
 
+const recordHistory = async (pb, program, today, durationDays) => {
+  const { startDate } = program.schedule;
+  const end = shiftDate(startDate, durationDays - 1);
+  const calendarPath = "/api/paideuo/calendar";
+  const rows = await rangeQuery(pb, calendarPath, startDate, end, 42);
+  const sessions = rows.filter(({ programId }) => programId === program.id);
+  for (const [index, session] of sessions.entries()) {
+    const { id, revision, status, scheduledDate, prescription } = session;
+    if (status !== "planned" || scheduledDate >= today) continue;
+    const action = [5, 13, 20].includes(index) ? "skip" : "complete";
+    const actualDurationMin =
+      (prescription.plannedDurationMin ?? 45) + [-10, 0, 5, -5, 10, 0, 5][index % 7];
+    const baseRpe = { easy: 3, moderate: 5, hard: 7 }[prescription.plannedIntensity] ?? 5;
+    const completion = {
+      completedDate: scheduledDate,
+      actualDurationMin: Math.max(0, actualDurationMin),
+      sessionRpe: baseRpe + [-1, 0, 1, 0, 2, 0, -1][index % 7],
+      notes: completionNotes[index % completionNotes.length],
+    };
+    await pb.send(`${calendarPath}/sessions/${id}/execution`, {
+      method: "PATCH",
+      body: { action, revision, ...(action === "complete" ? { completion } : {}) },
+    });
+  }
+  return (await rangeQuery(pb, calendarPath, startDate, end, 42)).filter(
+    ({ programId }) => programId === program.id,
+  );
+};
+
+const seedCheckIns = async (pb, start, end, sessions) => {
+  const path = "/api/paideuo/check-ins";
+  const existing = new Set((await rangeQuery(pb, path, start, end, 56)).map(({ date }) => date));
+  const completed = new Map(
+    sessions
+      .filter(({ completion }) => completion)
+      .map((session) => [session.completion.completedDate, session]),
+  );
+  const unloggedDays = new Set(
+    sessions.filter(({ status }) => status === "planned").map(({ scheduledDate }) => scheduledDate),
+  );
+  let created = 0;
+  for (let date = start, index = 0; date <= end; date = shiftDate(date, 1), index++) {
+    if (existing.has(date) || (date !== end && [4, 10].includes(index % 13))) continue;
+    const workout = completed.get(date);
+    const yesterday = completed.get(shiftDate(date, -1));
+    const hardYesterday = (yesterday?.completion.sessionRpe ?? 0) >= 7;
+    const shortSleep = index % 9 === 3 || index % 17 === 8;
+    const fatigue =
+      hardYesterday && shortSleep ? 5 : hardYesterday || shortSleep ? 4 : yesterday ? 3 : 2;
+    const fueled = index % 11 !== 5;
+    const result = await pb.send(`${path}/${date}`, {
+      method: "PUT",
+      body: {
+        sleepHours: shortSleep ? 5.75 + (index % 3) * 0.25 : 7 + (index % 6) * 0.25,
+        sleepQuality: shortSleep ? 2 : 3 + (index % 3),
+        fatigue,
+        soreness: hardYesterday ? 4 : yesterday ? 3 : 1 + (index % 2),
+        readiness: 6 - fatigue,
+        restingHeartRate: index % 6 === 2 ? null : 53 + (index % 5) + (shortSleep ? 4 : 0),
+        notes: shortSleep
+          ? "Short night. Taking the morning slowly."
+          : hardYesterday
+            ? "Forearms still tired after yesterday's climbing."
+            : index % 8 === 0
+              ? "Easy walk and a relaxed evening."
+              : "",
+        nutritionAdequacy:
+          index % 11 === 5 ? "likely_insufficient" : index % 11 === 8 ? "unsure" : "adequate",
+        trainingFueling: workout
+          ? fueled
+            ? "adequate"
+            : "inadequate"
+          : date === end || unloggedDays.has(date)
+            ? null
+            : "not_applicable",
+        proteinGrams: index % 5 === 1 ? null : (fueled ? 100 : 76) + ((index * 7) % 29),
+        nutritionNotes: workout && !fueled ? "Trained after work with only a small snack." : "",
+      },
+    });
+    if (
+      Object.entries(result).some(
+        ([key, value]) => key !== "date" && value !== null && value !== "",
+      )
+    )
+      created++;
+  }
+  return created;
+};
+
+const seedProgram = async (pb, fields, planBlocks, startDate, timezone) => {
   const programsPath = "/api/paideuo/programs";
   const templatesPath = "/api/paideuo/templates";
   const post = (path, body) => pb.send(path, { method: "POST", body });
@@ -284,9 +495,10 @@ const seed = async () => {
 
   const programs = await pb.send(programsPath);
   const seeded =
-    programs.find(({ name }) => name === program.name) ?? (await post(programsPath, program));
+    programs.find(({ name }) => name === fields.name) ?? (await post(programsPath, fields));
   const programPath = `${programsPath}/${seeded.id}`;
   const currentProgram = await pb.send(programPath);
+  if (currentProgram.schedule) return currentProgram;
 
   const library = await pb.send(templatesPath);
   let hybridTemplate = library.find(({ name }) => name === hybridTemplateName);
@@ -304,7 +516,7 @@ const seed = async () => {
     baselines.push(existing);
   }
 
-  for (const { name, objective, weeks } of blocks) {
+  for (const { name, objective, weeks } of planBlocks) {
     const block =
       currentProgram.blocks.find((item) => item.name === name) ??
       (await post(`${programPath}/blocks`, { name, objective, durationWeeks: weeks.length }));
@@ -337,7 +549,7 @@ const seed = async () => {
         const cellPath = `${weekPath}/cells/${slot.id}`;
         const { prescription, revision } = await pb.send(cellPath);
         const template = templates[index];
-        const easy = recovery && (index !== 2 || name === blocks[0].name);
+        const easy = recovery && (index !== 2 || name === planBlocks[0].name);
         const plannedIntensity = easy ? "easy" : index === 2 ? "hard" : "moderate";
         const seededCell =
           prescription &&
@@ -350,7 +562,7 @@ const seed = async () => {
               matchesTemplate(prescription, { ...template, plannedIntensity })));
 
         const source =
-          index === 0 && name === blocks[1].name && !recovery && hybridTemplate
+          index === 0 && name === planBlocks[1].name && !recovery && hybridTemplate
             ? hybridTemplate
             : template;
         const insertTemplate = source === hybridTemplate;
@@ -372,7 +584,7 @@ const seed = async () => {
           await patch(cellPath, { ...fields, revision, components });
         }
 
-        if (!hybridTemplate && index === 0 && name === blocks[0].name && week.position === 1) {
+        if (!hybridTemplate && index === 0 && name === planBlocks[0].name && week.position === 1) {
           const current = seededCell ? await pb.send(cellPath) : { prescription, revision };
           if (
             current.prescription &&
@@ -393,7 +605,78 @@ const seed = async () => {
     }
   }
 
-  console.log(`Seeded "${program.name}". Open /programs/${seeded.id} in the app.`);
+  const schedulePath = `${programPath}/schedule`;
+  const dates = { startDate, timezone };
+  const { revision } = await post(`${schedulePath}/preview`, dates);
+  const schedule = await post(schedulePath, { ...dates, revision });
+  return { ...currentProgram, status: "active", schedule };
+};
+
+const seed = async () => {
+  const { TEST_EMAIL, TEST_PASSWORD, POCKETBASE_URL = "http://127.0.0.1:8090" } = process.env;
+  if (!TEST_EMAIL || !TEST_PASSWORD) {
+    throw new Error("Set TEST_EMAIL and TEST_PASSWORD for an existing paideuo_users account.");
+  }
+
+  const pb = new PocketBase(POCKETBASE_URL);
+  await pb.collection("paideuo_users").authWithPassword(TEST_EMAIL, TEST_PASSWORD);
+  const timezone = process.env.SEED_TIMEZONE ?? Intl.DateTimeFormat().resolvedOptions().timeZone;
+  const currentWeek = mondayOf(localDate(timezone));
+  const active = await seedProgram(
+    pb,
+    program,
+    blocks,
+    process.env.SEED_START_DATE ?? currentWeek,
+    timezone,
+  );
+
+  const today = localDate(active.schedule.timezone);
+  const thisWeek = mondayOf(today);
+  const historyEnd = active.schedule.startDate < thisWeek ? active.schedule.startDate : thisWeek;
+  const durationDays = historyBlocks.reduce((total, block) => total + 7 * block.weeks.length, 0);
+  const historyStart = shiftDate(historyEnd, -durationDays);
+  const history = await seedProgram(
+    pb,
+    historyProgram,
+    historyBlocks,
+    historyStart,
+    active.schedule.timezone,
+  );
+  const historyToday = localDate(history.schedule.timezone);
+  const historicalSessions = await recordHistory(pb, history, historyToday, durationDays);
+  if (
+    history.status === "active" &&
+    historicalSessions.length &&
+    historicalSessions.every(({ status }) => status !== "planned")
+  ) {
+    await pb.send(`/api/paideuo/programs/${history.id}/complete`, { method: "POST" });
+  }
+
+  const previousStart = history.schedule.startDate;
+  const previousEnd = shiftDate(previousStart, durationDays - 1);
+  const recentStart = shiftDate(today, -27);
+  const checkInRanges =
+    recentStart > shiftDate(previousEnd, 1)
+      ? [
+          [previousStart, previousEnd],
+          [recentStart, today],
+        ]
+      : [[previousStart, today]];
+  let createdCheckIns = 0;
+  for (const [start, end] of checkInRanges) {
+    const activeSessions = await rangeQuery(pb, "/api/paideuo/calendar", start, end, 42);
+    createdCheckIns += await seedCheckIns(pb, start, end, [
+      ...historicalSessions,
+      ...activeSessions.filter(({ programId }) => programId === active.id),
+    ]);
+  }
+  console.log(`Added ${createdCheckIns} daily check-ins through ${today}.`);
+  console.log(
+    `Active program: /programs/${active.id} · Calendar: /?date=${active.schedule.startDate}`,
+  );
+  console.log(
+    `Previous cycle: /programs/${history.id} · Calendar: /?date=${history.schedule.startDate}`,
+  );
 };
 
 try {

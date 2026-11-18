@@ -22,6 +22,9 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useState } from "react";
 import { Link as RouterLink, useParams } from "react-router";
 import { useSession } from "../auth/session";
+import { SavedReviews } from "../reviews/SavedReviews";
+import { ProgramScheduling } from "../calendar/ProgramScheduling";
+import { ProgramCompliance } from "../compliance/ComplianceSummary";
 import { ProgramActions } from "./ProgramActions";
 import { ProgramForm } from "./ProgramForm";
 import { blockEditorPath, errorMessage, programKeys, programsApi } from "./programs";
@@ -138,8 +141,11 @@ const ProgramEditor = ({ program, ownerId }: { program: Program; ownerId: string
             />
           </Panel>
         )}
+        <ProgramScheduling program={program} ownerId={ownerId} />
         <ProgramActions program={program} ownerId={ownerId} />
       </Panel>
+      {program.scheduled && <ProgramCompliance ownerId={ownerId} programId={program.id} />}
+      <SavedReviews ownerId={ownerId} programId={program.id} />
       <Stack gap="3">
         <Flex justify="space-between" align="center" wrap="wrap" gap="3">
           <Heading as="h2">Blocks</Heading>
@@ -196,9 +202,7 @@ const ProgramEditor = ({ program, ownerId }: { program: Program; ownerId: string
                       size="sm"
                       variant="outline"
                       aria-label={`Move ${block.name} up`}
-                      disabled={
-                        index === 0 || reorder.isPending || add.isPending || program.scheduled
-                      }
+                      disabled={index === 0 || reorder.isPending || add.isPending}
                       onClick={() => move(index, -1)}
                     >
                       Move up
@@ -208,10 +212,7 @@ const ProgramEditor = ({ program, ownerId }: { program: Program; ownerId: string
                       variant="outline"
                       aria-label={`Move ${block.name} down`}
                       disabled={
-                        index === program.blocks.length - 1 ||
-                        reorder.isPending ||
-                        add.isPending ||
-                        program.scheduled
+                        index === program.blocks.length - 1 || reorder.isPending || add.isPending
                       }
                       onClick={() => move(index, 1)}
                     >

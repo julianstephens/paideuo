@@ -1,3 +1,4 @@
+import type { ProgramSchedule } from "../calendar/scheduling";
 import type { PrescriptionComponent } from "../prescriptions/components";
 import type { SessionType } from "../templates/templates";
 import { apiRequest } from "../../lib/api/request";
@@ -41,6 +42,8 @@ export type PrescriptionCell = {
   revision: string;
   prescription: (PrescriptionFields & { components: PrescriptionComponent[] }) | null;
 };
+export type DetailedPrescription = NonNullable<PrescriptionCell["prescription"]> &
+  Pick<PrescriptionSummary, "weekId" | "slotId">;
 export type CopyRequest = {
   destinationWeekId: string;
   slotId?: string;
@@ -48,12 +51,29 @@ export type CopyRequest = {
 };
 export type CopyPreview = { revision: string; copied: number; replaced: number; removed: number };
 export type BlockDetail = Block & {
+  scheduled: boolean;
   weeks: ProgramWeek[];
   slots: Slot[];
   prescriptions: PrescriptionSummary[];
 };
-export type RemovalPreview = { weekIds: string[]; prescriptionIds: string[] };
-export type Program = ProgramSummary & { blocks: Block[] };
+export type StructuralImpact = {
+  id: string;
+  title: string;
+  scheduledDate: string;
+  revisedProgramDate: string | null;
+  status: string;
+  manuallyMoved: boolean;
+};
+export type RemovalPreview = {
+  weekIds: string[];
+  prescriptionIds: string[];
+  scheduledSessions: StructuralImpact[];
+};
+export type Program = ProgramSummary & {
+  blocks: Block[];
+  schedule: ProgramSchedule | null;
+  pendingScheduleChanges: boolean;
+};
 
 const endpoint = "/api/paideuo/programs";
 
@@ -86,6 +106,13 @@ export const blocksApi = (programId: string, blockId: string) => {
         destinationProgramId,
       }),
     updateWeek: (weekId: string, fields: WeekFields) => send(weekPath(weekId), "PATCH", fields),
+    compareWeeks: (left: string, right: string, signal: AbortSignal) =>
+      send<DetailedPrescription[]>(
+        `${path}/compare-weeks?${new URLSearchParams({ left, right })}`,
+        "GET",
+        undefined,
+        signal,
+      ),
     getCell: (weekId: string, slotId: string, signal: AbortSignal) =>
       send<PrescriptionCell>(cellPath(weekId, slotId), "GET", undefined, signal),
     saveCell: (
@@ -122,6 +149,7 @@ export const programsApi = {
   create: (fields: ProgramFields) => send<{ id: string }>("", "POST", fields),
   update: (id: string, fields: ProgramFields) =>
     send<{ id: string }>(programPath(id), "PATCH", fields),
+  complete: (id: string) => send<{ id: string }>(`${programPath(id)}/complete`, "POST"),
   archive: (id: string) => send<{ id: string }>(`${programPath(id)}/archive`, "POST"),
   duplicate: (id: string, operationId: string) =>
     send<{ id: string }>(`${programPath(id)}/duplicate`, "POST", { operationId }),

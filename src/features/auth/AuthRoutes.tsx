@@ -1,9 +1,9 @@
 import { Button, Container, Flex, Input, Stack, Text } from "@chakra-ui/react";
-import { FormField, Notice, PageHeader, Panel } from "../../components/ui";
-import { ColorModeControl } from "../../app/ColorModeControl";
+import type { SubmitEvent } from "react";
 import { useState } from "react";
-import type { FormEvent } from "react";
 import { Navigate, Outlet, useLocation } from "react-router";
+import { ColorModeControl } from "../../app/ColorModeControl";
+import { FormField, Notice, PageHeader, Panel } from "../../components/ui";
 import { signIn } from "../../lib/api/pocketbase";
 import { useSession } from "./session";
 
@@ -58,7 +58,7 @@ export const SignInPage = () => {
   const [pending, setPending] = useState(false);
   const [error, setError] = useState("");
 
-  const submit = async (event: FormEvent<HTMLFormElement>) => {
+  const submit = async (event: SubmitEvent<HTMLFormElement>) => {
     event.preventDefault();
     setPending(true);
     setError("");

@@ -46,7 +46,17 @@ const handlePrograms = (event) => {
     durationWeeks: block.getInt("duration_weeks"),
   });
 
-  const programData = (program, blocks) => ({
+  const scheduleFor = (db, program) =>
+    find(db, "paideuo_program_schedules", "program = {:program}", { program })[0];
+
+  const scheduleData = (record) => ({
+    id: record.id,
+    startDate: record.getString("start_date"),
+    timezone: record.getString("timezone"),
+    status: record.getString("status"),
+  });
+
+  const programData = (program, blocks, schedule) => ({
     id: program.id,
     name: program.getString("name"),
     objective: program.getString("objective"),
@@ -54,7 +64,7 @@ const handlePrograms = (event) => {
     status: program.getString("status"),
     blockCount: blocks.length,
     weekCount: blocks.reduce((total, block) => total + block.getInt("duration_weeks"), 0),
-    scheduled: false,
+    scheduled: Boolean(schedule),
   });
 
   const copyFields = (record, keys) =>
@@ -204,6 +214,227 @@ const handlePrograms = (event) => {
     plannedIntensity: record.getString("planned_intensity") || null,
   });
 
+  const presentPrescription = (record, components) => ({
+    ...sessionSummary(record),
+    sessionType: record.getString("session_type"),
+    description: record.getString("description"),
+    notes: record.getString("notes"),
+    components: components.map((component) => ({
+      position: component.position,
+      ...presentComponent(component),
+    })),
+  });
+
+  const buildSchedule = (db, programId, blocks, startDate, projection = {}) => {
+    const dates = require(__hooks + "/calendar-dates.js");
+    const start = dates.parse(startDate);
+    const components = new Map();
+    for (const row of find(
+      db,
+      "paideuo_training_components",
+      "prescription.program_week.block.program = {:programId}",
+      { programId },
+      "position,id",
+    )) {
+      const prescription = row.getString("prescription");
+      if (!components.has(prescription)) components.set(prescription, []);
+      components.get(prescription).push(presentComponent(componentFields(row)));
+    }
+    const prescriptions = new Map();
+    for (const row of find(
+      db,
+      "paideuo_session_prescriptions",
+      "program_week.block.program = {:programId}",
+      { programId },
+      "id",
+    )) {
+      const weekId = row.getString("program_week");
+      if (!prescriptions.has(weekId)) prescriptions.set(weekId, []);
+      prescriptions.get(weekId).push(row);
+    }
+    const sessions = [];
+    let blockOffset = 0;
+    for (const block of blocks) {
+      const duration =
+        projection.blockId === block.id ? projection.duration : block.getInt("duration_weeks");
+      const slots = new Map(slotsFor(db, block.id).map((slot) => [slot.id, slot]));
+      for (const week of children(db, "paideuo_program_weeks", "block", block.id, "position")) {
+        if (week.getInt("position") > duration) continue;
+        const weekOffset = blockOffset + (week.getInt("position") - 1) * 7;
+        for (const row of prescriptions.get(week.id) || []) {
+          if (row.getString("slot") === projection.removeSlot) continue;
+          const slot = slots.get(row.getString("slot"));
+          if (!slot)
+            throw new BadRequestError("A prescription references a slot outside its block.");
+          const day = new Date(start.getTime());
+          day.setUTCDate(day.getUTCDate() + weekOffset + slot.getInt("weekday") - 1);
+          const { title, plannedDurationMin, plannedIntensity } = sessionSummary(row);
+          if (day.getUTCFullYear() > 9999) {
+            throw new BadRequestError("This program extends beyond the supported calendar dates.");
+          }
+          sessions.push({
+            sourcePrescriptionId: row.id,
+            sourceAttribution: {
+              blockId: block.id,
+              blockName: block.getString("name"),
+              weekId: week.id,
+              weekPosition: week.getInt("position"),
+              weekLabel: week.getString("label"),
+            },
+            scheduledDate: dates.format(day),
+            slotPosition: slot.getInt("position"),
+            prescription: {
+              title,
+              sessionType: row.getString("session_type"),
+              description: row.getString("description"),
+              notes: row.getString("notes"),
+              plannedDurationMin,
+              plannedIntensity,
+              components: components.get(row.id) || [],
+            },
+          });
+        }
+      }
+      blockOffset += duration * 7;
+    }
+    return sessions.sort(
+      (a, b) =>
+        a.scheduledDate.localeCompare(b.scheduledDate) ||
+        a.slotPosition - b.slotPosition ||
+        a.sourcePrescriptionId.localeCompare(b.sourcePrescriptionId),
+    );
+  };
+
+  const sourceRevision = (sessions) => $security.sha256(JSON.stringify(sessions));
+
+  const scheduledRows = (db, schedule) =>
+    children(db, "paideuo_scheduled_sessions", "schedule", schedule.id, "id");
+
+  const desiredSessions = (db, schedule, projection) =>
+    buildSchedule(
+      db,
+      id,
+      children(db, "paideuo_blocks", "program", id, "position,id"),
+      schedule.getString("start_date"),
+      projection,
+    );
+
+  const reviewSchedule = (db, schedule) => {
+    const revisions = require(__hooks + "/schedule-revisions.js");
+    return revisions.compare(
+      scheduledRows(db, schedule),
+      desiredSessions(db, schedule),
+      revisions.todayFor(schedule),
+    );
+  };
+
+  const createScheduledSession = (db, schedule, session) =>
+    save(db, "paideuo_scheduled_sessions", {
+      schedule: schedule.id,
+      source_prescription_id: session.sourcePrescriptionId,
+      source_attribution: session.sourceAttribution,
+      scheduled_date: session.scheduledDate,
+      original_date: session.scheduledDate,
+      program_date: session.scheduledDate,
+      slot_position: session.slotPosition,
+      prescription_snapshot: session.prescription,
+      status: "planned",
+    });
+
+  const weekDates = (db, schedule) => {
+    const dates = require(__hooks + "/calendar-dates.js");
+    const start = dates.parse(schedule.getString("start_date"));
+    const result = new Map();
+    let blockOffset = 0;
+    for (const block of children(db, "paideuo_blocks", "program", id, "position,id")) {
+      for (const week of children(db, "paideuo_program_weeks", "block", block.id, "position,id")) {
+        const day = new Date(start.getTime());
+        day.setUTCDate(day.getUTCDate() + blockOffset + (week.getInt("position") - 1) * 7);
+        result.set(week.id, day);
+      }
+      blockOffset += block.getInt("duration_weeks") * 7;
+    }
+    return result;
+  };
+
+  const preserveStructure = (tx, change) => {
+    const schedule = scheduleFor(tx, id);
+    if (!schedule) return change();
+    const revisions = require(__hooks + "/schedule-revisions.js");
+    const today = revisions.todayFor(schedule);
+    const cutoff = require(__hooks + "/calendar-dates.js").parse(today);
+    const priorWeeks = weekDates(tx, schedule);
+    const prior = new Map(
+      desiredSessions(tx, schedule).map((session) => [
+        session.sourcePrescriptionId,
+        session.scheduledDate,
+      ]),
+    );
+    change();
+    const revisedWeeks = weekDates(tx, schedule);
+    for (const [weekId, start] of priorWeeks) {
+      if (start < cutoff && +revisedWeeks.get(weekId) !== +start) {
+        throw new BadRequestError(
+          "Training weeks that began before today cannot be moved or removed.",
+        );
+      }
+    }
+    for (const [weekId, start] of revisedWeeks) {
+      if (start < cutoff && +priorWeeks.get(weekId) !== +start) {
+        throw new BadRequestError("Training weeks cannot be added or moved into the past.");
+      }
+    }
+    const next = new Map(
+      desiredSessions(tx, schedule).map((session) => [
+        session.sourcePrescriptionId,
+        session.scheduledDate,
+      ]),
+    );
+    for (const row of scheduledRows(tx, schedule)) {
+      const source = row.getString("source_prescription_id");
+      if (revisions.isProtected(row, today) && prior.get(source) !== next.get(source)) {
+        throw new BadRequestError(
+          "This change would remove or move the source of a protected calendar session.",
+        );
+      }
+    }
+  };
+
+  const structureImpact = (db, projection) => {
+    const schedule = scheduleFor(db, id);
+    if (!schedule) return [];
+    const prior = new Map(
+      desiredSessions(db, schedule).map((session) => [session.sourcePrescriptionId, session]),
+    );
+    const next = new Map(
+      desiredSessions(db, schedule, projection).map((session) => [
+        session.sourcePrescriptionId,
+        session,
+      ]),
+    );
+    return scheduledRows(db, schedule).flatMap((row) => {
+      const source = row.getString("source_prescription_id");
+      const before = prior.get(source);
+      const after = next.get(source);
+      if (
+        !before ||
+        (after?.scheduledDate === before.scheduledDate &&
+          after.slotPosition === before.slotPosition)
+      )
+        return [];
+      return [
+        {
+          id: row.id,
+          title: JSON.parse(row.getString("prescription_snapshot")).title,
+          scheduledDate: row.getString("scheduled_date"),
+          revisedProgramDate: after?.scheduledDate ?? null,
+          status: row.getString("status"),
+          manuallyMoved: row.getBool("manually_moved"),
+        },
+      ];
+    });
+  };
+
   const copyBlock = (tx, block, programId, position, name) => {
     const newBlock = save(tx, "paideuo_blocks", {
       ...copyFields(block, ["objective", "duration_weeks"]),
@@ -260,7 +491,7 @@ const handlePrograms = (event) => {
     prescriptionIds: prescriptions.map((prescription) => prescription.id),
   });
 
-  const confirmPreview = (weeks, prescriptions) => {
+  const confirmPreview = (weeks, prescriptions, impact) => {
     const expected = previewData(weeks, prescriptions);
     for (const key of ["weekIds", "prescriptionIds"]) {
       const supplied = body.confirmation && body.confirmation[key];
@@ -271,6 +502,16 @@ const handlePrograms = (event) => {
       ) {
         throw new BadRequestError("The affected records have changed. Review a fresh preview.");
       }
+    }
+    const suppliedImpact = body.confirmation?.scheduledSessions ?? [];
+    if (
+      !Array.isArray(suppliedImpact) ||
+      suppliedImpact.length !== impact.length ||
+      impact.some((session, index) =>
+        Object.keys(session).some((key) => suppliedImpact[index]?.[key] !== session[key]),
+      )
+    ) {
+      throw new BadRequestError("The affected calendar sessions changed. Review a fresh preview.");
     }
   };
 
@@ -299,6 +540,7 @@ const handlePrograms = (event) => {
       const weeks = children(app, "paideuo_program_weeks", "block", blockId, "position");
       return event.json(200, {
         ...blockData(block),
+        scheduled: Boolean(scheduleFor(app, id)),
         weeks: weeks.map((week) => ({
           id: week.id,
           position: week.getInt("position"),
@@ -309,6 +551,45 @@ const handlePrograms = (event) => {
         slots: slotsFor(app, blockId).map(slotData),
         prescriptions: blockPrescriptions(app, blockId).map(sessionSummary),
       });
+    }
+
+    if (method === "GET" && blockAction === "compare-weeks" && slotId === undefined) {
+      const query = event.request.url.query();
+      const left = query.get("left");
+      const right = query.get("right");
+      if (!left || !right || left === right) {
+        throw new BadRequestError("Choose two distinct weeks.");
+      }
+      let prescriptions;
+      app.runInTransaction((tx) => {
+        ownBlock(tx, blockId, id);
+        const params = { blockId, left, right };
+        const pair = "(id = {:left} || id = {:right})";
+        const weeks = find(tx, "paideuo_program_weeks", `block = {:blockId} && ${pair}`, params);
+        if (weeks.length !== 2) throw new NotFoundError("Week not found.");
+        const records = find(
+          tx,
+          "paideuo_session_prescriptions",
+          "program_week.block = {:blockId} && (program_week = {:left} || program_week = {:right})",
+          params,
+        );
+        const components = new Map();
+        for (const row of find(
+          tx,
+          "paideuo_training_components",
+          "prescription.program_week.block = {:blockId} && (prescription.program_week = {:left} || prescription.program_week = {:right})",
+          params,
+          "position,id",
+        )) {
+          const key = row.getString("prescription");
+          if (!components.has(key)) components.set(key, []);
+          components.get(key).push(componentFields(row));
+        }
+        prescriptions = records.map((record) =>
+          presentPrescription(record, components.get(record.id) ?? []),
+        );
+      });
+      return event.json(200, prescriptions);
     }
 
     if (blockAction === "weeks" && slotId) {
@@ -419,16 +700,7 @@ const handlePrograms = (event) => {
           const data = snapshot(app, record);
           return event.json(200, {
             revision: revision(data),
-            prescription: {
-              ...sessionSummary(record),
-              sessionType: record.getString("session_type"),
-              description: record.getString("description"),
-              notes: record.getString("notes"),
-              components: data.components.map((component) => ({
-                position: component.position,
-                ...presentComponent(component),
-              })),
-            },
+            prescription: presentPrescription(record, data.components),
           });
         }
 
@@ -633,23 +905,30 @@ const handlePrograms = (event) => {
         );
         return { weeks, prescriptions };
       };
+      const projection = { blockId, duration };
       if (blockAction === "resize-preview") {
         ownBlock(app, blockId, id);
         const { weeks, prescriptions } = affected(app);
-        return event.json(200, previewData(weeks, prescriptions));
+        return event.json(200, {
+          ...previewData(weeks, prescriptions),
+          scheduledSessions: structureImpact(app, projection),
+        });
       }
       app.runInTransaction((tx) => {
         const block = ownBlock(tx, blockId, id);
         const current = block.getInt("duration_weeks");
-        if (current > duration || body.confirmation !== undefined) {
-          const { weeks, prescriptions } = affected(tx);
-          confirmPreview(weeks, prescriptions);
+        const { weeks, prescriptions } = affected(tx);
+        const impact = structureImpact(tx, projection);
+        if (current > duration || body.confirmation !== undefined || impact.length) {
+          confirmPreview(weeks, prescriptions, impact);
+        }
+        preserveStructure(tx, () => {
           deletePrescriptions(tx, prescriptions);
           weeks.forEach((week) => tx.delete(week));
-        }
-        addWeeks(tx, blockId, current + 1, duration);
-        block.set("duration_weeks", duration);
-        tx.save(block);
+          addWeeks(tx, blockId, current + 1, duration);
+          block.set("duration_weeks", duration);
+          tx.save(block);
+        });
       });
       return event.json(200, { id: blockId });
     }
@@ -729,12 +1008,17 @@ const handlePrograms = (event) => {
       app.runInTransaction((tx) => {
         ownBlock(tx, blockId, id);
         const slot = ownSlot(tx);
-        if (slot.getInt("weekday") !== weekday) {
-          slot.set("position", nextSlotPosition(tx, weekday));
-          slot.set("weekday", weekday);
-        }
-        slot.set("label", label);
-        tx.save(slot);
+        const weekdayChanged = slot.getInt("weekday") !== weekday;
+        const update = () => {
+          if (weekdayChanged) {
+            slot.set("position", nextSlotPosition(tx, weekday));
+            slot.set("weekday", weekday);
+          }
+          slot.set("label", label);
+          tx.save(slot);
+        };
+        if (weekdayChanged) preserveStructure(tx, update);
+        else update();
       });
       return event.json(200, { id: slotId });
     }
@@ -794,7 +1078,10 @@ const handlePrograms = (event) => {
     if (method === "POST" && slotId && slotAction === "remove-preview") {
       ownBlock(app, blockId, id);
       ownSlot(app);
-      return event.json(200, previewData([], slotPrescriptions(app)));
+      return event.json(200, {
+        ...previewData([], slotPrescriptions(app)),
+        scheduledSessions: structureImpact(app, { removeSlot: slotId }),
+      });
     }
 
     if (method === "POST" && slotId && slotAction === "remove") {
@@ -802,14 +1089,101 @@ const handlePrograms = (event) => {
         ownBlock(tx, blockId, id);
         const slot = ownSlot(tx);
         const prescriptions = slotPrescriptions(tx);
-        confirmPreview([], prescriptions);
-        deletePrescriptions(tx, prescriptions);
-        tx.delete(slot);
+        confirmPreview([], prescriptions, structureImpact(tx, { removeSlot: slotId }));
+        preserveStructure(tx, () => {
+          deletePrescriptions(tx, prescriptions);
+          tx.delete(slot);
+        });
       });
       return event.json(200, { id: slotId });
     }
 
     throw new NotFoundError();
+  }
+
+  if (method === "GET" && id && action === "training-load" && blockId === undefined) {
+    const { rollup } = require(__hooks + "/training-load.js");
+    const { completionCollection, completionData } = require(__hooks + "/calendar-sessions.js");
+    let report;
+    app.runInTransaction((tx) => {
+      ownProgram(tx, id);
+      const schedule = scheduleFor(tx, id);
+      if (!schedule) throw new NotFoundError("Program schedule not found.");
+      const completions = new Map(
+        find(tx, completionCollection, "session.schedule = {:schedule}", {
+          schedule: schedule.id,
+        }).map((row) => [row.getString("session"), completionData(row)]),
+      );
+      const sessions = scheduledRows(tx, schedule).map((row) => {
+        const snapshot = JSON.parse(row.getString("prescription_snapshot"));
+        return {
+          scheduledDate: row.getString("scheduled_date"),
+          completed: row.getString("status") === "completed",
+          plannedMinutes: snapshot.plannedDurationMin ?? null,
+          sessionType: snapshot.sessionType,
+          plannedIntensity: snapshot.plannedIntensity,
+          completion: completions.get(row.id),
+        };
+      });
+      const weekCount = children(tx, "paideuo_blocks", "program", id).reduce(
+        (count, block) => count + block.getInt("duration_weeks"),
+        0,
+      );
+      report = rollup(sessions, schedule.getString("start_date"), weekCount);
+    });
+    return event.json(200, report);
+  }
+
+  if (method === "GET" && id && action === "compliance" && blockId === undefined) {
+    const { rollup } = require(__hooks + "/compliance.js");
+    const { todayFor } = require(__hooks + "/schedule-revisions.js");
+    const { completionCollection, completionData } = require(__hooks + "/calendar-sessions.js");
+    let report;
+    app.runInTransaction((tx) => {
+      ownProgram(tx, id);
+      const schedule = scheduleFor(tx, id);
+      if (!schedule) throw new NotFoundError("Program schedule not found.");
+      const measured = new Map(
+        find(tx, completionCollection, "session.schedule = {:schedule}", {
+          schedule: schedule.id,
+        }).map((row) => [row.getString("session"), completionData(row).actualDurationMin]),
+      );
+      const sessions = scheduledRows(tx, schedule).map((row) => {
+        const snapshot = JSON.parse(row.getString("prescription_snapshot"));
+        return {
+          source: JSON.parse(row.getString("source_attribution") || "null"),
+          scheduledDate: row.getString("scheduled_date"),
+          status: row.getString("status"),
+          planned: snapshot.plannedDurationMin ?? null,
+          plannedIntensity: snapshot.plannedIntensity ?? null,
+          actual: measured.get(row.id) ?? null,
+        };
+      });
+      const weeksByBlock = new Map();
+      for (const week of find(
+        tx,
+        "paideuo_program_weeks",
+        "block.program = {:id}",
+        { id },
+        "position,id",
+      )) {
+        const blockId = week.getString("block");
+        if (!weeksByBlock.has(blockId)) weeksByBlock.set(blockId, []);
+        weeksByBlock.get(blockId).push({
+          id: week.id,
+          position: week.getInt("position"),
+          label: week.getString("label"),
+          historical: false,
+        });
+      }
+      const blocks = children(tx, "paideuo_blocks", "program", id, "position,id").map((block) => ({
+        id: block.id,
+        name: block.getString("name"),
+        weeks: weeksByBlock.get(block.id) ?? [],
+      }));
+      report = rollup(sessions, blocks, todayFor(schedule));
+    });
+    return event.json(200, report);
   }
 
   if (method === "GET" && action === undefined) {
@@ -822,19 +1196,198 @@ const handlePrograms = (event) => {
         if (!byProgram.has(programId)) byProgram.set(programId, []);
         byProgram.get(programId).push(block);
       }
+      const schedules = find(app, "paideuo_program_schedules", "program.owner = {:owner}", {
+        owner,
+      });
+      const byScheduleProgram = new Map(
+        schedules.map((schedule) => [schedule.getString("program"), schedule]),
+      );
       return event.json(
         200,
-        programs.map((program) => programData(program, byProgram.get(program.id) || [])),
+        programs.map((program) =>
+          programData(program, byProgram.get(program.id) || [], byScheduleProgram.get(program.id)),
+        ),
       );
     }
     const program = ownProgram(app, id);
     const blocks = children(app, "paideuo_blocks", "program", id, "position");
-    return event.json(200, { ...programData(program, blocks), blocks: blocks.map(blockData) });
+    const schedule = scheduleFor(app, id);
+    let pendingScheduleChanges = false;
+    if (schedule) {
+      try {
+        pendingScheduleChanges = reviewSchedule(app, schedule).changes.some(
+          (change) => !change.blockedReason,
+        );
+      } catch (error) {
+        if (!(error instanceof BadRequestError)) throw error;
+        pendingScheduleChanges = true;
+      }
+    }
+    return event.json(200, {
+      ...programData(program, blocks, schedule),
+      blocks: blocks.map(blockData),
+      schedule: schedule ? scheduleData(schedule) : null,
+      pendingScheduleChanges,
+    });
   }
 
   if (method === "POST" && !id && action === undefined) {
     const program = save(app, "paideuo_programs", { ...fields(), owner, status: "draft" });
     return event.json(201, { id: program.id });
+  }
+
+  if (
+    method === "POST" &&
+    id &&
+    action === "schedule" &&
+    blockId === "revisions" &&
+    ["preview", "apply"].includes(blockAction) &&
+    slotId === undefined
+  ) {
+    let response;
+    app.runInTransaction((tx) => {
+      ownProgram(tx, id);
+      const schedule = scheduleFor(tx, id);
+      if (!schedule) throw new NotFoundError("Program schedule not found.");
+      if (blockAction === "preview") {
+        response = reviewSchedule(tx, schedule);
+        return;
+      }
+      const { operationId, revision, changeIds } = body;
+      if (
+        typeof operationId !== "string" ||
+        !/^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/i.test(operationId) ||
+        typeof revision !== "string" ||
+        !Array.isArray(changeIds) ||
+        !changeIds.length ||
+        changeIds.some((key) => typeof key !== "string") ||
+        new Set(changeIds).size !== changeIds.length
+      ) {
+        throw new BadRequestError("Select calendar changes to apply.");
+      }
+      const requestHash = sourceRevision([revision, [...changeIds].sort()]);
+      const [receipt] = find(
+        tx,
+        "paideuo_schedule_revision_receipts",
+        "schedule = {:schedule} && operation_id = {:operationId}",
+        { schedule: schedule.id, operationId },
+      );
+      if (receipt) {
+        if (receipt.getString("request_hash") !== requestHash) {
+          throw new BadRequestError("This operation ID was already used for another selection.");
+        }
+        response = { applied: receipt.getInt("applied") };
+        return;
+      }
+      const review = reviewSchedule(tx, schedule);
+      if (revision !== review.revision) {
+        throw new BadRequestError("The calendar changed. Review a fresh preview.");
+      }
+      const eligible = new Map(
+        review.changes
+          .filter((change) => !change.blockedReason)
+          .map((change) => [change.id, change]),
+      );
+      if (changeIds.some((key) => !eligible.has(key))) {
+        throw new BadRequestError("Some selected changes are unavailable. Review a fresh preview.");
+      }
+      const rows = new Map(
+        scheduledRows(tx, schedule).map((row) => [row.getString("source_prescription_id"), row]),
+      );
+      for (const key of changeIds) {
+        const change = eligible.get(key);
+        if (change.kind === "add") {
+          createScheduledSession(tx, schedule, change.after);
+          continue;
+        }
+        const row = rows.get(key);
+        if (change.kind === "remove") {
+          tx.delete(row);
+          continue;
+        }
+        if (change.kind === "keep-moved") {
+          row.set("source_removal_acknowledged", true);
+        } else {
+          row.set("source_removal_acknowledged", false);
+          row.set("program_date", change.programDate);
+          row.set("scheduled_date", change.after.scheduledDate);
+          row.set("slot_position", change.after.slotPosition);
+          row.set("prescription_snapshot", change.after.prescription);
+        }
+        tx.save(row);
+      }
+      save(tx, "paideuo_schedule_revision_receipts", {
+        schedule: schedule.id,
+        operation_id: operationId,
+        request_hash: requestHash,
+        applied: changeIds.length,
+      });
+      response = { applied: changeIds.length };
+    });
+    return event.json(200, response);
+  }
+
+  if (
+    method === "POST" &&
+    id &&
+    action === "schedule" &&
+    (blockId === undefined || blockId === "preview") &&
+    blockAction === undefined
+  ) {
+    const preview = blockId === "preview";
+    let response;
+    let status = 200;
+    app.runInTransaction((tx) => {
+      const program = ownProgram(tx, id);
+      const existing = scheduleFor(tx, id);
+      if (existing) {
+        if (preview) throw new BadRequestError("This program already has a schedule.");
+        response = scheduleData(existing);
+        return;
+      }
+      const dates = require(__hooks + "/calendar-dates.js");
+      const { startDate, timezone } = body;
+      const date = dates.parse(startDate);
+      if (!date || date.getUTCDay() !== 1) {
+        throw new BadRequestError("Choose a valid Monday start date.");
+      }
+      if (
+        typeof timezone !== "string" ||
+        timezone.length > 100 ||
+        !timezone ||
+        timezone === "Local" ||
+        new Timezone(timezone).string() !== timezone
+      ) {
+        throw new BadRequestError("Choose a valid IANA timezone.");
+      }
+      const blocks = children(tx, "paideuo_blocks", "program", id, "position");
+      const sessions = buildSchedule(tx, id, blocks, startDate);
+      if (!sessions.length) throw new BadRequestError("Add a prescription before scheduling.");
+      const revision = sourceRevision(sessions);
+      const confirmation = $security.sha256(JSON.stringify([startDate, timezone, revision]));
+      if (preview) {
+        response = { sessions, revision: confirmation };
+        return;
+      }
+      if (body.revision !== confirmation) {
+        throw new BadRequestError("The schedule preview changed. Review a fresh preview.");
+      }
+      const schedule = save(tx, "paideuo_program_schedules", {
+        program: id,
+        start_date: startDate,
+        timezone,
+        source_revision: revision,
+        status: "active",
+      });
+      for (const session of sessions) createScheduledSession(tx, schedule, session);
+      if (program.getString("status") === "draft") {
+        program.set("status", "active");
+        tx.save(program);
+      }
+      response = scheduleData(schedule);
+      status = 201;
+    });
+    return event.json(status, response);
   }
 
   if (blockId !== undefined || !id) throw new NotFoundError();
@@ -847,6 +1400,26 @@ const handlePrograms = (event) => {
     return event.json(200, { id });
   }
   if (method !== "POST") throw new NotFoundError();
+
+  if (action === "complete") {
+    app.runInTransaction((tx) => {
+      const program = ownProgram(tx, id);
+      const schedule = scheduleFor(tx, id);
+      const status = program.getString("status");
+      if (!schedule || !["active", "completed"].includes(status)) {
+        throw new BadRequestError("Only an active scheduled program can be marked complete.");
+      }
+      if (schedule.getString("status") !== "completed") {
+        schedule.set("status", "completed");
+        tx.save(schedule);
+      }
+      if (status !== "completed") {
+        program.set("status", "completed");
+        tx.save(program);
+      }
+    });
+    return event.json(200, { id });
+  }
 
   if (action === "archive") {
     app.runInTransaction((tx) => {
@@ -866,16 +1439,18 @@ const handlePrograms = (event) => {
     app.runInTransaction((tx) => {
       ownProgram(tx, id);
       if (sourceId) ownBlock(tx, sourceId);
-      const block = save(tx, "paideuo_blocks", {
-        program: id,
-        name,
-        objective,
-        position: nextBlockPosition(tx, id),
-        duration_weeks: duration,
+      preserveStructure(tx, () => {
+        const block = save(tx, "paideuo_blocks", {
+          program: id,
+          name,
+          objective,
+          position: nextBlockPosition(tx, id),
+          duration_weeks: duration,
+        });
+        addWeeks(tx, block.id, 1, duration);
+        if (sourceId) copySlots(tx, sourceId, block.id);
+        newBlockId = block.id;
       });
-      addWeeks(tx, block.id, 1, duration);
-      if (sourceId) copySlots(tx, sourceId, block.id);
-      newBlockId = block.id;
     });
     return event.json(201, { id: newBlockId });
   }
@@ -895,15 +1470,17 @@ const handlePrograms = (event) => {
         throw new BadRequestError("The order must include each current block exactly once.");
       }
       if (ids.every((key, index) => key === blocks[index].id)) return;
-      const highest = blocks[blocks.length - 1].getInt("position");
-      blocks.forEach((block, index) => {
-        block.set("position", highest + index + 1);
-        tx.save(block);
-      });
-      ids.forEach((key, index) => {
-        const block = byId.get(key);
-        block.set("position", index + 1);
-        tx.save(block);
+      preserveStructure(tx, () => {
+        const highest = blocks[blocks.length - 1].getInt("position");
+        blocks.forEach((block, index) => {
+          block.set("position", highest + index + 1);
+          tx.save(block);
+        });
+        ids.forEach((key, index) => {
+          const block = byId.get(key);
+          block.set("position", index + 1);
+          tx.save(block);
+        });
       });
     });
     return event.json(200, { id });

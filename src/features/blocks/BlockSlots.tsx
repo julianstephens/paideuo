@@ -1,3 +1,4 @@
+import { StructuralImpact } from "./StructuralImpact";
 import { Button, Flex, Heading, Input, NativeSelect, Stack, Text } from "@chakra-ui/react";
 import { Disclosure, FormField, Notice, Panel } from "../../components/ui";
 import { useMutation } from "@tanstack/react-query";
@@ -112,6 +113,7 @@ export const BlockSlots = ({ ownerId, block, api, sync }: SlotEditorProps) => {
             Remove {removal.slot.label}? This will remove{" "}
             {removal.confirmation.prescriptionIds.length} prescriptions and their components.
           </Text>
+          <StructuralImpact sessions={removal.confirmation.scheduledSessions} />
           <Flex gap="2" wrap="wrap">
             <Button
               colorPalette="red"

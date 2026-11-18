@@ -12,7 +12,9 @@ import {
 import { useMutation } from "@tanstack/react-query";
 import { errorMessage } from "../../lib/api/request";
 import { useId, useState } from "react";
-import { FormField, Notice, Panel } from "../../components/ui";
+import { Disclosure, FormField, Notice, Panel } from "../../components/ui";
+import { ComplianceQueryState, ComplianceSummary } from "../compliance/ComplianceSummary";
+import { useCompliance } from "../compliance/compliance";
 import { plannedIntensities } from "../programs/programs";
 import type {
   BlockDetail,
@@ -22,6 +24,7 @@ import type {
   Slot,
   blocksApi,
 } from "../programs/programs";
+import { WeekComparison } from "./WeekComparison";
 import { WeekProgramming, weekTitle } from "./WeekProgramming";
 import type { ProgrammingSelection } from "./WeekProgramming";
 
@@ -118,11 +121,15 @@ const pinnedColumn = {
 
 export const BlockWeeks = ({
   block,
+  ownerId,
+  programId,
   api,
   cacheKey,
   sync,
 }: {
   block: BlockDetail;
+  ownerId: string;
+  programId: string;
   api: ReturnType<typeof blocksApi>;
   cacheKey: readonly string[];
   sync: () => Promise<void>;
@@ -130,9 +137,20 @@ export const BlockWeeks = ({
   const initialization = useMutation({ mutationFn: api.initializeWeeks, onSuccess: sync });
   const weekSelectId = useId();
   const [selected, setSelected] = useState("");
-  const week = block.weeks.find(({ id }) => id === selected) ?? block.weeks[0];
+  const [pair, setPair] = useState<[string, string]>();
+  const compare = pair && block.weeks.length >= 2;
+  const compliance = useCompliance(ownerId, programId, block.scheduled);
+  const report = compliance.data?.blocks.find(({ id }) => id === block.id);
+  const historicalWeeks = report?.weeks.filter((entry) => entry.historical) ?? [];
+  const weekOptions = [...block.weeks, ...historicalWeeks];
+  const selectedWeek = weekOptions.find(({ id }) => id === selected) ?? weekOptions[0];
+  const week = block.weeks.find(({ id }) => id === selectedWeek?.id);
+  const weeklyCompliance = report?.weeks.find(({ id }) => id === selectedWeek?.id);
   const [programming, setProgramming] = useState<ProgrammingSelection>();
-  const openWeek = (entry: ProgramWeek) => setProgramming({ mode: "week", week: entry });
+  const openWeek = (entry: ProgramWeek) => {
+    setSelected(entry.id);
+    setProgramming({ mode: "week", week: entry });
+  };
   const openCell = (entry: ProgramWeek, slot: Slot) =>
     setProgramming({ mode: "cell", week: entry, slot });
   const sessions = new Map(
@@ -161,6 +179,25 @@ export const BlockWeeks = ({
         <Heading as="h2" size="lg">
           Weeks
         </Heading>
+        {block.weeks.length >= 2 && (
+          <Button
+            size="sm"
+            variant="outline"
+            onClick={() => {
+              if (compare) setPair(undefined);
+              else {
+                const index = block.weeks.findIndex(({ id }) => id === week?.id);
+                setPair(
+                  index > 0
+                    ? [block.weeks[index - 1].id, block.weeks[index].id]
+                    : [block.weeks[0].id, block.weeks[1].id],
+                );
+              }
+            }}
+          >
+            {compare ? "Back to week grid" : "Compare weeks"}
+          </Button>
+        )}
         <Button
           size="sm"
           variant="outline"
@@ -187,7 +224,53 @@ export const BlockWeeks = ({
         Block total · {formatHours(totalMinutes)} planned
         {totalIncomplete > 0 && ` · ${totalIncomplete} missing duration`}
       </Text>
-      {block.weeks.length > 0 && (
+      {selectedWeek && (
+        <Stack
+          gap="1.5"
+          maxW="sm"
+          display={block.scheduled ? "flex" : { base: "flex", md: "none" }}
+        >
+          <FormField htmlFor={weekSelectId}>Week</FormField>
+          <NativeSelect.Root>
+            <NativeSelect.Field
+              id={weekSelectId}
+              value={selectedWeek.id}
+              onChange={(event) => setSelected(event.target.value)}
+            >
+              {weekOptions.map((entry) => (
+                <option key={entry.id} value={entry.id}>
+                  {weekTitle(entry)}
+                  {"historical" in entry ? " (historical)" : ""}
+                </option>
+              ))}
+            </NativeSelect.Field>
+            <NativeSelect.Indicator />
+          </NativeSelect.Root>
+        </Stack>
+      )}
+      {block.scheduled && (
+        <>
+          <ComplianceQueryState query={compliance} />
+          {report && (
+            <Disclosure label="Block compliance">
+              <ComplianceSummary total={report.total} />
+            </Disclosure>
+          )}
+          {weeklyCompliance && (
+            <Disclosure label="Week compliance">
+              <Heading as="h3" size="sm" mb="2">
+                {weekTitle(weeklyCompliance)}
+                {weeklyCompliance.historical ? " (historical)" : ""}
+              </Heading>
+              <ComplianceSummary total={weeklyCompliance.total} />
+            </Disclosure>
+          )}
+        </>
+      )}
+      {compare && (
+        <WeekComparison {...{ block, api, cacheKey, pair, setPair, openCell, weekdays }} />
+      )}
+      {!compare && block.weeks.length > 0 && (
         <Box
           display={{ base: "none", md: "block" }}
           overflowX="auto"
@@ -247,25 +330,8 @@ export const BlockWeeks = ({
           </Table.Root>
         </Box>
       )}
-      {week && (
+      {!compare && week && (
         <Stack display={{ base: "flex", md: "none" }} gap="4">
-          <Stack gap="1.5">
-            <FormField htmlFor={weekSelectId}>Week</FormField>
-            <NativeSelect.Root>
-              <NativeSelect.Field
-                id={weekSelectId}
-                value={week.id}
-                onChange={(event) => setSelected(event.target.value)}
-              >
-                {block.weeks.map((entry) => (
-                  <option key={entry.id} value={entry.id}>
-                    {weekTitle(entry)}
-                  </option>
-                ))}
-              </NativeSelect.Field>
-              <NativeSelect.Indicator />
-            </NativeSelect.Root>
-          </Stack>
           <Button alignSelf="start" variant="outline" size="sm" onClick={() => openWeek(week)}>
             Edit {weekTitle(week)}
           </Button>

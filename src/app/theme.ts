@@ -61,6 +61,27 @@ export const theme = createSystem(
         },
       },
       slotRecipes: {
+        segmentGroup: defineSlotRecipe({
+          slots: ["root", "item", "indicator"],
+          base: {
+            root: {
+              bg: "bg.inset",
+              borderWidth: "1px",
+              borderColor: "border",
+              boxShadow: "none",
+              "--segment-indicator-bg": "colors.colorPalette.solid",
+              "--segment-indicator-shadow": "none",
+            },
+            item: {
+              "&[data-state=unchecked]:not([data-disabled]):hover": { bg: "bg.panel" },
+              "&[data-state=checked]": { color: "colorPalette.contrast" },
+              "&[data-state=checked][data-ssr]": {
+                bg: "colorPalette.solid",
+                shadow: "none",
+              },
+            },
+          },
+        }),
         nativeSelect: defineSlotRecipe({
           slots: ["root", "field", "indicator"],
           variants: {

@@ -1,6 +1,7 @@
 import {
   Button,
   Dialog,
+  Drawer,
   Flex,
   Input,
   NativeSelect,
@@ -48,7 +49,7 @@ type Props = {
   copy: (week: ProgramWeek, slot?: Slot) => void;
 };
 
-export const weekTitle = (week: ProgramWeek) =>
+export const weekTitle = (week: Pick<ProgramWeek, "label" | "position">) =>
   week.label ? `Week ${week.position} · ${week.label}` : `Week ${week.position}`;
 
 export const WeekProgramming = ({ selection, ...props }: Props) => {
@@ -61,6 +62,31 @@ export const WeekProgramming = ({ selection, ...props }: Props) => {
         : selection.slot
           ? "Duplicate prescription"
           : "Copy week";
+  if (mode === "cell") {
+    return (
+      <Drawer.Root
+        open
+        placement="end"
+        size={{ mdDown: "full", md: "lg" }}
+        closeOnEscape={false}
+        closeOnInteractOutside={false}
+      >
+        <Portal>
+          <Drawer.Backdrop />
+          <Drawer.Positioner>
+            <Drawer.Content>
+              <Drawer.Header>
+                <Drawer.Title>{title}</Drawer.Title>
+              </Drawer.Header>
+              <Drawer.Body pb="6">
+                <CellEditor {...props} week={week} slot={selection.slot} />
+              </Drawer.Body>
+            </Drawer.Content>
+          </Drawer.Positioner>
+        </Portal>
+      </Drawer.Root>
+    );
+  }
   return (
     <Dialog.Root
       open
@@ -79,7 +105,6 @@ export const WeekProgramming = ({ selection, ...props }: Props) => {
             </Dialog.Header>
             <Dialog.Body pb="6">
               {mode === "week" && <WeekForm {...props} week={week} />}
-              {mode === "cell" && <CellEditor {...props} week={week} slot={selection.slot} />}
               {mode === "copy" && <CopyForm {...props} week={week} slot={selection.slot} />}
             </Dialog.Body>
           </Dialog.Content>

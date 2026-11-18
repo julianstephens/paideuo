@@ -17,8 +17,8 @@ export const ProgramActions = ({
   const queryClient = useQueryClient();
   const operationId = useRef<string | undefined>(undefined);
   const mutation = useMutation({
-    mutationFn: (action: "archive" | "duplicate") => {
-      if (action === "archive") return programsApi.archive(program.id);
+    mutationFn: (action: "archive" | "complete" | "duplicate") => {
+      if (action !== "duplicate") return programsApi[action](program.id);
       operationId.current ??= crypto.randomUUID();
       return programsApi.duplicate(program.id, operationId.current);
     },
@@ -43,6 +43,23 @@ export const ProgramActions = ({
           >
             Duplicate
           </Button>
+          {program.scheduled && program.status === "active" && (
+            <Button
+              size="sm"
+              variant="outline"
+              disabled={mutation.isPending}
+              onClick={() => {
+                if (
+                  window.confirm(
+                    `Mark “${program.name}” complete? Unresolved sessions will keep their current status. You can still record them later.`,
+                  )
+                )
+                  mutation.mutate("complete");
+              }}
+            >
+              Mark program complete
+            </Button>
+          )}
           {program.status !== "archived" && (
             <Button
               size="sm"
