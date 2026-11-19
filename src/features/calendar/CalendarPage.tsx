@@ -25,6 +25,7 @@ import { metricsKey } from "../compliance/metrics";
 import { useSession } from "../auth/session";
 import { programKeys } from "../programs/programs";
 import { CheckInDialog } from "../recovery/CheckInDialog";
+import { AddWorkoutDialog } from "./AddWorkoutDialog";
 import { PrescriptionSnapshot } from "./PrescriptionSnapshot";
 import { CompletionForm, CompletionResults } from "./SessionCompletion";
 import {
@@ -76,6 +77,24 @@ const Calendar = ({ ownerId }: { ownerId: string }) => {
   const [params, setParams] = useSearchParams();
   const [selectedSession, selectSession] = useState<string>();
   const [checkInDate, setCheckInDate] = useState<string>();
+  const [workoutDate, setWorkoutDate] = useState<string>();
+  const workoutTrigger = useRef<HTMLButtonElement>(null);
+  const addWorkoutButton = (date: string) => (
+    <Button
+      type="button"
+      variant="ghost"
+      size="xs"
+      alignSelf="start"
+      maxW="100%"
+      aria-label={`Add workout for ${fullDate(date)}`}
+      onClick={(event) => {
+        workoutTrigger.current = event.currentTarget;
+        setWorkoutDate(date);
+      }}
+    >
+      Add workout
+    </Button>
+  );
   const checkInTrigger = useRef<HTMLButtonElement>(null);
   const checkInButton = (date: string) => (
     <Button
@@ -121,6 +140,7 @@ const Calendar = ({ ownerId }: { ownerId: string }) => {
   const navigate = (nextDate: Date, nextView: View) => {
     selectSession(undefined);
     setCheckInDate(undefined);
+    setWorkoutDate(undefined);
     setParams({ date: dateKey(nextDate), view: nextView });
   };
   const move = (direction: number) =>
@@ -301,6 +321,7 @@ const Calendar = ({ ownerId }: { ownerId: string }) => {
                 </Flex>
                 <Stack gap={desktopMonth ? "0.5" : "1.5"} p={desktopMonth ? "1" : "2"}>
                   {checkInButton(key)}
+                  {addWorkoutButton(key)}
                   <SessionButtons
                     sessions={desktopMonth ? sessions.slice(0, monthSessionLimit) : sessions}
                     select={selectSession}
@@ -332,9 +353,19 @@ const Calendar = ({ ownerId }: { ownerId: string }) => {
             {fullDate(dateKey(date))}
           </Heading>
           {checkInButton(dateKey(date))}
+          {addWorkoutButton(dateKey(date))}
           {query.isSuccess && !byDay.has(dateKey(date)) && <Text>No sessions scheduled.</Text>}
           <SessionButtons sessions={byDay.get(dateKey(date)) ?? []} select={selectSession} />
         </Panel>
+      )}
+      {workoutDate && (
+        <AddWorkoutDialog
+          key={workoutDate}
+          date={workoutDate}
+          ownerId={ownerId}
+          close={() => setWorkoutDate(undefined)}
+          trigger={() => workoutTrigger.current}
+        />
       )}
       {checkInDate && (
         <CheckInDialog
@@ -464,7 +495,8 @@ const SessionDetail = ({
     Promise.all([
       queryClient.invalidateQueries({ queryKey: calendarKey(ownerId) }),
       queryClient.invalidateQueries({ queryKey: metricsKey(ownerId) }),
-      queryClient.invalidateQueries({ queryKey: programKeys.detail(ownerId, session.programId) }),
+      session.programId &&
+        queryClient.invalidateQueries({ queryKey: programKeys.detail(ownerId, session.programId) }),
     ]);
   const execute = useMutation({
     mutationFn: ({ revision, execution }: { revision: string; execution: SessionExecution }) =>
@@ -751,43 +783,47 @@ const SessionDetail = ({
                     Edit completion details
                   </Button>
                 )}
-                <Menu.Root positioning={{ placement: "top-end", strategy: "fixed" }}>
-                  <Menu.Trigger asChild>
-                    <Button variant="ghost" disabled={busy}>
-                      More actions
-                    </Button>
-                  </Menu.Trigger>
-                  <Menu.Positioner>
-                    <Menu.Content>
-                      {session.status === "planned" && (
-                        <>
-                          <Menu.Item
-                            value="reschedule"
-                            disabled={executionConflict}
-                            onSelect={() => {
-                              move.reset();
-                              setMoveDate(session.scheduledDate);
-                            }}
-                          >
-                            Reschedule
+                {(session.status === "planned" || session.programId) && (
+                  <Menu.Root positioning={{ placement: "top-end", strategy: "fixed" }}>
+                    <Menu.Trigger asChild>
+                      <Button variant="ghost" disabled={busy}>
+                        More actions
+                      </Button>
+                    </Menu.Trigger>
+                    <Menu.Positioner>
+                      <Menu.Content>
+                        {session.status === "planned" && (
+                          <>
+                            <Menu.Item
+                              value="reschedule"
+                              disabled={executionConflict}
+                              onSelect={() => {
+                                move.reset();
+                                setMoveDate(session.scheduledDate);
+                              }}
+                            >
+                              Reschedule
+                            </Menu.Item>
+                            <Menu.Item
+                              value="skip"
+                              disabled={executionConflict}
+                              onSelect={() => toggleStatus("skip")}
+                            >
+                              Mark skipped
+                            </Menu.Item>
+                          </>
+                        )}
+                        {session.programId && (
+                          <Menu.Item asChild value="program">
+                            <RouterLink to={`/programs/${session.programId}`}>
+                              Open {session.programName}
+                            </RouterLink>
                           </Menu.Item>
-                          <Menu.Item
-                            value="skip"
-                            disabled={executionConflict}
-                            onSelect={() => toggleStatus("skip")}
-                          >
-                            Mark skipped
-                          </Menu.Item>
-                        </>
-                      )}
-                      <Menu.Item asChild value="program">
-                        <RouterLink to={`/programs/${session.programId}`}>
-                          Open {session.programName}
-                        </RouterLink>
-                      </Menu.Item>
-                    </Menu.Content>
-                  </Menu.Positioner>
-                </Menu.Root>
+                        )}
+                      </Menu.Content>
+                    </Menu.Positioner>
+                  </Menu.Root>
+                )}
               </Dialog.Footer>
             )}
           </Dialog.Content>

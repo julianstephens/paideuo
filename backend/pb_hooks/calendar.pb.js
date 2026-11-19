@@ -1,9 +1,16 @@
 routerAdd(
+  "POST",
+  "/api/paideuo/calendar/sessions",
+  (event) => require(__hooks + "/one-off-workouts.js")(event),
+  $apis.requireAuth("paideuo_users"),
+);
+
+routerAdd(
   "GET",
   "/api/paideuo/calendar",
   (event) => {
     const dates = require(__hooks + "/calendar-dates.js");
-    const { completionCollection, completionData, state } = require(
+    const { completionCollection, completionData, ownerFilter, state } = require(
       __hooks + "/calendar-sessions.js",
     );
     const query = event.request.url.query();
@@ -23,15 +30,16 @@ routerAdd(
       const params = { owner: event.auth.id, start, end };
       const rows = tx.findRecordsByFilter(
         "paideuo_scheduled_sessions",
-        "schedule.program.owner = {:owner} && " + range,
-        "scheduled_date,slot_position,schedule,source_prescription_id",
+        ownerFilter() + " && " + range,
+        "scheduled_date,slot_position,schedule,source_prescription_id,id",
         0,
         0,
         params,
       );
       const completions = tx.findRecordsByFilter(
         completionCollection,
-        "session.schedule.program.owner = {:owner} && session.scheduled_date >= {:start} && session.scheduled_date <= {:end}",
+        ownerFilter("session.") +
+          " && session.scheduled_date >= {:start} && session.scheduled_date <= {:end}",
         "",
         0,
         0,
@@ -39,18 +47,19 @@ routerAdd(
       );
       const bySession = new Map(completions.map((record) => [record.getString("session"), record]));
       tx.expandRecords(rows, ["schedule.program"], null);
-      const todayByProgram = new Map();
+      const todayByTimezone = new Map();
       const sessions = rows.map((row) => {
         const schedule = row.expandedOne("schedule");
-        const program = schedule.expandedOne("program");
-        if (includeSummary && !todayByProgram.has(program.id)) {
-          todayByProgram.set(program.id, todayFor(schedule));
+        const program = schedule?.expandedOne("program");
+        const timezone = (schedule ?? row).getString("timezone");
+        if (includeSummary && !todayByTimezone.has(timezone)) {
+          todayByTimezone.set(timezone, todayFor(schedule ?? row));
         }
         return {
           id: row.id,
-          programId: program.id,
-          programName: program.getString("name"),
-          timezone: schedule.getString("timezone"),
+          programId: program?.id ?? null,
+          programName: program?.getString("name") ?? null,
+          timezone,
           scheduledDate: row.getString("scheduled_date"),
           originalDate: row.getString("original_date"),
           manuallyMoved: row.getBool("manually_moved"),
@@ -63,7 +72,7 @@ routerAdd(
             sessions,
             summary: calculate(
               sessions.map((session) => ({
-                today: todayByProgram.get(session.programId),
+                today: todayByTimezone.get(session.timezone),
                 status: session.status,
                 scheduledDate: session.scheduledDate,
                 planned: session.prescription.plannedDurationMin ?? null,
@@ -112,7 +121,7 @@ routerAdd(
   (event) => {
     const { parse } = require(__hooks + "/calendar-dates.js");
     const { todayFor } = require(__hooks + "/schedule-revisions.js");
-    const { completionCollection, completionData, ownSession, state } = require(
+    const { completionCollection, completionData, ownSession, sessionSchedule, state } = require(
       __hooks + "/calendar-sessions.js",
     );
     const { action, revision, completion } = event.requestInfo().body;
@@ -146,10 +155,10 @@ routerAdd(
           sessionRpe = null,
           notes = "",
         } = completion ?? {};
-        const schedule = tx.findRecordById("paideuo_program_schedules", row.getString("schedule"));
+        const schedule = sessionSchedule(tx, row);
         if (!parse(completedDate) || completedDate > todayFor(schedule)) {
           throw new BadRequestError(
-            "Choose a valid completion date through today in the program’s timezone.",
+            "Choose a valid completion date through today in the session’s timezone.",
           );
         }
         if (

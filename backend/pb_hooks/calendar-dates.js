@@ -15,4 +15,10 @@ module.exports = {
     return Number.isFinite(date.getTime()) && format(date) === value ? date : null;
   },
   format,
+  validTimezone: (timezone) =>
+    typeof timezone === "string" &&
+    timezone.length <= 100 &&
+    !!timezone &&
+    timezone !== "Local" &&
+    new Timezone(timezone).string() === timezone,
 };

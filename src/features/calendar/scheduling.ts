@@ -41,8 +41,8 @@ export type SessionExecutionState = {
 export type CalendarSession = DatedPrescription &
   SessionExecutionState & {
     id: string;
-    programId: string;
-    programName: string;
+    programId: string | null;
+    programName: string | null;
     originalDate: string;
     timezone: string;
     manuallyMoved: boolean;
@@ -57,6 +57,8 @@ const sessionPath = (sessionId: string) =>
   "/api/paideuo/calendar/sessions/" + encodeURIComponent(sessionId);
 
 export const schedulingApi = {
+  createOneOff: (fields: DatedPrescription & { timezone: string; operationId: string }) =>
+    apiRequest<{ id: string }>("/api/paideuo/calendar/sessions", "POST", fields),
   preview: (programId: string, fields: ScheduleRequest) =>
     apiRequest<SchedulePreview>(schedulePath(programId) + "/preview", "POST", fields),
   confirm: (programId: string, fields: ScheduleRequest, revision: string) =>

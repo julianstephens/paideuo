@@ -156,41 +156,7 @@ const handlePrograms = (event) => {
     targets: component.targets,
   });
 
-  const componentValues = (components) => {
-    if (!Array.isArray(components)) throw new BadRequestError("Enter a valid component list.");
-    const parseTargets = require(__hooks + "/component-targets.js");
-    const whole = (value) => Number.isSafeInteger(value) && value >= 0;
-    const nonempty = (value, max) =>
-      typeof value === "string" && !!value.trim() && value.trim().length <= max;
-
-    return components.map((component, index) => {
-      const position = index + 1;
-      if (
-        !component ||
-        typeof component !== "object" ||
-        Array.isArray(component) ||
-        !nonempty(component.name, 200)
-      ) {
-        throw new BadRequestError(`Enter a name for component ${position}.`);
-      }
-      const instructions = component.instructions ?? "";
-      const duration = component.durationMin;
-      if (typeof instructions !== "string" || instructions.trim().length > 10000) {
-        throw new BadRequestError(`Enter valid instructions for component ${position}.`);
-      }
-      if (duration != null && !whole(duration)) {
-        throw new BadRequestError(`Enter a nonnegative whole duration for component ${position}.`);
-      }
-      return {
-        position,
-        name: component.name.trim(),
-        instructions: instructions.trim(),
-        duration_min: duration ?? 0,
-        duration_specified: duration != null,
-        targets: parseTargets(component.targets, position),
-      };
-    });
-  };
+  const componentValues = require(__hooks + "/prescription-components.js");
 
   const copyPrescription = (db, fields, components, weekId, slotId) => {
     const prescription = save(db, "paideuo_session_prescriptions", {
@@ -1351,13 +1317,7 @@ const handlePrograms = (event) => {
       if (!date || date.getUTCDay() !== 1) {
         throw new BadRequestError("Choose a valid Monday start date.");
       }
-      if (
-        typeof timezone !== "string" ||
-        timezone.length > 100 ||
-        !timezone ||
-        timezone === "Local" ||
-        new Timezone(timezone).string() !== timezone
-      ) {
+      if (!dates.validTimezone(timezone)) {
         throw new BadRequestError("Choose a valid IANA timezone.");
       }
       const blocks = children(tx, "paideuo_blocks", "program", id, "position");

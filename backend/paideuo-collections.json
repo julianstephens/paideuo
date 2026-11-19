@@ -364,10 +364,7 @@
         "required": true,
         "system": false,
         "type": "select",
-        "values": [
-          "active",
-          "completed"
-        ]
+        "values": ["active", "completed"]
       }
     ],
     "indexes": [
@@ -467,10 +464,7 @@
         "required": true,
         "system": false,
         "type": "select",
-        "values": [
-          "normal",
-          "recovery"
-        ]
+        "values": ["normal", "recovery"]
       }
     ],
     "indexes": [
@@ -572,12 +566,7 @@
         "required": true,
         "system": false,
         "type": "select",
-        "values": [
-          "draft",
-          "active",
-          "completed",
-          "archived"
-        ]
+        "values": ["draft", "active", "completed", "archived"]
       },
       {
         "hidden": false,
@@ -600,9 +589,7 @@
         "type": "autodate"
       }
     ],
-    "indexes": [
-      "CREATE INDEX paideuo_idx_programs_owner ON paideuo_programs (owner)"
-    ],
+    "indexes": ["CREATE INDEX paideuo_idx_programs_owner ON paideuo_programs (owner)"],
     "system": false
   },
   {
@@ -728,7 +715,7 @@
         "minSelect": 0,
         "name": "schedule",
         "presentable": false,
-        "required": true,
+        "required": false,
         "system": false,
         "type": "relation"
       },
@@ -743,7 +730,7 @@
         "pattern": "",
         "presentable": false,
         "primaryKey": false,
-        "required": true,
+        "required": false,
         "system": false,
         "type": "text"
       },
@@ -811,11 +798,7 @@
         "required": true,
         "system": false,
         "type": "select",
-        "values": [
-          "planned",
-          "completed",
-          "skipped"
-        ]
+        "values": ["planned", "completed", "skipped"]
       },
       {
         "hidden": false,
@@ -848,7 +831,7 @@
         "pattern": "",
         "presentable": false,
         "primaryKey": false,
-        "required": true,
+        "required": false,
         "system": false,
         "type": "text"
       },
@@ -882,11 +865,71 @@
         "required": false,
         "system": false,
         "type": "json"
+      },
+      {
+        "cascadeDelete": true,
+        "collectionId": "pai85380df53e11",
+        "help": "",
+        "hidden": false,
+        "id": "relation3479234172",
+        "maxSelect": 1,
+        "minSelect": 0,
+        "name": "owner",
+        "presentable": false,
+        "required": false,
+        "system": false,
+        "type": "relation"
+      },
+      {
+        "autogeneratePattern": "",
+        "help": "",
+        "hidden": false,
+        "id": "text922858135",
+        "max": 100,
+        "min": 0,
+        "name": "timezone",
+        "pattern": "",
+        "presentable": false,
+        "primaryKey": false,
+        "required": false,
+        "system": false,
+        "type": "text"
+      },
+      {
+        "autogeneratePattern": "",
+        "help": "",
+        "hidden": false,
+        "id": "text1152136579",
+        "max": 36,
+        "min": 0,
+        "name": "operation_id",
+        "pattern": "",
+        "presentable": false,
+        "primaryKey": false,
+        "required": false,
+        "system": false,
+        "type": "text"
+      },
+      {
+        "autogeneratePattern": "",
+        "help": "",
+        "hidden": false,
+        "id": "text2921284930",
+        "max": 64,
+        "min": 0,
+        "name": "request_hash",
+        "pattern": "",
+        "presentable": false,
+        "primaryKey": false,
+        "required": false,
+        "system": false,
+        "type": "text"
       }
     ],
     "indexes": [
-      "CREATE UNIQUE INDEX idx_paideuo_schedule_source ON paideuo_scheduled_sessions (schedule, source_prescription_id)",
-      "CREATE INDEX idx_paideuo_scheduled_date ON paideuo_scheduled_sessions (scheduled_date, slot_position)"
+      "CREATE INDEX idx_paideuo_scheduled_date ON paideuo_scheduled_sessions (scheduled_date, slot_position)",
+      "CREATE UNIQUE INDEX `idx_paideuo_schedule_source` ON `paideuo_scheduled_sessions` (schedule, source_prescription_id) WHERE schedule != ''",
+      "CREATE UNIQUE INDEX `idx_paideuo_one_off_operation` ON `paideuo_scheduled_sessions` (owner, operation_id) WHERE owner != ''"
     ],
     "system": false
   },
@@ -1108,13 +1151,7 @@
         "required": true,
         "system": false,
         "type": "select",
-        "values": [
-          "climbing",
-          "strength",
-          "conditioning",
-          "mobility",
-          "other"
-        ]
+        "values": ["climbing", "strength", "conditioning", "mobility", "other"]
       },
       {
         "help": "",
@@ -1136,12 +1173,7 @@
         "required": false,
         "system": false,
         "type": "select",
-        "values": [
-          "easy",
-          "moderate",
-          "hard",
-          "maximal"
-        ]
+        "values": ["easy", "moderate", "hard", "maximal"]
       }
     ],
     "indexes": [
@@ -1241,9 +1273,7 @@
         "type": "json"
       }
     ],
-    "indexes": [
-      "CREATE INDEX paideuo_idx_slots_block ON paideuo_session_slots (block)"
-    ],
+    "indexes": ["CREATE INDEX paideuo_idx_slots_block ON paideuo_session_slots (block)"],
     "system": false
   },
   {
@@ -1325,13 +1355,7 @@
         "required": true,
         "system": false,
         "type": "select",
-        "values": [
-          "climbing",
-          "strength",
-          "conditioning",
-          "mobility",
-          "other"
-        ]
+        "values": ["climbing", "strength", "conditioning", "mobility", "other"]
       },
       {
         "help": "",
@@ -1385,12 +1409,7 @@
         "required": false,
         "system": false,
         "type": "select",
-        "values": [
-          "easy",
-          "moderate",
-          "hard",
-          "maximal"
-        ]
+        "values": ["easy", "moderate", "hard", "maximal"]
       }
     ],
     "indexes": [
@@ -1655,9 +1674,7 @@
     },
     "passwordAuth": {
       "enabled": true,
-      "identityFields": [
-        "email"
-      ]
+      "identityFields": ["email"]
     },
     "mfa": {
       "enabled": false,

@@ -1,9 +1,17 @@
 const completionCollection = "paideuo_session_completions";
 
+const ownerFilter = (prefix = "") =>
+  `((${prefix}schedule = '' && ${prefix}owner = {:owner}) || ${prefix}schedule.program.owner = {:owner})`;
+
+const sessionSchedule = (db, row) => {
+  const schedule = row.getString("schedule");
+  return schedule ? db.findRecordById("paideuo_program_schedules", schedule) : row;
+};
+
 const ownSession = (db, id, owner) => {
   const [row] = db.findRecordsByFilter(
     "paideuo_scheduled_sessions",
-    "id = {:id} && schedule.program.owner = {:owner}",
+    "id = {:id} && " + ownerFilter(),
     "",
     1,
     0,
@@ -39,4 +47,11 @@ const state = (row, completion) => ({
 });
 
 // oxlint-disable-next-line import/no-commonjs
-module.exports = { completionCollection, completionData, ownSession, state };
+module.exports = {
+  completionCollection,
+  completionData,
+  ownerFilter,
+  ownSession,
+  sessionSchedule,
+  state,
+};
