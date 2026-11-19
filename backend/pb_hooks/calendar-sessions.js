@@ -11,7 +11,7 @@ const sessionSchedule = (db, row) => {
 const ownSession = (db, id, owner) => {
   const [row] = db.findRecordsByFilter(
     "paideuo_scheduled_sessions",
-    "id = {:id} && " + ownerFilter(),
+    "id = {:id} && deleted = false && " + ownerFilter(),
     "",
     1,
     0,
@@ -31,15 +31,24 @@ const completionData = (record) =>
       }
     : null;
 
-const state = (row, completion) => ({
+const todayIn = (timezone, now = new DateTime()) =>
+  now.time().in(new Timezone(timezone)).format("2006-01-02");
+
+const statusFor = (row, today) => {
+  const status = row.getString("status");
+  return status === "planned" && row.getString("scheduled_date") < today ? "skipped" : status;
+};
+
+const state = (row, completion, status = row.getString("status")) => ({
   sessionLoad: require(__hooks + "/training-load.js").sessionLoad(completion),
-  status: row.getString("status"),
+  status,
   completion,
   revision: $security.sha256(
     JSON.stringify([
-      row.getString("updated"),
       row.getString("scheduled_date"),
-      row.getString("status"),
+      row.getBool("manually_moved"),
+      row.getBool("manually_edited"),
+      status,
       row.getString("prescription_snapshot"),
       completion,
     ]),
@@ -54,4 +63,6 @@ module.exports = {
   ownSession,
   sessionSchedule,
   state,
+  statusFor,
+  todayIn,
 };

@@ -25,9 +25,10 @@ import { metricsKey } from "../compliance/metrics";
 import { useSession } from "../auth/session";
 import { programKeys } from "../programs/programs";
 import { CheckInDialog } from "../recovery/CheckInDialog";
-import { AddWorkoutDialog } from "./AddWorkoutDialog";
+import { reviewKey } from "../reviews/reviews";
 import { PrescriptionSnapshot } from "./PrescriptionSnapshot";
 import { CompletionForm, CompletionResults } from "./SessionCompletion";
+import { WorkoutDialog } from "./WorkoutDialog";
 import {
   addDays,
   dateKey,
@@ -37,6 +38,7 @@ import {
   monday,
   monthStart,
   parseDate,
+  todayInTimezone,
 } from "./dates";
 import { calendarKey, schedulingApi } from "./scheduling";
 import type {
@@ -125,6 +127,7 @@ const Calendar = ({ ownerId }: { ownerId: string }) => {
   const query = useQuery({
     queryKey,
     queryFn: ({ signal }) => schedulingApi.calendar(start, end, signal),
+    refetchInterval: 60_000,
     retry: false,
   });
   const days = Array.from(
@@ -359,7 +362,7 @@ const Calendar = ({ ownerId }: { ownerId: string }) => {
         </Panel>
       )}
       {workoutDate && (
-        <AddWorkoutDialog
+        <WorkoutDialog
           key={workoutDate}
           date={workoutDate}
           ownerId={ownerId}
@@ -489,6 +492,8 @@ const SessionDetail = ({
 }) => {
   const { prescription } = session;
   const [moveDate, setMoveDate] = useState<string>();
+  const [editing, setEditing] = useState<CalendarSession>();
+  const past = session.scheduledDate < todayInTimezone(session.timezone);
   const [completionRevision, setCompletionRevision] = useState<string>();
   const queryClient = useQueryClient();
   const sync = () =>
@@ -497,6 +502,8 @@ const SessionDetail = ({
       queryClient.invalidateQueries({ queryKey: metricsKey(ownerId) }),
       session.programId &&
         queryClient.invalidateQueries({ queryKey: programKeys.detail(ownerId, session.programId) }),
+      session.programId &&
+        queryClient.invalidateQueries({ queryKey: reviewKey(ownerId, session.programId) }),
     ]);
   const execute = useMutation({
     mutationFn: ({ revision, execution }: { revision: string; execution: SessionExecution }) =>
@@ -533,7 +540,29 @@ const SessionDetail = ({
       await sync();
     },
   });
-  const busy = move.isPending || execute.isPending || reloadSession.isPending;
+  const remove = useMutation({
+    mutationFn: () => schedulingApi.deleteSession(session),
+    onSuccess: async () => {
+      close();
+      await sync();
+    },
+    onError: async (error) => {
+      if (error instanceof ClientResponseError && [404, 409].includes(error.status)) {
+        await queryClient.invalidateQueries({ queryKey: calendarKey(ownerId) });
+      }
+    },
+  });
+  const confirmDelete = () => {
+    const details = session.completion ? " This also deletes its completion details." : "";
+    if (
+      window.confirm(
+        `Delete “${prescription.title}” on ${fullDate(session.scheduledDate)}?${details}`,
+      )
+    ) {
+      remove.mutate();
+    }
+  };
+  const busy = move.isPending || execute.isPending || reloadSession.isPending || remove.isPending;
 
   const screen =
     completionRevision !== undefined
@@ -544,7 +573,7 @@ const SessionDetail = ({
   const screenTitle = useRef<HTMLHeadingElement>(null);
   useEffect(() => {
     screenTitle.current?.focus();
-  }, [screen]);
+  }, [screen, editing]);
 
   const executionFeedback = execute.isError && (
     <Stack align="start">
@@ -566,6 +595,18 @@ const SessionDetail = ({
       )}
     </Stack>
   );
+
+  if (editing) {
+    return (
+      <WorkoutDialog
+        date={editing.scheduledDate}
+        session={editing}
+        ownerId={ownerId}
+        close={() => setEditing(undefined)}
+        onSaved={sync}
+      />
+    );
+  }
 
   return (
     <Dialog.Root
@@ -624,6 +665,11 @@ const SessionDetail = ({
             <Dialog.Body px={{ base: "4", md: "6" }} py="4" overflowWrap="anywhere" key={screen}>
               <Stack gap="4">
                 {executionFeedback}
+                {remove.isError && screen === "overview" && (
+                  <Notice role="alert">
+                    {errorMessage(remove.error, "Unable to delete the workout. Try again.")}
+                  </Notice>
+                )}
                 {screen === "reschedule" && moveDate !== undefined && (
                   <form
                     onSubmit={(event) => {
@@ -678,12 +724,6 @@ const SessionDetail = ({
                 )}
                 {screen === "completion" && completionRevision !== undefined && (
                   <>
-                    {session.status === "skipped" && (
-                      <Notice>
-                        This session was skipped. Cancel the edit and restore it to record a
-                        completion.
-                      </Notice>
-                    )}
                     {reloadSession.isSuccess && session.status === "completed" && (
                       <Box bg="bg.inset" borderRadius="md" p="3">
                         <CompletionResults
@@ -696,7 +736,7 @@ const SessionDetail = ({
                     <CompletionForm
                       session={session}
                       pending={busy}
-                      canSave={!executionConflict && session.status !== "skipped"}
+                      canSave={!executionConflict}
                       save={(completion) => {
                         reloadSession.reset();
                         execute.mutate({
@@ -761,12 +801,12 @@ const SessionDetail = ({
                 gap="2"
                 flexWrap="wrap"
               >
-                {session.status === "planned" && (
+                {(session.status === "planned" || session.status === "skipped") && (
                   <Button disabled={busy || executionConflict} onClick={openCompletion}>
                     Mark complete
                   </Button>
                 )}
-                {session.status === "skipped" && (
+                {session.status === "skipped" && !past && (
                   <Button
                     disabled={busy || executionConflict}
                     onClick={() => toggleStatus("restore")}
@@ -783,47 +823,55 @@ const SessionDetail = ({
                     Edit completion details
                   </Button>
                 )}
-                {(session.status === "planned" || session.programId) && (
-                  <Menu.Root positioning={{ placement: "top-end", strategy: "fixed" }}>
-                    <Menu.Trigger asChild>
-                      <Button variant="ghost" disabled={busy}>
-                        More actions
-                      </Button>
-                    </Menu.Trigger>
-                    <Menu.Positioner>
-                      <Menu.Content>
-                        {session.status === "planned" && (
-                          <>
-                            <Menu.Item
-                              value="reschedule"
-                              disabled={executionConflict}
-                              onSelect={() => {
-                                move.reset();
-                                setMoveDate(session.scheduledDate);
-                              }}
-                            >
-                              Reschedule
-                            </Menu.Item>
-                            <Menu.Item
-                              value="skip"
-                              disabled={executionConflict}
-                              onSelect={() => toggleStatus("skip")}
-                            >
-                              Mark skipped
-                            </Menu.Item>
-                          </>
-                        )}
-                        {session.programId && (
-                          <Menu.Item asChild value="program">
-                            <RouterLink to={`/programs/${session.programId}`}>
-                              Open {session.programName}
-                            </RouterLink>
+                <Menu.Root positioning={{ placement: "top-end", strategy: "fixed" }}>
+                  <Menu.Trigger asChild>
+                    <Button variant="ghost" disabled={busy}>
+                      More actions
+                    </Button>
+                  </Menu.Trigger>
+                  <Menu.Positioner>
+                    <Menu.Content>
+                      {session.status === "planned" && (
+                        <>
+                          <Menu.Item
+                            value="edit"
+                            disabled={executionConflict}
+                            onSelect={() => setEditing(session)}
+                          >
+                            Edit workout
                           </Menu.Item>
-                        )}
-                      </Menu.Content>
-                    </Menu.Positioner>
-                  </Menu.Root>
-                )}
+                          <Menu.Item
+                            value="reschedule"
+                            disabled={executionConflict}
+                            onSelect={() => {
+                              move.reset();
+                              setMoveDate(session.scheduledDate);
+                            }}
+                          >
+                            Reschedule
+                          </Menu.Item>
+                          <Menu.Item
+                            value="skip"
+                            disabled={executionConflict}
+                            onSelect={() => toggleStatus("skip")}
+                          >
+                            Mark skipped
+                          </Menu.Item>
+                        </>
+                      )}
+                      {session.programId && (
+                        <Menu.Item asChild value="program">
+                          <RouterLink to={`/programs/${session.programId}`}>
+                            Open {session.programName}
+                          </RouterLink>
+                        </Menu.Item>
+                      )}
+                      <Menu.Item value="delete" color="fg.error" onSelect={confirmDelete}>
+                        Delete workout
+                      </Menu.Item>
+                    </Menu.Content>
+                  </Menu.Positioner>
+                </Menu.Root>
               </Dialog.Footer>
             )}
           </Dialog.Content>

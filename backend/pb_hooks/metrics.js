@@ -136,10 +136,12 @@ const sourceGroups = (tx, programId, start, sessions) => {
 };
 
 const readSessions = (tx, sessionFilter, params, bySchedule) => {
-  const { completionCollection, completionData } = require(__hooks + "/calendar-sessions.js");
+  const { completionCollection, completionData, statusFor } = require(
+    __hooks + "/calendar-sessions.js",
+  );
   const rows = tx.findRecordsByFilter(
     "paideuo_scheduled_sessions",
-    sessionFilter(""),
+    "deleted = false && (" + sessionFilter("") + ")",
     "scheduled_date",
     0,
     0,
@@ -159,10 +161,11 @@ const readSessions = (tx, sessionFilter, params, bySchedule) => {
   return rows.map((row) => {
     const snapshot = JSON.parse(row.getString("prescription_snapshot"));
     const completion = bySession.get(row.id);
+    const today = bySchedule.get(row.getString("schedule"));
     return {
       scheduledDate: row.getString("scheduled_date"),
-      today: bySchedule.get(row.getString("schedule")),
-      status: row.getString("status"),
+      today,
+      status: statusFor(row, today),
       source: JSON.parse(row.getString("source_attribution") || "null"),
       planned: snapshot.plannedDurationMin ?? null,
       plannedIntensity: snapshot.plannedIntensity ?? null,

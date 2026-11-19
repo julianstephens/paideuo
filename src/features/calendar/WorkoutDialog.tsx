@@ -23,45 +23,60 @@ import { sessionTypes } from "../templates/templates";
 import type { SessionTemplate } from "../templates/templates";
 import { fullDate } from "./dates";
 import { calendarKey, schedulingApi } from "./scheduling";
+import type { CalendarSession } from "./scheduling";
 
-export const AddWorkoutDialog = ({
+export const WorkoutDialog = ({
   date,
   ownerId,
   close,
   trigger,
+  session,
+  onSaved,
 }: {
   date: string;
   ownerId: string;
   close: () => void;
-  trigger: () => HTMLElement | null;
+  trigger?: () => HTMLElement | null;
+  session?: CalendarSession;
+  onSaved?: () => Promise<unknown>;
 }) => {
   const formId = useId();
   const titleInput = useRef<HTMLInputElement>(null);
   const operationId = useRef<string>(undefined);
-  const componentKey = useRef(0);
+  const componentKey = useRef(session?.prescription.components.length ?? 0);
   const [showTemplates, setShowTemplates] = useState(false);
-  const [fields, setFields] = useState<PrescriptionFields>({
-    title: "",
-    sessionType: "other",
-    description: "",
-    notes: "",
-    plannedDurationMin: null,
-    plannedIntensity: null,
-  });
-  const [components, setComponents] = useState<ComponentDraft[]>([]);
+  const [fields, setFields] = useState<PrescriptionFields>(
+    session?.prescription ?? {
+      title: "",
+      sessionType: "other",
+      description: "",
+      notes: "",
+      plannedDurationMin: null,
+      plannedIntensity: null,
+    },
+  );
+  const [components, setComponents] = useState<ComponentDraft[]>(
+    () =>
+      session?.prescription.components.map((component, index) =>
+        componentDraft(index, component),
+      ) ?? [],
+  );
   const queryClient = useQueryClient();
   const save = useMutation({
     mutationFn: () => {
+      const prescription = { ...fields, components: components.map(componentPayload) };
+      if (session) return schedulingApi.edit(session, prescription);
       operationId.current ??= crypto.randomUUID();
       return schedulingApi.createOneOff({
         scheduledDate: date,
         timezone: Intl.DateTimeFormat().resolvedOptions().timeZone || "UTC",
         operationId: operationId.current,
-        prescription: { ...fields, components: components.map(componentPayload) },
+        prescription,
       });
     },
     onSuccess: async () => {
-      await queryClient.invalidateQueries({ queryKey: calendarKey(ownerId) });
+      if (onSaved) await onSaved();
+      else await queryClient.invalidateQueries({ queryKey: calendarKey(ownerId) });
       close();
     },
   });
@@ -101,7 +116,7 @@ export const AddWorkoutDialog = ({
           <Dialog.Content maxH={{ base: "100%", md: "calc(100dvh - 4rem)" }}>
             <Dialog.Header borderBottomWidth="1px">
               <Stack gap="1">
-                <Dialog.Title>Add workout</Dialog.Title>
+                <Dialog.Title>{session ? "Edit workout" : "Add workout"}</Dialog.Title>
                 <Text color="fg.muted" fontSize="sm">
                   {fullDate(date)}
                 </Text>

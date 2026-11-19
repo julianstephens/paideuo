@@ -273,8 +273,14 @@ const handlePrograms = (event) => {
 
   const sourceRevision = (sessions) => $security.sha256(JSON.stringify(sessions));
 
-  const scheduledRows = (db, schedule) =>
-    children(db, "paideuo_scheduled_sessions", "schedule", schedule.id, "id");
+  const scheduledRows = (db, schedule, includeDeleted = false) =>
+    find(
+      db,
+      "paideuo_scheduled_sessions",
+      "schedule = {:schedule}" + (includeDeleted ? "" : " && deleted = false"),
+      { schedule: schedule.id },
+      "id",
+    );
 
   const desiredSessions = (db, schedule, projection) =>
     buildSchedule(
@@ -288,7 +294,7 @@ const handlePrograms = (event) => {
   const reviewSchedule = (db, schedule) => {
     const revisions = require(__hooks + "/schedule-revisions.js");
     return revisions.compare(
-      scheduledRows(db, schedule),
+      scheduledRows(db, schedule, true),
       desiredSessions(db, schedule),
       revisions.todayFor(schedule),
     );
@@ -1103,7 +1109,9 @@ const handlePrograms = (event) => {
   if (method === "GET" && id && action === "compliance" && blockId === undefined) {
     const { rollup } = require(__hooks + "/compliance.js");
     const { todayFor } = require(__hooks + "/schedule-revisions.js");
-    const { completionCollection, completionData } = require(__hooks + "/calendar-sessions.js");
+    const { completionCollection, completionData, statusFor } = require(
+      __hooks + "/calendar-sessions.js",
+    );
     let report;
     app.runInTransaction((tx) => {
       ownProgram(tx, id);
@@ -1114,12 +1122,13 @@ const handlePrograms = (event) => {
           schedule: schedule.id,
         }).map((row) => [row.getString("session"), completionData(row).actualDurationMin]),
       );
+      const today = todayFor(schedule);
       const sessions = scheduledRows(tx, schedule).map((row) => {
         const snapshot = JSON.parse(row.getString("prescription_snapshot"));
         return {
           source: JSON.parse(row.getString("source_attribution") || "null"),
           scheduledDate: row.getString("scheduled_date"),
-          status: row.getString("status"),
+          status: statusFor(row, today),
           planned: snapshot.plannedDurationMin ?? null,
           plannedIntensity: snapshot.plannedIntensity ?? null,
           actual: measured.get(row.id) ?? null,
@@ -1147,7 +1156,7 @@ const handlePrograms = (event) => {
         name: block.getString("name"),
         weeks: weeksByBlock.get(block.id) ?? [],
       }));
-      report = rollup(sessions, blocks, todayFor(schedule));
+      report = rollup(sessions, blocks, today);
     });
     return event.json(200, report);
   }

@@ -1,3 +1,29 @@
+cronAdd("paideuo-skip-overdue-workouts", "* * * * *", () => {
+  const { statusFor, todayIn } = require(__hooks + "/calendar-sessions.js");
+  const now = new DateTime();
+  const latest = todayIn("Pacific/Kiritimati", now);
+  $app.runInTransaction((tx) => {
+    const rows = tx.findRecordsByFilter(
+      "paideuo_scheduled_sessions",
+      "deleted = false && status = 'planned' && scheduled_date < {:latest}",
+      "",
+      0,
+      0,
+      { latest },
+    );
+    tx.expandRecords(rows, ["schedule"], null);
+    const dates = new Map();
+    for (const row of rows) {
+      const timezone = (row.expandedOne("schedule") ?? row).getString("timezone");
+      if (!dates.has(timezone)) dates.set(timezone, todayIn(timezone, now));
+      if (statusFor(row, dates.get(timezone)) === "skipped") {
+        row.set("status", "skipped");
+        tx.save(row);
+      }
+    }
+  });
+});
+
 routerAdd(
   "POST",
   "/api/paideuo/calendar/sessions",
@@ -10,9 +36,14 @@ routerAdd(
   "/api/paideuo/calendar",
   (event) => {
     const dates = require(__hooks + "/calendar-dates.js");
-    const { completionCollection, completionData, ownerFilter, state } = require(
-      __hooks + "/calendar-sessions.js",
-    );
+    const {
+      completionCollection,
+      completionData,
+      ownerFilter,
+      state,
+      statusFor,
+      todayIn,
+    } = require(__hooks + "/calendar-sessions.js");
     const query = event.request.url.query();
     const start = query.get("start");
     const end = query.get("end");
@@ -23,10 +54,9 @@ routerAdd(
     }
     const includeSummary = query.get("summary") === "true";
     const { calculate } = require(__hooks + "/compliance.js");
-    const { todayFor } = require(__hooks + "/schedule-revisions.js");
     let result;
     event.app.runInTransaction((tx) => {
-      const range = "scheduled_date >= {:start} && scheduled_date <= {:end}";
+      const range = "deleted = false && scheduled_date >= {:start} && scheduled_date <= {:end}";
       const params = { owner: event.auth.id, start, end };
       const rows = tx.findRecordsByFilter(
         "paideuo_scheduled_sessions",
@@ -47,13 +77,14 @@ routerAdd(
       );
       const bySession = new Map(completions.map((record) => [record.getString("session"), record]));
       tx.expandRecords(rows, ["schedule.program"], null);
+      const now = new DateTime();
       const todayByTimezone = new Map();
       const sessions = rows.map((row) => {
         const schedule = row.expandedOne("schedule");
         const program = schedule?.expandedOne("program");
         const timezone = (schedule ?? row).getString("timezone");
-        if (includeSummary && !todayByTimezone.has(timezone)) {
-          todayByTimezone.set(timezone, todayFor(schedule ?? row));
+        if (!todayByTimezone.has(timezone)) {
+          todayByTimezone.set(timezone, todayIn(timezone, now));
         }
         return {
           id: row.id,
@@ -63,7 +94,11 @@ routerAdd(
           scheduledDate: row.getString("scheduled_date"),
           originalDate: row.getString("original_date"),
           manuallyMoved: row.getBool("manually_moved"),
-          ...state(row, completionData(bySession.get(row.id))),
+          ...state(
+            row,
+            completionData(bySession.get(row.id)),
+            statusFor(row, todayByTimezone.get(timezone)),
+          ),
           prescription: JSON.parse(row.getString("prescription_snapshot")),
         };
       });
@@ -89,17 +124,60 @@ routerAdd(
 );
 
 routerAdd(
+  "DELETE",
+  "/api/paideuo/calendar/sessions/{id}",
+  (event) => {
+    const {
+      completionCollection,
+      completionData,
+      ownSession,
+      sessionSchedule,
+      state,
+      statusFor,
+      todayIn,
+    } = require(__hooks + "/calendar-sessions.js");
+    const id = event.request.pathValue("id");
+    const { revision } = event.requestInfo().body;
+    event.app.runInTransaction((tx) => {
+      const row = ownSession(tx, id, event.auth.id);
+      const [completion] = tx.findRecordsByFilter(
+        completionCollection,
+        "session = {:id}",
+        "",
+        1,
+        0,
+        {
+          id,
+        },
+      );
+      const today = todayIn(sessionSchedule(tx, row).getString("timezone"));
+      if (state(row, completionData(completion), statusFor(row, today)).revision !== revision) {
+        throw new ApiError(409, "This session changed. Review it before deleting.");
+      }
+      if (completion) tx.delete(completion);
+      row.set("deleted", true);
+      tx.save(row);
+    });
+    return event.json(200, { id });
+  },
+  $apis.requireAuth("paideuo_users"),
+);
+
+routerAdd(
   "PATCH",
   "/api/paideuo/calendar/sessions/{id}",
   (event) => {
     const dates = require(__hooks + "/calendar-dates.js");
-    const { ownSession, state } = require(__hooks + "/calendar-sessions.js");
+    const { ownSession, sessionSchedule, state, statusFor, todayIn } = require(
+      __hooks + "/calendar-sessions.js",
+    );
     const { scheduledDate, revision } = event.requestInfo().body;
     const id = event.request.pathValue("id");
     if (!dates.parse(scheduledDate)) throw new BadRequestError("Choose a valid calendar date.");
     event.app.runInTransaction((tx) => {
       const row = ownSession(tx, id, event.auth.id);
-      if (row.getString("status") !== "planned") {
+      const today = todayIn(sessionSchedule(tx, row).getString("timezone"));
+      if (statusFor(row, today) !== "planned") {
         throw new BadRequestError("Only planned sessions can be moved.");
       }
       if (row.getString("scheduled_date") === scheduledDate) return;
@@ -117,13 +195,46 @@ routerAdd(
 
 routerAdd(
   "PATCH",
+  "/api/paideuo/calendar/sessions/{id}/prescription",
+  (event) => {
+    const { ownSession, sessionSchedule, state, statusFor, todayIn } = require(
+      __hooks + "/calendar-sessions.js",
+    );
+    const { prescription, revision } = event.requestInfo().body;
+    const snapshot = require(__hooks + "/workout-prescriptions.js")(prescription);
+    const id = event.request.pathValue("id");
+    event.app.runInTransaction((tx) => {
+      const row = ownSession(tx, id, event.auth.id);
+      const today = todayIn(sessionSchedule(tx, row).getString("timezone"));
+      if (statusFor(row, today) !== "planned") {
+        throw new ApiError(409, "Only planned workouts can be edited.");
+      }
+      if (state(row, null).revision !== revision) {
+        throw new ApiError(409, "This workout changed. Reopen it before editing.");
+      }
+      row.set("prescription_snapshot", snapshot);
+      row.set("manually_edited", true);
+      tx.save(row);
+    });
+    return event.json(200, { id });
+  },
+  $apis.requireAuth("paideuo_users"),
+);
+
+routerAdd(
+  "PATCH",
   "/api/paideuo/calendar/sessions/{id}/execution",
   (event) => {
     const { parse } = require(__hooks + "/calendar-dates.js");
-    const { todayFor } = require(__hooks + "/schedule-revisions.js");
-    const { completionCollection, completionData, ownSession, sessionSchedule, state } = require(
-      __hooks + "/calendar-sessions.js",
-    );
+    const {
+      completionCollection,
+      completionData,
+      ownSession,
+      sessionSchedule,
+      state,
+      statusFor,
+      todayIn,
+    } = require(__hooks + "/calendar-sessions.js");
     const { action, revision, completion } = event.requestInfo().body;
     const transitions = {
       complete: ["planned", "completed"],
@@ -146,7 +257,8 @@ routerAdd(
       const [record] = tx.findRecordsByFilter(completionCollection, "session = {:id}", "", 1, 0, {
         id,
       });
-      const current = state(row, completionData(record));
+      const today = todayIn(sessionSchedule(tx, row).getString("timezone"));
+      const current = state(row, completionData(record), statusFor(row, today));
       let details = null;
       if (to === "completed") {
         const {
@@ -155,8 +267,7 @@ routerAdd(
           sessionRpe = null,
           notes = "",
         } = completion ?? {};
-        const schedule = sessionSchedule(tx, row);
-        if (!parse(completedDate) || completedDate > todayFor(schedule)) {
+        if (!parse(completedDate) || completedDate > today) {
           throw new BadRequestError(
             "Choose a valid completion date through today in the session’s timezone.",
           );
@@ -191,7 +302,10 @@ routerAdd(
       if (current.revision !== revision) {
         throw new ApiError(409, "This session changed. Reload it before saving.");
       }
-      if (current.status !== from)
+      if (action === "restore" && row.getString("scheduled_date") < today) {
+        throw new BadRequestError("Past workouts can be marked complete.");
+      }
+      if (current.status !== from && !(action === "complete" && current.status === "skipped"))
         throw new BadRequestError("This action is unavailable for the current session status.");
       if (details) {
         const saved =

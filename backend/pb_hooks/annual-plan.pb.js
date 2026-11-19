@@ -105,7 +105,7 @@ routerAdd(
       if (query.get("hours") !== "true") return;
       const sessions = tx.findRecordsByFilter(
         "paideuo_scheduled_sessions",
-        "schedule.program.owner = {:owner} && scheduled_date >= {:start} && scheduled_date <= {:end}",
+        "deleted = false && schedule.program.owner = {:owner} && scheduled_date >= {:start} && scheduled_date <= {:end}",
         "scheduled_date",
         0,
         0,

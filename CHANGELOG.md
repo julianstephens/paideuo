@@ -1,3 +1,8 @@
+## v0.3.0
+
+- Add ability to edit and delete scheduled workouts
+- Add auto-skip for uncompleted workouts
+
 ## v0.2.0
 
 - Add ability to add one-off workouts

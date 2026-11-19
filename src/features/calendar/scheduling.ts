@@ -81,6 +81,13 @@ export const schedulingApi = {
       revision: session.revision,
       scheduledDate,
     }),
+  edit: (session: CalendarSession, prescription: SessionSnapshot) =>
+    apiRequest<{ id: string }>(sessionPath(session.id) + "/prescription", "PATCH", {
+      revision: session.revision,
+      prescription,
+    }),
+  deleteSession: (session: CalendarSession) =>
+    apiRequest<{ id: string }>(sessionPath(session.id), "DELETE", { revision: session.revision }),
   execute: (sessionId: string, revision: string, execution: SessionExecution) =>
     apiRequest<SessionExecutionState>(sessionPath(sessionId) + "/execution", "PATCH", {
       ...execution,

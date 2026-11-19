@@ -1,8 +1,5 @@
 const todayFor = (schedule) =>
-  new DateTime()
-    .time()
-    .in(new Timezone(schedule.getString("timezone")))
-    .format("2006-01-02");
+  require(__hooks + "/calendar-sessions.js").todayIn(schedule.getString("timezone"));
 
 const snapshot = (row) => JSON.parse(row.getString("prescription_snapshot"));
 
@@ -33,6 +30,8 @@ const compare = (rows, desired, today) => {
   const changes = [];
   for (const [id, after] of candidates) {
     const row = current.get(id);
+    // A deleted occurrence still reserves its source within this schedule.
+    if (row?.getBool("deleted")) continue;
     if (!row) {
       changes.push({
         id,
@@ -54,6 +53,7 @@ const compare = (rows, desired, today) => {
     const effective = {
       ...after,
       scheduledDate: manuallyMoved ? before.scheduledDate : programDate,
+      prescription: row.getBool("manually_edited") ? before.prescription : after.prescription,
     };
     if (
       programDate === row.getString("program_date") &&
@@ -75,7 +75,8 @@ const compare = (rows, desired, today) => {
     });
   }
   for (const [id, row] of current) {
-    if (candidates.has(id) || row.getBool("source_removal_acknowledged")) continue;
+    if (candidates.has(id) || row.getBool("deleted") || row.getBool("source_removal_acknowledged"))
+      continue;
     changes.push({
       id,
       kind: row.getBool("manually_moved") ? "keep-moved" : "remove",
@@ -103,6 +104,7 @@ const compare = (rows, desired, today) => {
           row.id,
           row.getString("updated"),
           row.getString("status"),
+          row.getBool("deleted"),
           row.getString("scheduled_date"),
         ]),
       }),
