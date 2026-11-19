@@ -42,7 +42,6 @@ jobs:
           context: .
           file: Dockerfile
           push: true
-          target: runner
           tags: |
             ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:latest
             ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ steps.sha.outputs.sha }}
