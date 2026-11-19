@@ -30,6 +30,59 @@ Open the [PocketBase dashboard](http://127.0.0.1:8090/_/) and follow the superus
 For auth implementation and troubleshooting conventions, see
 [PocketBase and React Development Notes](docs/pocketbase-auth-development.md).
 
+## Deploy the frontend with Docker
+
+```sh
+docker build -t paideuo .
+docker run --rm -p 8080:80 -e POCKETBASE_URL=https://pocketbase.example.com paideuo
+```
+
+Open `http://localhost:8080`. Set `POCKETBASE_URL` to the origin of your
+existing PocketBase instance, with no trailing slash. Use a hostname and port
+reachable from inside the frontend container. Nginx serves the frontend and
+forwards `/api/` requests to that instance.
+
+## Add Paideuo to an existing PocketBase instance
+
+For a first install of Paideuo, open **Settings → Import collections** in
+PocketBase, choose **Load from JSON file**, and select
+[paideuo-collections.json](backend/paideuo-collections.json). Click **Review**,
+keep deletion of missing collections and fields disabled, then confirm the import.
+Copy the entire contents of [backend/pb_hooks](backend/pb_hooks) into your
+instance's active hooks directory and restart PocketBase. Create app accounts
+in `paideuo_users` from the admin dashboard.
+
+If you import the JSON, skip the initial migrations below. The JSON already
+contains the final collection schema.
+
+### Install using migrations
+
+Back up the instance and stop its service before applying the migrations. On
+the PocketBase host, merge the contents of [backend/pb_migrations](backend/pb_migrations)
+and [backend/pb_hooks](backend/pb_hooks) into the instance's active migrations
+and hooks directories. Keep existing files and include the hook helper modules
+alongside the `.pb.js` files. If any filenames overlap, check them before copying.
+
+On a first import, the initial migration creates collections with names such
+as `programs` and `blocks` before the next migration renames them to
+`paideuo_*`. Check the collection names and index names in the
+[initial migration](backend/pb_migrations/1760000000_program_management.js)
+for conflicts with existing schema before proceeding.
+
+Run the migration as the PocketBase service user, using the same binary, data
+directory, and configuration as the service. Substitute your instance's paths.
+
+```sh
+pocketbase migrate up \
+  --dir=/path/to/pb_data \
+  --migrationsDir=/path/to/pb_migrations \
+  --hooksDir=/path/to/pb_hooks
+```
+
+Restart PocketBase to load the hooks. In the admin dashboard, verify that
+`paideuo_users` exists and create a record there for each app user who needs
+access.
+
 ## Seed a test program
 
 With PocketBase running, set `TEST_EMAIL` and `TEST_PASSWORD` for an existing

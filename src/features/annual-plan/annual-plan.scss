@@ -1,0 +1,139 @@
+.annual-scroll {
+  overflow-x: auto;
+  padding-block: 0.25rem;
+}
+
+.annual-timeline {
+  min-width: 38rem;
+  position: relative;
+  isolation: isolate;
+  min-height: 7rem;
+  padding-bottom: 0.5rem;
+}
+
+.annual-quarter {
+  min-width: 23rem;
+}
+
+.annual-row {
+  display: grid;
+  grid-template-columns: repeat(var(--annual-days), minmax(0, 1fr));
+  grid-template-rows: auto;
+}
+
+.annual-gridlines {
+  position: absolute;
+  inset: 0;
+  z-index: -1;
+  pointer-events: none;
+}
+
+.annual-divider {
+  border-inline-start: 1px solid var(--chakra-colors-border);
+}
+
+.annual-current {
+  background: var(--chakra-colors-teal-subtle);
+  border-inline-end: 1px solid var(--chakra-colors-teal-muted);
+}
+
+.annual-months {
+  text-align: center;
+  font-weight: 600;
+  font-size: var(--chakra-font-sizes-sm);
+  border-bottom: 1px solid var(--chakra-colors-border);
+}
+
+.annual-weeks a,
+.annual-training-week {
+  display: block;
+  overflow: hidden;
+  white-space: nowrap;
+  text-align: center;
+  font-size: var(--chakra-font-sizes-xs);
+  padding-block: 0.25rem;
+  color: var(--chakra-colors-fg-muted);
+
+  &:hover,
+  &[aria-current] {
+    background: var(--chakra-colors-teal-subtle);
+    color: var(--chakra-colors-teal-fg);
+  }
+}
+
+.annual-programs {
+  display: grid;
+  row-gap: 0.25rem;
+  margin-top: 0.5rem;
+}
+
+.annual-training-week {
+  margin-bottom: 0.45rem;
+}
+
+.annual-program-bar,
+.annual-block {
+  display: flex;
+  justify-content: start;
+  min-width: 0;
+  margin-inline-end: 1px;
+  border-radius: var(--chakra-radii-sm);
+  overflow: hidden;
+  padding-inline: 0.35rem;
+
+  span {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+}
+
+.annual-program-bar {
+  font-size: var(--chakra-font-sizes-sm);
+  font-weight: 600;
+  padding-block: 0.2rem;
+}
+
+.annual-block {
+  height: 1.55rem;
+}
+
+.annual-block[aria-pressed="true"] {
+  box-shadow: inset 0 0 0 2px currentColor;
+}
+
+.annual-recovery {
+  background: repeating-linear-gradient(
+    135deg,
+    var(--chakra-colors-teal-subtle) 0 4px,
+    var(--chakra-colors-bg-panel) 4px 8px
+  );
+  font-weight: 700;
+}
+
+.annual-hours {
+  height: 4.5rem;
+  border-bottom: 1px solid var(--chakra-colors-border);
+}
+
+.annual-hours-cell {
+  position: relative;
+  display: flex;
+  align-items: end;
+  justify-content: center;
+}
+
+.annual-hours-bar {
+  width: 65%;
+  background: var(--chakra-colors-teal-solid);
+  border-radius: 2px 2px 0 0;
+}
+
+.annual-missing {
+  background: var(--chakra-colors-orange-solid);
+  width: 0.4rem;
+  height: 0.4rem;
+  border-radius: 50%;
+  position: absolute;
+  top: 0.15rem;
+}

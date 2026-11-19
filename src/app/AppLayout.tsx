@@ -7,8 +7,9 @@ import { ColorModeControl } from "./ColorModeControl";
 
 const navigation = [
   { to: "/", label: "Calendar" },
-  { to: "/metrics", label: "Metrics" },
+  { to: "/annual-plan", label: "Annual Plan" },
   { to: "/programs", label: "Programs" },
+  { to: "/metrics", label: "Metrics" },
   { to: "/library", label: "Library" },
 ];
 
@@ -37,10 +38,11 @@ const Navigation = ({ placement }: { placement: "sidebar" | "header" | "bottom" 
         flex={placement === "bottom" ? "1" : undefined}
         justifyContent={placement === "bottom" ? "center" : "start"}
         minH="11"
-        px="3"
+        textAlign="center"
+        px={placement === "bottom" ? "1" : "3"}
         py="2"
         borderRadius="md"
-        fontSize="sm"
+        fontSize={placement === "bottom" ? "xs" : "sm"}
         fontWeight="medium"
         color="fg.muted"
         _hover={{ bg: "bg.inset", textDecoration: "none" }}

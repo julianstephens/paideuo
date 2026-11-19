@@ -1,0 +1,26 @@
+server {
+    listen 80;
+    root /usr/share/nginx/html;
+
+    location /api/ {
+        resolver ${NGINX_LOCAL_RESOLVERS} valid=30s;
+        resolver_timeout 5s;
+        set $pocketbase_upstream "${POCKETBASE_URL}";
+        proxy_pass $pocketbase_upstream;
+        proxy_http_version 1.1;
+        proxy_set_header Connection "";
+        proxy_buffering off;
+        proxy_read_timeout 360s;
+        proxy_ssl_server_name on;
+        proxy_ssl_verify on;
+        proxy_ssl_trusted_certificate /etc/ssl/certs/ca-certificates.crt;
+    }
+
+    location /assets/ {
+        try_files $uri =404;
+    }
+
+    location / {
+        try_files $uri /index.html;
+    }
+}

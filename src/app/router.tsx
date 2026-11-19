@@ -3,6 +3,7 @@ import { BlockPage } from "../features/blocks/BlockPage";
 import { ProgramPage } from "../features/programs/ProgramPage";
 import { Link, Stack } from "@chakra-ui/react";
 import { Link as RouterLink, createBrowserRouter } from "react-router";
+import { AnnualPlanPage } from "../features/annual-plan/AnnualPlanPage";
 import { CalendarPage } from "../features/calendar/CalendarPage";
 import { MetricsPage } from "../features/compliance/MetricsPage";
 import { WeeklyReviewPage } from "../features/reviews/WeeklyReviewPage";
@@ -20,6 +21,7 @@ export const router = createBrowserRouter([
         Component: AppLayout,
         children: [
           { index: true, Component: CalendarPage },
+          { path: "annual-plan", Component: AnnualPlanPage },
           { path: "metrics", Component: MetricsPage },
           { path: "programs", Component: ProgramsPage },
           { path: "programs/:programId", Component: ProgramPage },

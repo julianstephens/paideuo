@@ -12,6 +12,7 @@ import {
 import { useMutation } from "@tanstack/react-query";
 import { errorMessage } from "../../lib/api/request";
 import { useId, useState } from "react";
+import { useSearchParams } from "react-router";
 import { Disclosure, FormField, Notice, Panel } from "../../components/ui";
 import { ComplianceQueryState, ComplianceSummary } from "../compliance/ComplianceSummary";
 import { useCompliance } from "../compliance/compliance";
@@ -136,7 +137,13 @@ export const BlockWeeks = ({
 }) => {
   const initialization = useMutation({ mutationFn: api.initializeWeeks, onSuccess: sync });
   const weekSelectId = useId();
-  const [selected, setSelected] = useState("");
+  const [params, setParams] = useSearchParams();
+  const selected = params.get("week");
+  const setSelected = (id: string) => {
+    const next = new URLSearchParams(params);
+    next.set("week", id);
+    setParams(next, { replace: true });
+  };
   const [pair, setPair] = useState<[string, string]>();
   const compare = pair && block.weeks.length >= 2;
   const compliance = useCompliance(ownerId, programId, block.scheduled);
@@ -287,7 +294,12 @@ export const BlockWeeks = ({
                   Session slot
                 </Table.ColumnHeader>
                 {block.weeks.map((entry) => (
-                  <Table.ColumnHeader scope="col" minW="8rem" key={entry.id}>
+                  <Table.ColumnHeader
+                    scope="col"
+                    minW="8rem"
+                    key={entry.id}
+                    bg={entry.id === selected ? "teal.subtle" : undefined}
+                  >
                     <Button
                       size="sm"
                       variant="ghost"
