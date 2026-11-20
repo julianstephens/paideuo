@@ -18,11 +18,7 @@ export type ProgramDraftIssue = {
   message: string;
 };
 
-export type ProgramDraftConversion = {
-  document: ImportDocumentV1;
-  provenance: ProgramDraftProvenance[];
-  issues: ProgramDraftIssue[];
-};
+export type ProgramDraftConversion = ReturnType<typeof convertMarkdownToProgramDraft>;
 
 const markdownText = (value: string) => value.replace(/[*_`]/g, "").trim();
 
@@ -53,7 +49,7 @@ const tableRows = (lines: string[], start: number) => {
 };
 
 /** Deterministically converts a structured Markdown menu into an explicit program draft. */
-export const convertMarkdownToProgramDraft = (markdown: string): ProgramDraftConversion => {
+export const convertMarkdownToProgramDraft = (markdown: string) => {
   const lines = markdown.replace(/\r/g, "").split("\n");
   const provenance: ProgramDraftProvenance[] = [];
   const issues: ProgramDraftIssue[] = [];
@@ -139,6 +135,16 @@ export const convertMarkdownToProgramDraft = (markdown: string): ProgramDraftCon
       });
     }
 
+    // Match the schema-v1 block limit before allocating week entries.
+    const weekCount = duration <= 520 ? duration : 0;
+    if (!weekCount) {
+      issues.push({
+        level: "error",
+        field: `blocks[${blockIndex}].durationWeeks`,
+        message: "Block duration exceeds the 520-week import limit. Supply a shorter duration.",
+      });
+    }
+
     const slots: { externalId: string; weekday: number; position: number; label: string }[] = [];
     const seenSlotNames = new Set<string>();
     const weekdayPattern =
@@ -177,6 +183,11 @@ export const convertMarkdownToProgramDraft = (markdown: string): ProgramDraftCon
         state: "extracted",
         evidence: line,
       });
+      provenance.push({
+        field: `blocks[${blockIndex}].slots[${slots.length - 1}].weekday`,
+        state: match ? "extracted" : "inferred",
+        evidence: match?.[0],
+      });
     }
     if (!slots.length) {
       issues.push({
@@ -186,7 +197,7 @@ export const convertMarkdownToProgramDraft = (markdown: string): ProgramDraftCon
       });
     }
 
-    const weeks = Array.from({ length: duration }, (_, weekIndex) => {
+    const weeks = Array.from({ length: weekCount }, (_, weekIndex) => {
       const weekHeading = weekLines[weekIndex];
       const weekName = weekHeading ? markdownText(weekHeading.line.replace(/^###\s+/, "")) : "";
       if (weekName) {
@@ -223,7 +234,7 @@ export const convertMarkdownToProgramDraft = (markdown: string): ProgramDraftCon
     };
   });
 
-  const document: ImportDocumentV1 = {
+  const document = {
     schema: "paideuo",
     version: 1,
     kind: "program",
@@ -237,7 +248,7 @@ export const convertMarkdownToProgramDraft = (markdown: string): ProgramDraftCon
       },
       blocks,
     },
-  };
+  } satisfies ImportDocumentV1;
 
   return { document, provenance, issues };
 };

@@ -14,7 +14,7 @@ import {
   Text,
   Textarea,
 } from "@chakra-ui/react";
-import { Fragment, useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { Disclosure, FormField, Notice, PageHeader, Panel } from "../../components/ui";
 import { errorMessage } from "../../lib/api/request";
 import {
@@ -24,10 +24,13 @@ import {
   type ProgramDraftConversion,
   importsApi,
 } from "./imports";
+import { MarkdownDraftReview } from "./MarkdownDraftReview";
 
 type CsvKind = "daily-check-ins" | "workout-component-results";
 type SourceKind = "json" | "csv" | "markdown";
 type IssueLevel = "error" | "warning";
+
+const markdownFile = /\.(?:md|markdown)$/i;
 
 type RowIssue = {
   row: number;
@@ -669,6 +672,8 @@ export const ImportsPage = () => {
   const [parseError, setParseError] = useState<string | null>(null);
   const [preview, setPreview] = useState<PreviewState | null>(null);
   const [markdownDraft, setMarkdownDraft] = useState<ProgramDraftConversion | null>(null);
+  const [draftText, setDraftText] = useState("");
+  const draftHeading = useRef<HTMLHeadingElement>(null);
   const [confirmCommit, setConfirmCommit] = useState(false);
   const [commit, setCommit] = useState<CommitState | null>(null);
   const fileInput = useRef<HTMLInputElement>(null);
@@ -680,7 +685,7 @@ export const ImportsPage = () => {
     formatOverride ??
     (firstCharacter === "{" || firstCharacter === "["
       ? "json"
-      : firstCharacter === "#" || fileName.match(/\.md$/i)
+      : firstCharacter === "#" || markdownFile.test(fileName)
         ? "markdown"
         : "csv");
   const busy = operation !== null;
@@ -702,6 +707,10 @@ export const ImportsPage = () => {
   );
 
   useEffect(() => {
+    if (markdownDraft) draftHeading.current?.focus();
+  }, [markdownDraft]);
+
+  useEffect(() => {
     if (preview) previewHeading.current?.focus();
   }, [preview]);
 
@@ -709,11 +718,16 @@ export const ImportsPage = () => {
     if (commit) resultHeading.current?.focus();
   }, [commit]);
 
-  const resetResults = () => {
+  const resetPreview = () => {
     setPreview(null);
-    setMarkdownDraft(null);
     setCommit(null);
     setConfirmCommit(false);
+  };
+
+  const resetResults = () => {
+    resetPreview();
+    setMarkdownDraft(null);
+    setDraftText("");
   };
 
   const updateText = (text: string) => {
@@ -737,7 +751,7 @@ export const ImportsPage = () => {
           ? "csv"
           : /\.json$/i.test(file.name)
             ? "json"
-            : /\.md$/i.test(file.name)
+            : markdownFile.test(file.name)
               ? "markdown"
               : null,
       );
@@ -749,26 +763,10 @@ export const ImportsPage = () => {
   };
 
   const toDocuments = (): MappedImport | { error: string } => {
-    if (sourceKind === "markdown") {
-      const conversion = convertMarkdownToProgramDraft(rawText);
-      setMarkdownDraft(conversion);
-      const errors = conversion.issues.filter((issue) => issue.level === "error");
-      if (errors.length) {
-        return {
-          documents: [],
-          rowIssues: errors.map((issue) => ({
-            row: 1,
-            level: "error",
-            message: `${issue.field}: ${issue.message}`,
-          })),
-        };
-      }
-      return { documents: [conversion.document], rowIssues: [] };
-    }
-    if (sourceKind === "json") {
+    if (sourceKind === "json" || sourceKind === "markdown") {
       let document: ImportDocumentV1;
       try {
-        document = JSON.parse(rawText) as ImportDocumentV1;
+        document = JSON.parse(sourceKind === "markdown" ? draftText : rawText) as ImportDocumentV1;
       } catch {
         return { error: "This data is not valid JSON. Check the syntax and try again." };
       }
@@ -776,13 +774,16 @@ export const ImportsPage = () => {
         document?.schema !== "paideuo" ||
         document.version !== 1 ||
         typeof document.kind !== "string" ||
+        (sourceKind === "markdown" && document.kind !== "program") ||
         !document.data ||
         typeof document.data !== "object" ||
         Array.isArray(document.data)
       ) {
         return {
           error:
-            "Use a Paideuo JSON import with schema, version, kind, and data fields. See the examples above.",
+            sourceKind === "markdown"
+              ? "Use a Paideuo schema-v1 program document with a data object."
+              : "Use a Paideuo JSON import with schema, version, kind, and data fields. See the examples above.",
         };
       }
       return { documents: [document], rowIssues: [] };
@@ -794,10 +795,10 @@ export const ImportsPage = () => {
   };
 
   const previewImport = async () => {
-    if (busy || !rawText.trim()) return;
+    if (busy || !rawText.trim() || (sourceKind === "markdown" && !markdownDraft)) return;
     setOperation("preview");
     setParseError(null);
-    resetResults();
+    resetPreview();
     try {
       const mapped = toDocuments();
       if ("error" in mapped) {
@@ -911,7 +912,7 @@ export const ImportsPage = () => {
             Add import data
           </Heading>
           <Text color="fg.muted" fontSize="sm">
-            Choose a JSON or CSV file, or paste your data. Preview the changes before saving them.
+            Upload or paste JSON, CSV, or a Markdown training menu.
           </Text>
         </Stack>
 
@@ -933,7 +934,7 @@ export const ImportsPage = () => {
               }}
             />
             <Text fontSize="sm" color="fg.muted" role="status">
-              {operation === "read" ? "Reading file…" : fileName || "JSON or CSV"}
+              {operation === "read" ? "Reading file…" : fileName || "JSON, CSV, or Markdown"}
             </Text>
             {(fileName || rawText) && (
               <Button
@@ -957,7 +958,7 @@ export const ImportsPage = () => {
                 rows={6}
                 fontFamily="mono"
                 spellCheck={false}
-                placeholder="Paste JSON or CSV here"
+                placeholder="Paste JSON, CSV, or Markdown here"
                 value={rawText}
                 disabled={busy}
                 onChange={(event) => {
@@ -1071,135 +1072,62 @@ export const ImportsPage = () => {
           </Stack>
         )}
 
-        {parseError && <Notice role="alert">{parseError}</Notice>}
-        <Button
-          alignSelf="start"
-          colorPalette="teal"
-          onClick={() => void previewImport()}
-          loading={operation === "preview"}
-          loadingText="Validating…"
-          disabled={busy || !rawText.trim() || Boolean(csv?.rows.length && missingColumns.length)}
-        >
-          Preview changes
-        </Button>
+        {parseError && !markdownDraft && <Notice role="alert">{parseError}</Notice>}
+        {sourceKind === "markdown" ? (
+          <Button
+            alignSelf="start"
+            colorPalette="teal"
+            disabled={busy || !rawText.trim() || !!markdownDraft}
+            onClick={() => {
+              const draft = convertMarkdownToProgramDraft(rawText);
+              setMarkdownDraft(draft);
+              setDraftText(JSON.stringify(draft.document, null, 2));
+              setParseError(null);
+            }}
+          >
+            Create program draft
+          </Button>
+        ) : (
+          <Button
+            alignSelf="start"
+            colorPalette="teal"
+            onClick={() => void previewImport()}
+            loading={operation === "preview"}
+            loadingText="Validating…"
+            disabled={busy || !rawText.trim() || Boolean(csv?.rows.length && missingColumns.length)}
+          >
+            Preview changes
+          </Button>
+        )}
       </Panel>
+
+      {markdownDraft && (
+        <MarkdownDraftReview
+          draft={markdownDraft}
+          headingRef={draftHeading}
+          value={draftText}
+          error={parseError}
+          busy={busy}
+          validating={operation === "preview"}
+          saved={commit?.rows.some((row) => row.status === "committed") ?? false}
+          onEdit={(value) => {
+            setDraftText(value);
+            setParseError(null);
+            resetPreview();
+          }}
+          onReject={() => {
+            setParseError(null);
+            resetResults();
+          }}
+          onPreview={() => void previewImport()}
+        />
+      )}
 
       {preview && (
         <Panel as="section" gap="4">
           <Heading as="h2" size="md" ref={previewHeading} tabIndex={-1}>
             Review changes
           </Heading>
-          {markdownDraft && (
-            <Stack gap="3" borderBottomWidth="1px" pb="4">
-              <Heading as="h3" size="sm">
-                Markdown program draft
-              </Heading>
-              {markdownDraft.issues.length > 0 && (
-                <Stack gap="2">
-                  {markdownDraft.issues.map((issue, index) => (
-                    <Notice
-                      key={`${issue.field}:${index}`}
-                      role={issue.level === "error" ? "alert" : "status"}
-                    >
-                      {issue.level === "error" ? "Missing" : "Inferred"} · {issue.field}:{" "}
-                      {issue.message}
-                    </Notice>
-                  ))}
-                </Stack>
-              )}
-              <Table.Root size="sm" variant="outline" aria-label="Markdown draft hierarchy">
-                <Table.Header>
-                  <Table.Row>
-                    <Table.ColumnHeader>Level</Table.ColumnHeader>
-                    <Table.ColumnHeader>Name / position</Table.ColumnHeader>
-                    <Table.ColumnHeader>Source</Table.ColumnHeader>
-                  </Table.Row>
-                </Table.Header>
-                <Table.Body>
-                  <Table.Row>
-                    <Table.Cell>Program</Table.Cell>
-                    <Table.Cell>
-                      {String(
-                        (markdownDraft.document.data as { program?: { name?: string } }).program
-                          ?.name || "Unsupplied",
-                      )}
-                    </Table.Cell>
-                    <Table.Cell>Markdown H1 / extracted or missing</Table.Cell>
-                  </Table.Row>
-                  {(
-                    markdownDraft.document.data as {
-                      blocks: {
-                        position: number;
-                        name: string;
-                        durationWeeks: number;
-                        slots: { label: string }[];
-                        weeks: { position: number; label: string }[];
-                      }[];
-                    }
-                  ).blocks.map((block, blockIndex) => (
-                    <Fragment key={`level-${blockIndex}`}>
-                      <Table.Row key={`block-${blockIndex}`}>
-                        <Table.Cell>Block {block.position ?? blockIndex + 1}</Table.Cell>
-                        <Table.Cell>
-                          {block.name} · {block.durationWeeks} weeks
-                        </Table.Cell>
-                        <Table.Cell>
-                          {markdownDraft.provenance.find(
-                            (item) => item.field === `blocks[${blockIndex}].name`,
-                          )?.state ?? "inferred"}
-                        </Table.Cell>
-                      </Table.Row>
-                      {block.weeks.map((week) => (
-                        <Table.Row key={`week-${blockIndex}-${week.position}`}>
-                          <Table.Cell>Week {week.position}</Table.Cell>
-                          <Table.Cell>{week.label || "Label unsupplied"}</Table.Cell>
-                          <Table.Cell>
-                            {markdownDraft.provenance.find(
-                              (item) =>
-                                item.field ===
-                                `blocks[${blockIndex}].weeks[${week.position - 1}].label`,
-                            )?.state ?? "inferred"}
-                          </Table.Cell>
-                        </Table.Row>
-                      ))}
-                      {block.slots.map((slot, slotIndex) => (
-                        <Table.Row key={`slot-${blockIndex}-${slotIndex}`}>
-                          <Table.Cell>Session / component slot</Table.Cell>
-                          <Table.Cell>{slot.label}</Table.Cell>
-                          <Table.Cell>extracted from Markdown</Table.Cell>
-                        </Table.Row>
-                      ))}
-                    </Fragment>
-                  ))}
-                </Table.Body>
-              </Table.Root>
-              <Disclosure label="View draft JSON and provenance">
-                <Textarea
-                  rows={12}
-                  readOnly
-                  fontFamily="mono"
-                  value={JSON.stringify(
-                    { document: markdownDraft.document, provenance: markdownDraft.provenance },
-                    null,
-                    2,
-                  )}
-                />
-              </Disclosure>
-              <Button
-                variant="outline"
-                colorPalette="red"
-                alignSelf="start"
-                disabled={busy}
-                onClick={() => {
-                  setMarkdownDraft(null);
-                  setPreview(null);
-                  setConfirmCommit(false);
-                }}
-              >
-                Reject draft · no writes
-              </Button>
-            </Stack>
-          )}
           {preview.previewItems.length > 0 && (
             <Flex gap="2" wrap="wrap">
               {Object.entries(previewLabels).map(([status, label]) => (
