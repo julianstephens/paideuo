@@ -11,6 +11,7 @@ import { ProgramsPage } from "../features/programs/ProgramsPage";
 import { LibraryPage } from "../features/templates/LibraryPage";
 import { PageHeader, Panel } from "../components/ui";
 import { AppLayout } from "./AppLayout";
+import { ImportsPage } from "../features/imports/ImportsPage";
 
 export const router = createBrowserRouter([
   { path: "sign-in", Component: SignInPage },
@@ -28,6 +29,7 @@ export const router = createBrowserRouter([
           { path: "programs/:programId/weekly-reviews/:weekId", Component: WeeklyReviewPage },
           { path: "programs/:programId/blocks/:blockId", Component: BlockPage },
           { path: "library", Component: LibraryPage },
+          { path: "imports", Component: ImportsPage },
           {
             path: "*",
             element: (
