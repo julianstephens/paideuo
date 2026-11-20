@@ -151,6 +151,13 @@ test("normalizes workout component results and validates dates", () => {
   });
   assert.equal(normalized.data.notes, "Strong finish");
   assert.equal(normalized.data.components[0].repsCompleted, null);
+  assert.equal(normalized.data.replaceExistingCompletion, false);
+
+  valid.data.replaceExistingCompletion = true;
+  const withAuthorization = normalize(valid, {
+    authorizeReference: (type, id) => type === "scheduled-session" && id === "session-id",
+  });
+  assert.equal(withAuthorization.data.replaceExistingCompletion, true);
 
   valid.data.completedDate = "2026-02-30";
   assert.throws(() => normalize(valid, { authorizeReference: () => true }), /completion date/);

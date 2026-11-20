@@ -500,6 +500,15 @@ const observationPlan = (db, owner, document) => {
     ) {
       completionPlan.item.status = "update";
     }
+    if (
+      completion &&
+      completionPlan.item.status === "update" &&
+      !data.replaceExistingCompletion
+    ) {
+      completionPlan.item.status = "conflict";
+      completionPlan.item.error =
+        "Replacing existing completed workout results requires explicit historical replacement authorization.";
+    }
     items.push(completionPlan.item);
     return { items, state };
   }
@@ -641,8 +650,52 @@ const update = (db, record, values) => {
   return record;
 };
 
+const trainingComponentValues = (component, position) => ({
+  position,
+  name: component.name,
+  instructions: component.instructions,
+  duration_min: component.durationMin ?? 0,
+  duration_specified: component.durationMin !== null,
+  targets: component.targets,
+});
+
+const sameTrainingComponent = (record, values) =>
+  record.getInt("position") === values.position &&
+  record.getString("name") === values.name &&
+  record.getString("instructions") === values.instructions &&
+  record.getInt("duration_min") === values.duration_min &&
+  record.getBool("duration_specified") === values.duration_specified &&
+  JSON.stringify(record.get("targets")) === JSON.stringify(values.targets);
+
+const reconcileTrainingComponents = (db, prescriptionId, components) => {
+  const existing = find(
+    db,
+    "paideuo_training_components",
+    "prescription = {:id}",
+    { id: prescriptionId },
+    "position,id",
+  );
+  const max = Math.max(existing.length, components.length);
+  for (let index = 0; index < max; index += 1) {
+    const current = existing[index] ?? null;
+    const desired = components[index] ?? null;
+    if (!desired) {
+      if (current) db.delete(current);
+      continue;
+    }
+    const values = trainingComponentValues(desired, index + 1);
+    if (!current) {
+      save(db, "paideuo_training_components", { prescription: prescriptionId, ...values });
+      continue;
+    }
+    if (!sameTrainingComponent(current, values)) update(db, current, values);
+  }
+};
+
 const commitProgram = (db, owner, document, plan) => {
   const data = document.data;
+  const planned = new Map(plan.items.map((item) => [`${item.type}:${item.key}`, item.status]));
+  const statusFor = (type, key) => planned.get(`${type}:${key}`) ?? "create";
   if (plan.items.every((item) => item.status === "skip")) {
     return {
       programId: data.program.id ?? plan.items[0]?.id,
@@ -664,14 +717,17 @@ const commitProgram = (db, owner, document, plan) => {
     description: data.program.description,
     status: data.program.status ?? program?.getString("status") ?? "draft",
   };
-  program = program
-    ? update(db, program, programFields)
-    : save(db, "paideuo_programs", programFields);
+  program = !program
+    ? save(db, "paideuo_programs", programFields)
+    : statusFor("program", data.program.externalId) === "skip"
+      ? program
+      : update(db, program, programFields);
 
   const allBlocks = find(db, "paideuo_blocks", "program = {:program}", {
     program: program.id,
   });
   const desiredBlocks = data.blocks.flatMap((block) => {
+    if (statusFor("block", block.externalId) === "skip") return [];
     const record = block.id
       ? db.findRecordById("paideuo_blocks", block.id)
       : first(db, "paideuo_blocks", "program = {:program} && external_id = {:externalId}", {
@@ -700,7 +756,11 @@ const commitProgram = (db, owner, document, plan) => {
       position: block.position,
       duration_weeks: block.durationWeeks,
     };
-    record = record ? update(db, record, fields) : save(db, "paideuo_blocks", fields);
+    record = !record
+      ? save(db, "paideuo_blocks", fields)
+      : statusFor("block", block.externalId) === "skip"
+        ? record
+        : update(db, record, fields);
     blockRecords.set(block.externalId, record);
   }
 
@@ -721,13 +781,18 @@ const commitProgram = (db, owner, document, plan) => {
         position: slot.position,
         label: slot.label,
       };
-      record = record ? update(db, record, fields) : save(db, "paideuo_session_slots", fields);
+      record = !record
+        ? save(db, "paideuo_session_slots", fields)
+        : statusFor("slot", slot.externalId) === "skip"
+          ? record
+          : update(db, record, fields);
       slotRecords.set(slot.externalId, record);
     }
     const allWeeks = find(db, "paideuo_program_weeks", "block = {:block}", {
       block: blockRecord.id,
     });
     const desiredWeeks = block.weeks.flatMap((week) => {
+      if (statusFor("week", week.externalId) === "skip") return [];
       const record = week.id
         ? db.findRecordById("paideuo_program_weeks", week.id)
         : first(db, "paideuo_program_weeks", "block = {:block} && external_id = {:externalId}", {
@@ -747,23 +812,19 @@ const commitProgram = (db, owner, document, plan) => {
             block: blockRecord.id,
             externalId: week.externalId,
           });
-      weekRecord = weekRecord
-        ? update(db, weekRecord, {
-            block: blockRecord.id,
-            external_id: week.externalId,
-            position: week.position,
-            label: week.label,
-            focus: week.focus,
-            week_type: week.weekType,
-          })
-        : save(db, "paideuo_program_weeks", {
-            block: blockRecord.id,
-            external_id: week.externalId,
-            position: week.position,
-            label: week.label,
-            focus: week.focus,
-            week_type: week.weekType,
-          });
+      const weekFields = {
+        block: blockRecord.id,
+        external_id: week.externalId,
+        position: week.position,
+        label: week.label,
+        focus: week.focus,
+        week_type: week.weekType,
+      };
+      weekRecord = !weekRecord
+        ? save(db, "paideuo_program_weeks", weekFields)
+        : statusFor("week", week.externalId) === "skip"
+          ? weekRecord
+          : update(db, weekRecord, weekFields);
       for (const item of week.prescriptions) {
         const key = workoutKey(
           data.program.externalId,
@@ -796,25 +857,15 @@ const commitProgram = (db, owner, document, plan) => {
           notes: item.workout.notes,
           session_type: item.workout.sessionType,
         };
-        prescription = prescription
-          ? update(db, prescription, fields)
-          : save(db, "paideuo_session_prescriptions", fields);
-        for (const component of find(db, "paideuo_training_components", "prescription = {:id}", {
-          id: prescription.id,
-        })) {
-          db.delete(component);
+        const status = statusFor("prescription", key);
+        prescription = !prescription
+          ? save(db, "paideuo_session_prescriptions", fields)
+          : status === "skip"
+            ? prescription
+            : update(db, prescription, fields);
+        if (status !== "skip") {
+          reconcileTrainingComponents(db, prescription.id, item.workout.components);
         }
-        item.workout.components.forEach((component, index) =>
-          save(db, "paideuo_training_components", {
-            prescription: prescription.id,
-            position: index + 1,
-            name: component.name,
-            instructions: component.instructions,
-            duration_min: component.durationMin ?? 0,
-            duration_specified: component.durationMin !== null,
-            targets: component.targets,
-          }),
-        );
       }
     }
   }
@@ -860,6 +911,12 @@ const commitWorkout = (db, owner, data, plan) => {
   let completion = first(db, "paideuo_session_completions", "session = {:session}", {
     session: state.sessionId,
   });
+  if (completion && plan.items[0].status === "update" && !data.replaceExistingCompletion) {
+    throw new ApiError(
+      409,
+      "Replacing existing completed workout results requires explicit historical replacement authorization.",
+    );
+  }
   completion = completion ?? new Record(db.findCollectionByNameOrId("paideuo_session_completions"));
   completion.set("session", state.sessionId);
   completion.set("completed_date", data.completedDate);

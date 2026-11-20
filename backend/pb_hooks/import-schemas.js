@@ -396,6 +396,7 @@ const normalizeWorkoutResults = (value, context) => {
       "sessionRpe",
       "notes",
       "components",
+      "replaceExistingCompletion",
     ],
     ["sourceWorkoutKey", "completedDate", "components"],
     "workout component result data",
@@ -479,6 +480,12 @@ const normalizeWorkoutResults = (value, context) => {
     sessionRpe: finite(data.sessionRpe, "session RPE", 1, 10, true),
     notes: text(data.notes ?? "", "workout notes", 10000),
     components,
+    replaceExistingCompletion:
+      data.replaceExistingCompletion === undefined
+        ? false
+        : typeof data.replaceExistingCompletion === "boolean"
+          ? data.replaceExistingCompletion
+          : fail("historical replacement authorization is invalid."),
   };
 };
 

@@ -33,10 +33,19 @@ const serviceModule = new Module(serviceFilename);
 serviceModule.filename = serviceFilename;
 serviceModule.paths = Module._nodeModulePaths(__dirname);
 const nativeRequire = Module.prototype.require.bind(serviceModule);
-serviceModule.require = (id) =>
-  id === path.join(__dirname, "import-schemas.js") ? schemaModule : nativeRequire(id);
-serviceModule._compile(fs.readFileSync(serviceFilename, "utf8"), serviceFilename);
-const { commit, preview } = serviceModule.exports;
+serviceModule.require = (id) => {
+  if (id === path.join(__dirname, "import-schemas.js")) return schemaModule;
+  if (id === path.join(__dirname, "calendar-sessions.js")) {
+    return { todayIn: () => "2099-12-31" };
+  }
+  return nativeRequire(id);
+};
+serviceModule._compile(
+  `${fs.readFileSync(serviceFilename, "utf8")}
+module.exports.__test = { reconcileTrainingComponents, observationPlan, commitWorkout };`,
+  serviceFilename,
+);
+const { commit, preview, __test } = serviceModule.exports;
 
 class FakeRecord {
   constructor(_collection, fields = {}) {
@@ -53,6 +62,15 @@ class FakeRecord {
     if (value == null) return "";
     if (typeof value === "object") return JSON.stringify(value);
     return String(value);
+  }
+
+  getInt(key) {
+    const value = this.get(key);
+    return Number.isFinite(value) ? Math.trunc(value) : 0;
+  }
+
+  getBool(key) {
+    return Boolean(this.get(key));
   }
 
   set(key, value) {
@@ -169,4 +187,234 @@ test("preview and commit preserve per-row skip status", () => {
     () => commit(event(db, { document: source, previewToken: prepared.previewToken })),
     (error) => error.status === 409 && /already been committed/.test(error.message),
   );
+});
+
+test("reconcileTrainingComponents preserves unchanged ids and updates in place", () => {
+  const components = [
+    new FakeRecord(
+      {},
+      {
+        id: "component-a",
+        prescription: "prescription-1",
+        position: 1,
+        name: "Warm-up",
+        instructions: "Easy movement",
+        duration_min: 10,
+        duration_specified: true,
+        targets: { intensity: { value: 3, scale: "RPE" } },
+      },
+    ),
+    new FakeRecord(
+      {},
+      {
+        id: "component-b",
+        prescription: "prescription-1",
+        position: 2,
+        name: "Main set",
+        instructions: "Limit boulders",
+        duration_min: 25,
+        duration_specified: true,
+        targets: { intensity: { value: 7, scale: "RPE" } },
+      },
+    ),
+  ];
+  const db = {
+    state: { components, saves: 0, deletes: 0 },
+    findRecordsByFilter(collection, _filter, _sort, _limit, _offset, params) {
+      if (collection !== "paideuo_training_components") return [];
+      return this.state.components
+        .filter((record) => record.getString("prescription") === params.id)
+        .slice()
+        .sort((left, right) => left.getInt("position") - right.getInt("position"));
+    },
+    findCollectionByNameOrId(name) {
+      return { name };
+    },
+    save(record) {
+      this.state.saves += 1;
+      const index = this.state.components.findIndex((candidate) => candidate.id === record.id);
+      if (index === -1) this.state.components.push(record);
+      else this.state.components[index] = record;
+    },
+    delete(record) {
+      this.state.deletes += 1;
+      this.state.components = this.state.components.filter((candidate) => candidate.id !== record.id);
+    },
+  };
+
+  __test.reconcileTrainingComponents(db, "prescription-1", [
+    {
+      name: "Warm-up",
+      instructions: "Easy movement",
+      durationMin: 10,
+      targets: { intensity: { value: 3, scale: "RPE" } },
+    },
+    {
+      name: "Main set",
+      instructions: "Project tries",
+      durationMin: 25,
+      targets: { intensity: { value: 7, scale: "RPE" } },
+    },
+  ]);
+
+  assert.equal(db.state.deletes, 0);
+  assert.equal(db.state.components[0].id, "component-a");
+  assert.equal(db.state.components[1].id, "component-b");
+  assert.equal(db.state.components[1].getString("instructions"), "Project tries");
+});
+
+test("workout result preview conflicts on replacing existing completion without authorization", () => {
+  const session = new FakeRecord(
+    {},
+    {
+      id: "session-1",
+      schedule: "",
+      timezone: "UTC",
+      source_prescription_id: "",
+      scheduled_date: "2026-11-18",
+      original_date: "2026-11-18",
+      status: "completed",
+      deleted: false,
+      manually_moved: false,
+      manually_edited: false,
+      prescription_snapshot: null,
+    },
+  );
+  const completion = new FakeRecord(
+    {},
+    {
+      id: "completion-1",
+      session: "session-1",
+      completed_date: "2026-11-18",
+      actual_duration_min: 45,
+      session_rpe: 7,
+      notes: "Saved manually",
+    },
+  );
+  const db = {
+    findRecordById(collection, id) {
+      if (collection === "paideuo_scheduled_sessions" && id === "session-1") return session;
+      throw new Error(`Unexpected lookup ${collection}:${id}`);
+    },
+    findRecordsByFilter(collection, _filter, _sort, _limit, _offset, params) {
+      if (collection === "paideuo_session_completions") {
+        return params.id === "session-1" ? [completion] : [];
+      }
+      if (collection === "paideuo_workout_component_results") {
+        return [
+          new FakeRecord(
+            {},
+            {
+              id: "row-1",
+              session: "session-1",
+              component_key: "warm-up",
+              planned_position: 1,
+              name: "Warm-up",
+              completed: true,
+              actual_duration_min: 15,
+              sets_completed: null,
+              reps_completed: "",
+              actual_load: null,
+              rpe: null,
+              notes: "",
+            },
+          ),
+        ];
+      }
+      return [];
+    },
+  };
+
+  const plan = __test.observationPlan(db, "owner-id", {
+    kind: "workout-component-results",
+    data: {
+      sourceSessionId: "session-1",
+      sourceWorkoutKey: "workout-1",
+      completedDate: "2026-11-18",
+      actualDurationMin: 45,
+      sessionRpe: 7,
+      notes: "Adjusted notes",
+      components: [
+        {
+          key: "warm-up",
+          plannedPosition: 1,
+          name: "Warm-up",
+          completed: true,
+          actualDurationMin: 15,
+          setsCompleted: null,
+          repsCompleted: null,
+          actualLoad: null,
+          rpe: null,
+          notes: "Changed",
+        },
+      ],
+      replaceExistingCompletion: false,
+    },
+  });
+
+  assert.equal(plan.items[0].status, "conflict");
+  assert.match(plan.items[0].error, /requires explicit historical replacement authorization/);
+});
+
+test("commitWorkout rejects historical overwrite without explicit authorization", () => {
+  const completion = new FakeRecord(
+    {},
+    {
+      id: "completion-1",
+      session: "session-1",
+      completed_date: "2026-11-18",
+      actual_duration_min: 45,
+      session_rpe: 7,
+      notes: "Saved manually",
+    },
+  );
+  const db = {
+    state: { saves: 0, deletes: 0 },
+    findRecordsByFilter(collection, _filter, _sort, _limit, _offset, params) {
+      if (collection === "paideuo_session_completions") {
+        return params.session === "session-1" ? [completion] : [];
+      }
+      if (collection === "paideuo_workout_component_results") return [];
+      return [];
+    },
+    findCollectionByNameOrId(name) {
+      return { name };
+    },
+    findRecordById() {
+      return new FakeRecord({}, { id: "session-1", status: "scheduled" });
+    },
+    save() {
+      this.state.saves += 1;
+    },
+    delete() {
+      this.state.deletes += 1;
+    },
+  };
+
+  assert.throws(
+    () =>
+      __test.commitWorkout(
+        db,
+        "owner-id",
+        {
+          sourceWorkoutKey: "workout-1",
+          completedDate: "2026-11-18",
+          actualDurationMin: 45,
+          sessionRpe: 7,
+          notes: "Adjusted",
+          components: [],
+          replaceExistingCompletion: false,
+        },
+        {
+          items: [{ status: "update" }],
+          state: [{ sessionId: "session-1" }],
+        },
+      ),
+    (error) =>
+      error instanceof ApiError &&
+      error.status === 409 &&
+      /requires explicit historical replacement authorization/.test(error.message),
+  );
+  assert.equal(db.state.saves, 0);
+  assert.equal(db.state.deletes, 0);
 });
