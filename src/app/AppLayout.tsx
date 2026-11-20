@@ -114,6 +114,11 @@ export const AppLayout = () => {
                 <Popover.Body>
                   <Stack gap="4">
                     <ColorModeControl />
+                    <Popover.CloseTrigger asChild>
+                      <Button asChild variant="outline">
+                        <NavLink to="/settings">Settings</NavLink>
+                      </Button>
+                    </Popover.CloseTrigger>
                     <Button variant="outline" onClick={signOut}>
                       Sign out
                     </Button>

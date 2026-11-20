@@ -1149,8 +1149,7 @@ const verifyOperationPayload = (existing, hash) => {
   throw new ApiError(409, "This operationId is already used with different import payload.");
 };
 
-const commit = (event) => {
-  const principal = credentials.importPrincipalFromEvent(event);
+const commit = (event, principal = credentials.importPrincipalFromEvent(event)) => {
   const owner = principal.ownerId;
   boundedRequest(owner, event);
   const body = event.requestInfo().body;
@@ -1252,8 +1251,7 @@ const commit = (event) => {
   return event.json(200, response ?? { committed: true, rows: result });
 };
 
-const previewRequest = (event) => {
-  const principal = credentials.importPrincipalFromEvent(event);
+const previewRequest = (event, principal = credentials.importPrincipalFromEvent(event)) => {
   const owner = principal.ownerId;
   boundedRequest(owner, event);
   credentials.ensureScopes(

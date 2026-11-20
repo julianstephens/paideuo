@@ -472,6 +472,11 @@ test("PocketBase-backed hierarchy imports are transactional and schedule-safe", 
         ],
       },
     };
+    const credentialListPath = "/api/paideuo/v1/service-credentials";
+    const emptyCredentialList = await owner.client.send(credentialListPath);
+    assert.deepEqual(emptyCredentialList.credentials, []);
+    assert.ok(emptyCredentialList.availableScopes.includes("imports:commit"));
+
     const scopeDenied = await owner.client.send("/api/paideuo/v1/service-credentials/issue", {
       method: "POST",
       body: { label: "scope-denied", scopes: ["imports:commit"], expiresAt: "" },
@@ -489,6 +494,15 @@ test("PocketBase-backed hierarchy imports are transactional and schedule-safe", 
         allowHistoryRewrite: true,
       },
     });
+    const credentialList = await owner.client.send(credentialListPath);
+    assert.equal(credentialList.credentials.length, 2);
+    const listedCredential = credentialList.credentials.find(
+      (credential) => credential.id === tokenCredential.credential.id,
+    );
+    assert.deepEqual(listedCredential, tokenCredential.credential);
+    assert.ok(listedCredential.created);
+    assert.deepEqual((await intruder.client.send(credentialListPath)).credentials, []);
+
     const tokenPreview = await servicePreviewImport(
       baseUrl,
       tokenCredential.plaintextToken,

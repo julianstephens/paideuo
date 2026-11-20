@@ -12,6 +12,7 @@ import { LibraryPage } from "../features/templates/LibraryPage";
 import { PageHeader, Panel } from "../components/ui";
 import { AppLayout } from "./AppLayout";
 import { ImportsPage } from "../features/imports/ImportsPage";
+import { SettingsPage } from "../features/settings/SettingsPage";
 
 export const router = createBrowserRouter([
   { path: "sign-in", Component: SignInPage },
@@ -30,6 +31,7 @@ export const router = createBrowserRouter([
           { path: "programs/:programId/blocks/:blockId", Component: BlockPage },
           { path: "library", Component: LibraryPage },
           { path: "imports", Component: ImportsPage },
+          { path: "settings", Component: SettingsPage },
           {
             path: "*",
             element: (

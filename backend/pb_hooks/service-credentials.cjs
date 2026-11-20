@@ -199,7 +199,6 @@ const authenticateServiceCredential = (app, plaintextToken) => {
 };
 
 const importPrincipalFromEvent = (event) => {
-  if (event.importAuth) return event.importAuth;
   const ownerId = event.auth?.id;
   if (!ownerId) throw new UnauthorizedError("Unauthorized.");
   return {
@@ -213,19 +212,15 @@ const importPrincipalFromEvent = (event) => {
   };
 };
 
-const withServiceCredential = (event) => {
-  const token = parseBearerToken(event);
-  const principal = authenticateServiceCredential(event.app, token);
-  event.importAuth = principal;
-  return principal;
-};
+const servicePrincipalFromEvent = (event) =>
+  authenticateServiceCredential(event.app, parseBearerToken(event));
 
 // oxlint-disable-next-line import/no-commonjs
 module.exports = {
   importPrincipalFromEvent,
   requiredScopesForImportKind,
   ensureScopes,
-  withServiceCredential,
+  servicePrincipalFromEvent,
   listCredentials,
   issueCredential,
   revokeCredential,
