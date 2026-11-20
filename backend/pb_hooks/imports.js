@@ -1,7 +1,43 @@
 const schema = require(__hooks + "/import-schemas.js");
 
 const previewLifetimeMs = 15 * 60 * 1000;
+const maxRequestBytes = 2 * 1024 * 1024;
+const rateLimitWindowMs = 60 * 1000;
+const rateLimit = 60;
 const issuedPreviews = new Map();
+const requestWindows = new Map();
+
+const requestBytes = (value) => {
+  let bytes = 0;
+  for (let index = 0; index < value.length; index += 1) {
+    const code = value.charCodeAt(index);
+    if (code <= 0x7f) bytes += 1;
+    else if (code <= 0x7ff) bytes += 2;
+    else if (0xd800 <= code && code <= 0xdbff) {
+      bytes += 4;
+      index += 1;
+    } else bytes += 3;
+  }
+  return bytes;
+};
+
+const boundedRequest = (event) => {
+  const body = event.requestInfo().body;
+  const bytes = requestBytes(JSON.stringify(body ?? null));
+  if (bytes > maxRequestBytes) throw new ApiError(413, "Import request exceeds the 2 MB limit.");
+  const owner = event.auth.id;
+  const now = Date.now();
+  for (const [key, current] of requestWindows) {
+    if (current.expiresAt <= now) requestWindows.delete(key);
+  }
+  const window = requestWindows.get(owner);
+  if (!window || window.expiresAt <= now) {
+    requestWindows.set(owner, { expiresAt: now + rateLimitWindowMs, count: 1 });
+  } else {
+    window.count += 1;
+    if (window.count > rateLimit) throw new ApiError(429, "Import request rate limit exceeded.");
+  }
+};
 
 const find = (db, collection, filter, params, sort = "") =>
   db.findRecordsByFilter(collection, filter, sort, 0, 0, params);
@@ -500,14 +536,10 @@ const observationPlan = (db, owner, document) => {
     ) {
       completionPlan.item.status = "update";
     }
-    if (
-      completion &&
-      completionPlan.item.status === "update" &&
-      !data.replaceExistingCompletion
-    ) {
+    if (completion && completionPlan.item.status === "update") {
       completionPlan.item.status = "conflict";
       completionPlan.item.error =
-        "Replacing existing completed workout results requires explicit historical replacement authorization.";
+        "Historical completed workout replacement is not supported by the import endpoint.";
     }
     items.push(completionPlan.item);
     return { items, state };
@@ -911,10 +943,10 @@ const commitWorkout = (db, owner, data, plan) => {
   let completion = first(db, "paideuo_session_completions", "session = {:session}", {
     session: state.sessionId,
   });
-  if (completion && plan.items[0].status === "update" && !data.replaceExistingCompletion) {
+  if (completion && plan.items[0].status === "update") {
     throw new ApiError(
       409,
-      "Replacing existing completed workout results requires explicit historical replacement authorization.",
+      "Historical completed workout replacement is not supported by the import endpoint.",
     );
   }
   completion = completion ?? new Record(db.findCollectionByNameOrId("paideuo_session_completions"));
@@ -988,23 +1020,184 @@ const commitHeartRate = (db, owner, data, plan) => {
   return [{ key: data.sourceWorkoutKey, status: state.id ? "updated" : "created" }];
 };
 
+const operationIdValue = (body) => {
+  if (body.operationId == null) return null;
+  if (
+    typeof body.operationId !== "string" ||
+    body.operationId.length < 1 ||
+    body.operationId.length > 200 ||
+    !/^[A-Za-z0-9._:-]+$/.test(body.operationId)
+  ) {
+    throw new BadRequestError("Enter a valid import operationId.");
+  }
+  return body.operationId;
+};
+
+const canonicalDocument = (document) =>
+  schema.normalize(document, { authorizeReference: () => true });
+
+const payloadHash = (document) => $security.sha256(JSON.stringify(canonicalDocument(document)));
+
+const sourceTimestampValue = (body) => {
+  const source = body.provenance && typeof body.provenance === "object" ? body.provenance : {};
+  const value =
+    body.importTimestamp ?? body.importedAt ?? source.importTimestamp ?? source.importedAt;
+  if (value == null) return null;
+  if (typeof value !== "string" || value.length > 100 || !Number.isFinite(Date.parse(value))) {
+    throw new BadRequestError("Enter a valid import timestamp.");
+  }
+  return value;
+};
+
+const declaredTextValue = (value, fallback, maximum, label) => {
+  if (value == null) return fallback;
+  if (typeof value !== "string" || value.length > maximum) {
+    throw new BadRequestError(`Enter a valid ${label}.`);
+  }
+  return value;
+};
+
+const provenanceValue = (body, owner) => {
+  const source = body.provenance && typeof body.provenance === "object" ? body.provenance : {};
+  const textValue = (value, fallback, maximum) =>
+    declaredTextValue(value, fallback, maximum, "import source label");
+  const sourceLabel = textValue(body.sourceLabel ?? source.sourceLabel, "api", 200);
+  const sourceCredentialRef = declaredTextValue(
+    body.credentialRef ?? body.credential ?? source.credentialRef ?? source.credential,
+    "",
+    200,
+    "source credential reference",
+  );
+  return {
+    sourceLabel,
+    actor: owner,
+    credentialRef: `user:${owner}`,
+    sourceCredentialRef,
+    sourceTimestamp: sourceTimestampValue(body),
+    importedAt: new Date().toISOString(),
+  };
+};
+
+const auditSummary = (kind, rows, plan) => {
+  const summary = {
+    created: 0,
+    updated: 0,
+    skipped: 0,
+    conflict: 0,
+    committed: 0,
+    programs: 0,
+  };
+  if (kind === "program") {
+    for (const item of plan?.items ?? []) {
+      if (item.status === "create") summary.created += 1;
+      else if (item.status === "update") summary.updated += 1;
+      else if (item.status === "skip") summary.skipped += 1;
+      else if (item.status === "conflict") summary.conflict += 1;
+    }
+    if (rows && !rows.unchanged && rows.programId) summary.programs = 1;
+    return summary;
+  }
+  for (const row of Array.isArray(rows) ? rows : []) {
+    const status = typeof row === "object" ? row.status : null;
+    if (status === "created") summary.created += 1;
+    else if (status === "updated") summary.updated += 1;
+    else if (status === "skipped") summary.skipped += 1;
+    else if (status === "conflict") summary.conflict += 1;
+    else if (status === "committed") summary.committed += 1;
+  }
+  return summary;
+};
+
+const findOperation = (db, owner, operationId) => {
+  const record = first(
+    db,
+    "paideuo_import_operations",
+    "owner = {:owner} && operation_id = {:operationId}",
+    { owner, operationId },
+  );
+  if (!record) return null;
+  return {
+    payloadHash: record.getString("payload_hash"),
+    result: JSON.parse(record.getString("result_json")),
+    provenance: JSON.parse(record.getString("provenance_json")),
+    summary: JSON.parse(record.getString("summary_json")),
+  };
+};
+
+const saveOperation = (db, owner, operationId, hash, provenance, summary, response) => {
+  const record = new Record(db.findCollectionByNameOrId("paideuo_import_operations"));
+  record.set("owner", owner);
+  record.set("operation_id", operationId);
+  record.set("payload_hash", hash);
+  record.set("status", "committed");
+  record.set("provenance_json", provenance);
+  record.set("summary_json", summary);
+  record.set("result_json", response);
+  db.save(record);
+};
+
+const verifyOperationPayload = (existing, hash) => {
+  if (!existing || existing.payloadHash === hash) return existing;
+  throw new ApiError(409, "This operationId is already used with different import payload.");
+};
+
 const commit = (event) => {
+  boundedRequest(event);
   const body = event.requestInfo().body;
   if (
     !body ||
     typeof body !== "object" ||
     Array.isArray(body) ||
-    Object.keys(body).some((key) => !["previewToken", "document"].includes(key)) ||
+    Object.keys(body).some(
+      (key) =>
+        ![
+          "previewToken",
+          "document",
+          "operationId",
+          "provenance",
+          "sourceLabel",
+          "actor",
+          "credential",
+          "credentialRef",
+          "importedAt",
+          "importTimestamp",
+        ].includes(key),
+    ) ||
     typeof body.previewToken !== "string" ||
     !body.document
   ) {
     throw new BadRequestError("Enter a valid import commit.");
   }
   const owner = event.auth.id;
+  const operationId = operationIdValue(body);
+  const provenance = provenanceValue(body, owner);
+  const preparedHash = payloadHash(body.document);
   let result;
   let issued;
+  let response = null;
+
+  if (operationId) {
+    const existing = verifyOperationPayload(
+      findOperation(event.app, owner, operationId),
+      preparedHash,
+    );
+    if (existing) {
+      return event.json(200, existing.result);
+    }
+  }
+
   try {
     event.app.runInTransaction((tx) => {
+      if (operationId) {
+        const existing = verifyOperationPayload(
+          findOperation(tx, owner, operationId),
+          preparedHash,
+        );
+        if (existing) {
+          response = existing.result;
+          return;
+        }
+      }
       const verified = verifyPreview(tx, owner, body.document, body.previewToken);
       issued = verified.issued;
       issued.consumed = true;
@@ -1015,16 +1208,41 @@ const commit = (event) => {
       else if (document.kind === "workout-component-results")
         result = commitWorkout(tx, owner, document.data, verified.plan);
       else result = commitHeartRate(tx, owner, document.data, verified.plan);
+      if (operationId) {
+        const summary = auditSummary(document.kind, result, verified.plan);
+        const auditResponse = {
+          committed: true,
+          rows: result,
+          operationId,
+          payloadHash: preparedHash,
+          audit: { operationId, payloadHash: preparedHash, provenance, summary },
+        };
+        response = auditResponse;
+        saveOperation(tx, owner, operationId, preparedHash, provenance, summary, auditResponse);
+      }
     });
   } catch (error) {
     if (issued) issued.consumed = false;
+    if (
+      operationId &&
+      typeof error?.message === "string" &&
+      /UNIQUE constraint failed/i.test(error.message)
+    ) {
+      const existing = verifyOperationPayload(
+        findOperation(event.app, owner, operationId),
+        preparedHash,
+      );
+      if (existing) return event.json(200, existing.result);
+    }
     throw error;
   }
-  return event.json(200, { committed: true, rows: result });
+  return event.json(200, response ?? { committed: true, rows: result });
 };
 
-const previewRequest = (event) =>
-  event.json(200, preview(event.app, event.auth.id, event.requestInfo().body).result);
+const previewRequest = (event) => {
+  boundedRequest(event);
+  return event.json(200, preview(event.app, event.auth.id, event.requestInfo().body).result);
+};
 
 // oxlint-disable-next-line import/no-commonjs
 module.exports = { commit, preview: previewRequest };
