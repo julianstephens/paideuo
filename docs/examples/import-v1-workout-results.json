@@ -3,7 +3,7 @@
   "version": 1,
   "kind": "workout-component-results",
   "data": {
-    "sourceWorkoutKey": "foundation-base-week-1-climbing",
+    "sourceWorkoutKey": "foundation-program/foundation-base/foundation-base-week-1/foundation-base-climbing",
     "completedDate": "2026-11-20",
     "actualDurationMin": 58,
     "sessionRpe": 6,

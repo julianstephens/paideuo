@@ -9,7 +9,7 @@
     "lint": "oxlint",
     "typecheck": "tsc --noEmit",
     "build": "pnpm run typecheck && vite build",
-    "test": "node --test backend/pb_hooks/import-schemas.test.cjs",
+    "test": "node --test backend/pb_hooks/*.test.cjs",
     "fmt": "oxfmt",
     "fmt:check": "oxfmt --check",
     "seed:program": "node --env-file-if-exists=.env scripts/seed-program.mjs"

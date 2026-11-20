@@ -292,6 +292,11 @@ const normalizeProgram = (value, context) => {
       const slotIds = new Set(slots.map((slot) => slot.externalId));
       unique(slots, (slot) => slot.externalId, "block slots");
       unique(slots, (slot) => slot.position, "block slots");
+      unique(
+        slots.filter((slot) => slot.id),
+        (slot) => slot.id,
+        "block slot IDs",
+      );
       const weeks = list(block.weeks, duration, "block weeks").map((rawWeek, weekIndex) => {
         const week = object(
           rawWeek,
@@ -326,6 +331,11 @@ const normalizeProgram = (value, context) => {
       if (weeks.length !== duration) fail("A block must define every week in its duration.");
       unique(weeks, (week) => week.externalId, "block weeks");
       unique(weeks, (week) => week.position, "block weeks");
+      unique(
+        weeks.filter((week) => week.id),
+        (week) => week.id,
+        "block week IDs",
+      );
       return {
         id: authorize(block.id, "program-block", "block id", context),
         externalId: externalId(block.externalId, "block external ID"),
@@ -342,6 +352,21 @@ const normalizeProgram = (value, context) => {
   if (weekCount > limits.weeks) fail(`Program must contain at most ${limits.weeks} weeks.`);
   unique(normalizedBlocks, (block) => block.externalId, "program blocks");
   unique(normalizedBlocks, (block) => block.position, "program blocks");
+  unique(
+    normalizedBlocks.filter((block) => block.id),
+    (block) => block.id,
+    "program block IDs",
+  );
+  unique(
+    normalizedBlocks.flatMap((block) => block.slots).filter((slot) => slot.id),
+    (slot) => slot.id,
+    "program slot IDs",
+  );
+  unique(
+    normalizedBlocks.flatMap((block) => block.weeks).filter((week) => week.id),
+    (week) => week.id,
+    "program week IDs",
+  );
   return {
     program: {
       id: authorize(identity.id, "program", "program id", context),

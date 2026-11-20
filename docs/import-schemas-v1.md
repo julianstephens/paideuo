@@ -81,6 +81,11 @@ unique external `key` and unique one-based `plannedPosition`.
 `sourceSessionId`, when supplied, is an authorized `scheduled-session` reference. Actual durations,
 sets, and positions are non-negative whole numbers (positions are at least one); RPE is from 1
 through 10. Load is an object containing a non-negative `value` and a non-empty `unit`.
+Program imports derive prescription workout keys as
+`<program>/<block>/<week>/<slot>` using the four external IDs, providing a unique owner-scoped
+observation key. If that readable form would exceed the 200-character key limit, Paideuo substitutes
+the stable `workout:<sha256>` form. Use the key shown for the prescription row in preview responses
+as the source workout key for later observations.
 
 See [the workout results sample](examples/import-v1-workout-results.json).
 
@@ -105,6 +110,70 @@ The schema intentionally does not accept sample arrays or derived minimum/maximu
 Those require a separate schema and persistence decision.
 
 See [the heart-rate recording sample](examples/import-v1-heart-rate.json).
+
+## Preview and commit API
+
+Authenticated clients send any document above directly to:
+
+```text
+POST /api/paideuo/v1/imports/preview
+```
+
+The server validates and normalizes the complete document, checks every supplied PocketBase ID
+against the authenticated owner, and compares it with current state. Preview responses contain an
+opaque `previewToken` and one `items` entry per logical row:
+
+```json
+{
+  "previewToken": "opaque",
+  "schema": "paideuo",
+  "version": 1,
+  "kind": "program",
+  "items": [
+    {
+      "type": "program",
+      "key": "foundation-program",
+      "id": null,
+      "status": "create"
+    }
+  ],
+  "conflicting": 0
+}
+```
+
+Status is `create`, `update`, `skip`, or `conflict`. Preview does not write any collection, preview
+receipt, session, or component.
+
+Commit re-submits the exact normalized preview inputs:
+
+```json
+{
+  "previewToken": "opaque",
+  "document": {
+    "schema": "paideuo",
+    "version": 1,
+    "kind": "program",
+    "data": {}
+  }
+}
+```
+
+The commit is accepted only when the issued token, owner, document, and current referenced state
+still match. Changed, consumed, expired, stale, or tampered previews return `409`. Tokens are held
+opaquely in server memory for 15 minutes and are consumed on commit; a server restart therefore
+invalidates outstanding previews.
+
+Program hierarchies are applied in one database transaction. Constraint or persistence failures
+roll the entire hierarchy back, including blocks, weeks, slots, prescriptions, and components.
+Scheduled session rows are never changed by an import commit. When a program already has a schedule,
+the commit returns `scheduleSynchronization: "review-required"` and clients must use the existing
+schedule revision preview/apply workflow.
+
+Daily check-ins are batch observations and return a status for every date. Workout results and
+heart-rate recordings return a status for their single source workout. Observation commits are
+atomic at present; Paideuo does not expose partial-best-effort observation mode. A future partial
+mode must be explicitly requested and must return a per-row `committed`, `skipped`, or `failed`
+status without allowing failures to make committed rows ambiguous.
 
 ## Versioning policy
 

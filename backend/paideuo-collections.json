@@ -93,10 +93,26 @@
         "required": true,
         "system": false,
         "type": "number"
+      },
+      {
+        "autogeneratePattern": "",
+        "help": "",
+        "hidden": false,
+        "id": "text160016exter",
+        "max": 200,
+        "min": 0,
+        "name": "external_id",
+        "pattern": "",
+        "presentable": false,
+        "primaryKey": false,
+        "required": false,
+        "system": false,
+        "type": "text"
       }
     ],
     "indexes": [
-      "CREATE UNIQUE INDEX paideuo_idx_blocks_position ON paideuo_blocks (program, position)"
+      "CREATE UNIQUE INDEX paideuo_idx_blocks_position ON paideuo_blocks (program, position)",
+      "CREATE UNIQUE INDEX idx_paideuo_block_import_identity ON paideuo_blocks (program, external_id) WHERE external_id != ''"
     ],
     "system": false
   },
@@ -179,6 +195,212 @@
     ],
     "indexes": [
       "CREATE UNIQUE INDEX idx_paideuo_recovery_owner_date ON paideuo_daily_recovery (owner, date)"
+    ],
+    "system": false
+  },
+  {
+    "id": "paiheartrate016",
+    "listRule": "@request.auth.id != \"\" && owner = @request.auth.id",
+    "viewRule": "@request.auth.id != \"\" && owner = @request.auth.id",
+    "createRule": null,
+    "updateRule": null,
+    "deleteRule": null,
+    "name": "paideuo_heart_rate_recordings",
+    "type": "base",
+    "fields": [
+      {
+        "autogeneratePattern": "[a-z0-9]{15}",
+        "help": "",
+        "hidden": false,
+        "id": "text3208210256",
+        "max": 15,
+        "min": 15,
+        "name": "id",
+        "pattern": "^[a-z0-9]+$",
+        "presentable": false,
+        "primaryKey": true,
+        "required": true,
+        "system": true,
+        "type": "text"
+      },
+      {
+        "cascadeDelete": true,
+        "collectionId": "pai85380df53e11",
+        "help": "",
+        "hidden": false,
+        "id": "relation16016owne",
+        "maxSelect": 1,
+        "minSelect": 0,
+        "name": "owner",
+        "presentable": false,
+        "required": true,
+        "system": false,
+        "type": "relation"
+      },
+      {
+        "cascadeDelete": true,
+        "collectionId": "paibfa2499da16e",
+        "help": "",
+        "hidden": false,
+        "id": "relation16016sess",
+        "maxSelect": 1,
+        "minSelect": 0,
+        "name": "session",
+        "presentable": false,
+        "required": false,
+        "system": false,
+        "type": "relation"
+      },
+      {
+        "autogeneratePattern": "",
+        "help": "",
+        "hidden": false,
+        "id": "text160016sourc",
+        "max": 200,
+        "min": 0,
+        "name": "source_workout_key",
+        "pattern": "",
+        "presentable": false,
+        "primaryKey": false,
+        "required": true,
+        "system": false,
+        "type": "text"
+      },
+      {
+        "autogeneratePattern": "",
+        "help": "",
+        "hidden": false,
+        "id": "text160016start",
+        "max": 40,
+        "min": 0,
+        "name": "started_at",
+        "pattern": "",
+        "presentable": false,
+        "primaryKey": false,
+        "required": true,
+        "system": false,
+        "type": "text"
+      },
+      {
+        "autogeneratePattern": "",
+        "help": "",
+        "hidden": false,
+        "id": "text160016ended",
+        "max": 40,
+        "min": 0,
+        "name": "ended_at",
+        "pattern": "",
+        "presentable": false,
+        "primaryKey": false,
+        "required": true,
+        "system": false,
+        "type": "text"
+      },
+      {
+        "autogeneratePattern": "",
+        "help": "",
+        "hidden": false,
+        "id": "text160016timez",
+        "max": 100,
+        "min": 0,
+        "name": "timezone",
+        "pattern": "",
+        "presentable": false,
+        "primaryKey": false,
+        "required": true,
+        "system": false,
+        "type": "text"
+      },
+      {
+        "help": "",
+        "hidden": false,
+        "id": "json160016devi",
+        "maxSize": 4096,
+        "name": "device",
+        "presentable": false,
+        "required": true,
+        "system": false,
+        "type": "json"
+      },
+      {
+        "autogeneratePattern": "",
+        "help": "",
+        "hidden": false,
+        "id": "text160016provi",
+        "max": 200,
+        "min": 0,
+        "name": "provider",
+        "pattern": "",
+        "presentable": false,
+        "primaryKey": false,
+        "required": false,
+        "system": false,
+        "type": "text"
+      },
+      {
+        "autogeneratePattern": "",
+        "help": "",
+        "hidden": false,
+        "id": "text160016exter",
+        "max": 200,
+        "min": 0,
+        "name": "external_id",
+        "pattern": "",
+        "presentable": false,
+        "primaryKey": false,
+        "required": false,
+        "system": false,
+        "type": "text"
+      },
+      {
+        "help": "",
+        "hidden": false,
+        "id": "json160016sint",
+        "maxSize": 32,
+        "name": "sample_interval_seconds",
+        "presentable": false,
+        "required": false,
+        "system": false,
+        "type": "json"
+      },
+      {
+        "help": "",
+        "hidden": false,
+        "id": "json160016scou",
+        "maxSize": 32,
+        "name": "sample_count",
+        "presentable": false,
+        "required": false,
+        "system": false,
+        "type": "json"
+      },
+      {
+        "help": "",
+        "hidden": false,
+        "id": "select160016unit",
+        "maxSelect": 1,
+        "name": "units",
+        "presentable": false,
+        "required": true,
+        "system": false,
+        "type": "select",
+        "values": ["bpm"]
+      },
+      {
+        "help": "",
+        "hidden": false,
+        "id": "json160016algo",
+        "maxSize": 4096,
+        "name": "algorithm",
+        "presentable": false,
+        "required": true,
+        "system": false,
+        "type": "json"
+      }
+    ],
+    "indexes": [
+      "CREATE UNIQUE INDEX idx_paideuo_hr_owner_external ON paideuo_heart_rate_recordings (owner, external_id) WHERE external_id != ''",
+      "CREATE UNIQUE INDEX idx_paideuo_hr_owner_workout ON paideuo_heart_rate_recordings (owner, source_workout_key) WHERE external_id = ''"
     ],
     "system": false
   },
@@ -465,10 +687,26 @@
         "system": false,
         "type": "select",
         "values": ["normal", "recovery"]
+      },
+      {
+        "autogeneratePattern": "",
+        "help": "",
+        "hidden": false,
+        "id": "text160016exter",
+        "max": 200,
+        "min": 0,
+        "name": "external_id",
+        "pattern": "",
+        "presentable": false,
+        "primaryKey": false,
+        "required": false,
+        "system": false,
+        "type": "text"
       }
     ],
     "indexes": [
-      "CREATE UNIQUE INDEX paideuo_idx_weeks_position ON paideuo_program_weeks (block, position)"
+      "CREATE UNIQUE INDEX paideuo_idx_weeks_position ON paideuo_program_weeks (block, position)",
+      "CREATE UNIQUE INDEX idx_paideuo_week_import_identity ON paideuo_program_weeks (block, external_id) WHERE external_id != ''"
     ],
     "system": false
   },
@@ -587,9 +825,27 @@
         "presentable": false,
         "system": false,
         "type": "autodate"
+      },
+      {
+        "autogeneratePattern": "",
+        "help": "",
+        "hidden": false,
+        "id": "text160016exter",
+        "max": 200,
+        "min": 0,
+        "name": "external_id",
+        "pattern": "",
+        "presentable": false,
+        "primaryKey": false,
+        "required": false,
+        "system": false,
+        "type": "text"
       }
     ],
-    "indexes": ["CREATE INDEX paideuo_idx_programs_owner ON paideuo_programs (owner)"],
+    "indexes": [
+      "CREATE INDEX paideuo_idx_programs_owner ON paideuo_programs (owner)",
+      "CREATE UNIQUE INDEX idx_paideuo_program_import_identity ON paideuo_programs (owner, external_id) WHERE external_id != ''"
+    ],
     "system": false
   },
   {
@@ -1194,10 +1450,26 @@
         "system": false,
         "type": "select",
         "values": ["easy", "moderate", "hard", "maximal"]
+      },
+      {
+        "autogeneratePattern": "",
+        "help": "",
+        "hidden": false,
+        "id": "text160016exter",
+        "max": 200,
+        "min": 0,
+        "name": "external_id",
+        "pattern": "",
+        "presentable": false,
+        "primaryKey": false,
+        "required": false,
+        "system": false,
+        "type": "text"
       }
     ],
     "indexes": [
-      "CREATE UNIQUE INDEX paideuo_idx_prescriptions_week_slot ON paideuo_session_prescriptions (program_week, slot)"
+      "CREATE UNIQUE INDEX paideuo_idx_prescriptions_week_slot ON paideuo_session_prescriptions (program_week, slot)",
+      "CREATE UNIQUE INDEX idx_paideuo_prescription_import_identity ON paideuo_session_prescriptions (program_week, external_id) WHERE external_id != ''"
     ],
     "system": false
   },
@@ -1291,9 +1563,27 @@
         "required": false,
         "system": false,
         "type": "json"
+      },
+      {
+        "autogeneratePattern": "",
+        "help": "",
+        "hidden": false,
+        "id": "text160016exter",
+        "max": 200,
+        "min": 0,
+        "name": "external_id",
+        "pattern": "",
+        "presentable": false,
+        "primaryKey": false,
+        "required": false,
+        "system": false,
+        "type": "text"
       }
     ],
-    "indexes": ["CREATE INDEX paideuo_idx_slots_block ON paideuo_session_slots (block)"],
+    "indexes": [
+      "CREATE INDEX paideuo_idx_slots_block ON paideuo_session_slots (block)",
+      "CREATE UNIQUE INDEX idx_paideuo_slot_import_identity ON paideuo_session_slots (block, external_id) WHERE external_id != ''"
+    ],
     "system": false
   },
   {
@@ -1950,6 +2240,178 @@
     ],
     "indexes": [
       "CREATE UNIQUE INDEX idx_paideuo_review_week ON paideuo_weekly_reviews (program, source_week)"
+    ],
+    "system": false
+  },
+  {
+    "id": "pairesults16016",
+    "listRule": "@request.auth.id != \"\" && ((session.schedule = \"\" && session.owner = @request.auth.id) || session.schedule.program.owner = @request.auth.id)",
+    "viewRule": "@request.auth.id != \"\" && ((session.schedule = \"\" && session.owner = @request.auth.id) || session.schedule.program.owner = @request.auth.id)",
+    "createRule": null,
+    "updateRule": null,
+    "deleteRule": null,
+    "name": "paideuo_workout_component_results",
+    "type": "base",
+    "fields": [
+      {
+        "autogeneratePattern": "[a-z0-9]{15}",
+        "help": "",
+        "hidden": false,
+        "id": "text3208210256",
+        "max": 15,
+        "min": 15,
+        "name": "id",
+        "pattern": "^[a-z0-9]+$",
+        "presentable": false,
+        "primaryKey": true,
+        "required": true,
+        "system": true,
+        "type": "text"
+      },
+      {
+        "cascadeDelete": true,
+        "collectionId": "paibfa2499da16e",
+        "help": "",
+        "hidden": false,
+        "id": "relation16016sess",
+        "maxSelect": 1,
+        "minSelect": 0,
+        "name": "session",
+        "presentable": false,
+        "required": true,
+        "system": false,
+        "type": "relation"
+      },
+      {
+        "autogeneratePattern": "",
+        "help": "",
+        "hidden": false,
+        "id": "text160016compo",
+        "max": 200,
+        "min": 0,
+        "name": "component_key",
+        "pattern": "",
+        "presentable": false,
+        "primaryKey": false,
+        "required": true,
+        "system": false,
+        "type": "text"
+      },
+      {
+        "help": "",
+        "hidden": false,
+        "id": "number160016plan",
+        "max": null,
+        "min": 1,
+        "name": "planned_position",
+        "onlyInt": true,
+        "presentable": false,
+        "required": true,
+        "system": false,
+        "type": "number"
+      },
+      {
+        "autogeneratePattern": "",
+        "help": "",
+        "hidden": false,
+        "id": "text160016name",
+        "max": 200,
+        "min": 0,
+        "name": "name",
+        "pattern": "",
+        "presentable": false,
+        "primaryKey": false,
+        "required": true,
+        "system": false,
+        "type": "text"
+      },
+      {
+        "help": "",
+        "hidden": false,
+        "id": "bool160016compl",
+        "name": "completed",
+        "presentable": false,
+        "required": true,
+        "system": false,
+        "type": "bool"
+      },
+      {
+        "help": "",
+        "hidden": false,
+        "id": "json160016admn",
+        "maxSize": 32,
+        "name": "actual_duration_min",
+        "presentable": false,
+        "required": false,
+        "system": false,
+        "type": "json"
+      },
+      {
+        "help": "",
+        "hidden": false,
+        "id": "json160016sets",
+        "maxSize": 32,
+        "name": "sets_completed",
+        "presentable": false,
+        "required": false,
+        "system": false,
+        "type": "json"
+      },
+      {
+        "autogeneratePattern": "",
+        "help": "",
+        "hidden": false,
+        "id": "text160016reps_",
+        "max": 200,
+        "min": 0,
+        "name": "reps_completed",
+        "pattern": "",
+        "presentable": false,
+        "primaryKey": false,
+        "required": false,
+        "system": false,
+        "type": "text"
+      },
+      {
+        "help": "",
+        "hidden": false,
+        "id": "json160016alod",
+        "maxSize": 4096,
+        "name": "actual_load",
+        "presentable": false,
+        "required": false,
+        "system": false,
+        "type": "json"
+      },
+      {
+        "help": "",
+        "hidden": false,
+        "id": "json160016rpe",
+        "maxSize": 32,
+        "name": "rpe",
+        "presentable": false,
+        "required": false,
+        "system": false,
+        "type": "json"
+      },
+      {
+        "autogeneratePattern": "",
+        "help": "",
+        "hidden": false,
+        "id": "text160016notes",
+        "max": 10000,
+        "min": 0,
+        "name": "notes",
+        "pattern": "",
+        "presentable": false,
+        "primaryKey": false,
+        "required": false,
+        "system": false,
+        "type": "text"
+      }
+    ],
+    "indexes": [
+      "CREATE UNIQUE INDEX idx_paideuo_result_session_component ON paideuo_workout_component_results (session, component_key)"
     ],
     "system": false
   }

@@ -111,6 +111,22 @@ test("rejects PocketBase identifiers without owner authorization", () => {
   );
 });
 
+test("rejects duplicate references to the same hierarchy record", () => {
+  const input = program();
+  input.data.blocks[0].slots.push({
+    id: "same-slot-id",
+    externalId: "thursday",
+    weekday: 4,
+    position: 2,
+    label: "Strength",
+  });
+  input.data.blocks[0].slots[0].id = "same-slot-id";
+  assert.throws(
+    () => normalize(input, { authorizeReference: () => true }),
+    /duplicate "same-slot-id"/,
+  );
+});
+
 test("normalizes workout component results and validates dates", () => {
   const valid = envelope("workout-component-results", {
     sourceSessionId: "session-id",
