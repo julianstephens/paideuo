@@ -89,7 +89,9 @@ const makeProgramDocument = () => ({
         objective: "",
         position: 1,
         durationWeeks: 1,
-        slots: [{ externalId: "integration-base-slot", weekday: 1, position: 1, label: "Climbing" }],
+        slots: [
+          { externalId: "integration-base-slot", weekday: 1, position: 1, label: "Climbing" },
+        ],
         weeks: [
           {
             externalId: "integration-base-week-1",
@@ -107,7 +109,9 @@ const makeProgramDocument = () => ({
                   notes: "",
                   plannedDurationMin: 60,
                   plannedIntensity: "moderate",
-                  components: [{ name: "Warm-up", instructions: "", durationMin: 10, targets: null }],
+                  components: [
+                    { name: "Warm-up", instructions: "", durationMin: 10, targets: null },
+                  ],
                 },
               },
             ],
@@ -120,7 +124,9 @@ const makeProgramDocument = () => ({
         objective: "",
         position: 2,
         durationWeeks: 1,
-        slots: [{ externalId: "integration-build-slot", weekday: 3, position: 1, label: "Strength" }],
+        slots: [
+          { externalId: "integration-build-slot", weekday: 3, position: 1, label: "Strength" },
+        ],
         weeks: [
           {
             externalId: "integration-build-week-1",
@@ -138,7 +144,9 @@ const makeProgramDocument = () => ({
                   notes: "",
                   plannedDurationMin: 45,
                   plannedIntensity: "hard",
-                  components: [{ name: "Main set", instructions: "", durationMin: 20, targets: null }],
+                  components: [
+                    { name: "Main set", instructions: "", durationMin: 20, targets: null },
+                  ],
                 },
               },
             ],
@@ -152,10 +160,10 @@ const makeProgramDocument = () => ({
 const previewImport = (client, document) =>
   client.send("/api/paideuo/v1/imports/preview", { method: "POST", body: document });
 
-const commitImport = (client, document, previewToken) =>
+const commitImport = (client, document, previewToken, metadata = {}) =>
   client.send("/api/paideuo/v1/imports/commit", {
     method: "POST",
-    body: { document, previewToken },
+    body: { document, previewToken, ...metadata },
   });
 
 const createAuthedUser = async (admin, baseUrl, suffix) => {
@@ -163,6 +171,7 @@ const createAuthedUser = async (admin, baseUrl, suffix) => {
   const password = "Password123!";
   await admin.collection("paideuo_users").create({ email, password, passwordConfirm: password });
   const client = new PocketBase(baseUrl);
+  client.autoCancellation(false);
   await client.collection("paideuo_users").authWithPassword(email, password);
   return { client, userId: client.authStore.record.id };
 };
@@ -194,18 +203,30 @@ test("PocketBase-backed hierarchy imports are transactional and schedule-safe", 
 
   const port = await freePort();
   const baseUrl = `http://127.0.0.1:${port}`;
-  const server = spawn(
-    "pocketbase",
-    [
-      "serve",
-      `--http=127.0.0.1:${port}`,
-      `--dir=${dataDir}`,
-      `--migrationsDir=${migrationsDir}`,
-      `--hooksDir=${hooksDir}`,
-      "--hooksWatch=false",
-    ],
-    { cwd: repoRoot, stdio: "pipe" },
-  );
+  const startServer = () =>
+    spawn(
+      "pocketbase",
+      [
+        "serve",
+        `--http=127.0.0.1:${port}`,
+        `--dir=${dataDir}`,
+        `--migrationsDir=${migrationsDir}`,
+        `--hooksDir=${hooksDir}`,
+        "--hooksWatch=false",
+      ],
+      { cwd: repoRoot, stdio: "pipe" },
+    );
+  const stopServer = async (processRef) => {
+      await new Promise((resolve) => {
+        if (processRef.exitCode !== null) {
+          resolve();
+          return;
+        }
+        processRef.once("exit", resolve);
+        processRef.kill("SIGTERM");
+      });
+  };
+  let server = startServer();
 
   try {
     await waitForHealth(baseUrl, 20000, server);
@@ -223,12 +244,32 @@ test("PocketBase-backed hierarchy imports are transactional and schedule-safe", 
       owner.client,
       initialDocument,
       initialPreview.previewToken,
+      {
+        operationId: "integration-program-001",
+        sourceLabel: "integration-test",
+        importTimestamp: "2026-11-20T21:50:13Z",
+      },
     );
     assert.equal(initialCommit.committed, true);
     assert.ok(initialCommit.rows.programId);
     assert.equal(initialCommit.rows.scheduleSynchronization, null);
+    assert.equal(initialCommit.audit.summary.programs, 1);
+    assert.ok(initialCommit.audit.summary.created > 0);
 
-    const createdProgram = await admin.collection("paideuo_programs").getOne(initialCommit.rows.programId);
+    await stopServer(server);
+    server = startServer();
+    await waitForHealth(baseUrl, 20000, server);
+    const restartedReplay = await commitImport(
+      owner.client,
+      initialDocument,
+      "preview-state-does-not-survive-restart",
+      { operationId: "integration-program-001" },
+    );
+    assert.deepEqual(restartedReplay, initialCommit);
+
+    const createdProgram = await admin
+      .collection("paideuo_programs")
+      .getOne(initialCommit.rows.programId);
     assert.equal(createdProgram.external_id, "integration-program");
     const createdBlocks = await admin.collection("paideuo_blocks").getFullList({
       filter: `program = "${createdProgram.id}"`,
@@ -247,7 +288,11 @@ test("PocketBase-backed hierarchy imports are transactional and schedule-safe", 
 
     const repeatPreview = await previewImport(owner.client, initialDocument);
     assert.ok(repeatPreview.items.every((item) => item.status === "skip"));
-    const repeatCommit = await commitImport(owner.client, initialDocument, repeatPreview.previewToken);
+    const repeatCommit = await commitImport(
+      owner.client,
+      initialDocument,
+      repeatPreview.previewToken,
+    );
     assert.equal(repeatCommit.rows.unchanged, true);
 
     const skipSafetyDocument = structuredClone(initialDocument);
@@ -273,7 +318,11 @@ test("PocketBase-backed hierarchy imports are transactional and schedule-safe", 
     updatedDocument.data.blocks[0].weeks[0].prescriptions[0].workout.components[0].instructions =
       "Updated instructions";
     const updatePreview = await previewImport(owner.client, updatedDocument);
-    const updateCommit = await commitImport(owner.client, updatedDocument, updatePreview.previewToken);
+    const updateCommit = await commitImport(
+      owner.client,
+      updatedDocument,
+      updatePreview.previewToken,
+    );
     assert.equal(updateCommit.committed, true);
     const updatedProgram = await admin.collection("paideuo_programs").getOne(createdProgram.id);
     assert.equal(updatedProgram.description, "Updated description");
@@ -282,25 +331,35 @@ test("PocketBase-backed hierarchy imports are transactional and schedule-safe", 
     swappedDocument.data.blocks[0].position = 2;
     swappedDocument.data.blocks[1].position = 1;
     const blockBeforeSwap = new Map(
-      (await admin.collection("paideuo_blocks").getFullList({ filter: `program = "${createdProgram.id}"` })).map(
-        (row) => [row.external_id, { id: row.id, position: row.position }],
-      ),
+      (
+        await admin
+          .collection("paideuo_blocks")
+          .getFullList({ filter: `program = "${createdProgram.id}"` })
+      ).map((row) => [row.external_id, { id: row.id, position: row.position }]),
     );
     const swapPreview = await previewImport(owner.client, swappedDocument);
     await commitImport(owner.client, swappedDocument, swapPreview.previewToken);
     const blockAfterSwap = new Map(
-      (await admin.collection("paideuo_blocks").getFullList({ filter: `program = "${createdProgram.id}"` })).map(
-        (row) => [row.external_id, { id: row.id, position: row.position }],
-      ),
+      (
+        await admin
+          .collection("paideuo_blocks")
+          .getFullList({ filter: `program = "${createdProgram.id}"` })
+      ).map((row) => [row.external_id, { id: row.id, position: row.position }]),
     );
-    assert.equal(blockAfterSwap.get("integration-base").id, blockBeforeSwap.get("integration-base").id);
-    assert.equal(blockAfterSwap.get("integration-build").id, blockBeforeSwap.get("integration-build").id);
+    assert.equal(
+      blockAfterSwap.get("integration-base").id,
+      blockBeforeSwap.get("integration-base").id,
+    );
+    assert.equal(
+      blockAfterSwap.get("integration-build").id,
+      blockBeforeSwap.get("integration-build").id,
+    );
     assert.equal(blockAfterSwap.get("integration-base").position, 2);
     assert.equal(blockAfterSwap.get("integration-build").position, 1);
 
-    const prescriptions = (await admin.collection("paideuo_session_prescriptions").getFullList()).filter(
-      (row) => weekIds.has(row.program_week),
-    );
+    const prescriptions = (
+      await admin.collection("paideuo_session_prescriptions").getFullList()
+    ).filter((row) => weekIds.has(row.program_week));
     assert.ok(prescriptions.length > 0);
     const schedule = await admin.collection("paideuo_program_schedules").create({
       program: createdProgram.id,
@@ -339,11 +398,91 @@ test("PocketBase-backed hierarchy imports are transactional and schedule-safe", 
     assert.equal(persistedSession.scheduled_date, "2026-11-21");
     assert.equal(persistedSession.status, "planned");
 
+    const workoutDocument = {
+      schema: "paideuo",
+      version: 1,
+      kind: "workout-component-results",
+      data: {
+        sourceSessionId: scheduledSession.id,
+        sourceWorkoutKey: "integration-workout-result",
+        completedDate: "2026-11-20",
+        actualDurationMin: 58,
+        sessionRpe: 7,
+        notes: "Completed",
+        components: [],
+      },
+    };
+    const workoutPreview = await previewImport(owner.client, workoutDocument);
+    const workoutCommit = await commitImport(
+      owner.client,
+      workoutDocument,
+      workoutPreview.previewToken,
+      { operationId: "integration-workout-001" },
+    );
+    assert.equal(workoutCommit.audit.summary.committed, 1);
+
+    const replacementDocument = structuredClone(workoutDocument);
+    replacementDocument.data.notes = "Replacement";
+    replacementDocument.data.replaceExistingCompletion = true;
+    const replacementPreview = await previewImport(owner.client, replacementDocument);
+    assert.equal(replacementPreview.conflicting, 1);
+    await assert.rejects(
+      () => commitImport(owner.client, replacementDocument, replacementPreview.previewToken),
+      (error) => error?.status === 409,
+    );
+
+    const concurrentDocument = {
+      schema: "paideuo",
+      version: 1,
+      kind: "daily-check-ins",
+      data: {
+        entries: [
+          {
+            date: "2026-11-20",
+            recovery: { sleepHours: 8 },
+            nutrition: { proteinGrams: 140 },
+          },
+        ],
+      },
+    };
+    const [concurrentPreviewA, concurrentPreviewB] = await Promise.all([
+      previewImport(owner.client, concurrentDocument),
+      previewImport(owner.client, concurrentDocument),
+    ]);
+    const [concurrentA, concurrentB] = await Promise.all([
+      commitImport(owner.client, concurrentDocument, concurrentPreviewA.previewToken, {
+        operationId: "integration-concurrent-001",
+      }),
+      commitImport(owner.client, concurrentDocument, concurrentPreviewB.previewToken, {
+        operationId: "integration-concurrent-001",
+      }),
+    ]);
+    assert.deepEqual(concurrentA, concurrentB);
+    const concurrentRows = await admin.collection("paideuo_daily_recovery").getFullList({
+      filter: `owner = "${owner.userId}" && date = "2026-11-20"`,
+    });
+    assert.equal(concurrentRows.length, 1);
+
+    const conflictingDocument = structuredClone(concurrentDocument);
+    conflictingDocument.data.entries[0].recovery.sleepHours = 7;
+    await assert.rejects(
+      () =>
+        commitImport(owner.client, conflictingDocument, concurrentPreviewB.previewToken, {
+          operationId: "integration-concurrent-001",
+        }),
+      (error) => error?.status === 409,
+    );
+    const rowsAfterConflict = await admin.collection("paideuo_daily_recovery").getFullList({
+      filter: `owner = "${owner.userId}" && date = "2026-11-20"`,
+    });
+    assert.equal(rowsAfterConflict.length, 1);
+
     const unauthorizedDocument = structuredClone(initialDocument);
     unauthorizedDocument.data.program.id = createdProgram.id;
     await assert.rejects(
       () => previewImport(intruder.client, unauthorizedDocument),
-      (error) => error?.status === 400 && /Unauthorized program id/.test(error?.response?.message ?? ""),
+      (error) =>
+        error?.status === 400 && /Unauthorized program id/.test(error?.response?.message ?? ""),
     );
 
     const beforeFailure = await admin.collection("paideuo_programs").getOne(createdProgram.id);
@@ -353,8 +492,13 @@ test("PocketBase-backed hierarchy imports are transactional and schedule-safe", 
       injectedFailureMarker;
     const failurePreview = await previewImport(owner.client, failureDocument);
     await assert.rejects(
-      () => commitImport(owner.client, failureDocument, failurePreview.previewToken),
-      (error) => error?.status === 400 && /Injected nested write failure/.test(error?.response?.message ?? ""),
+      () =>
+        commitImport(owner.client, failureDocument, failurePreview.previewToken, {
+          operationId: "integration-rollback-001",
+        }),
+      (error) =>
+        error?.status === 400 &&
+        /Injected nested write failure/.test(error?.response?.message ?? ""),
     );
     const afterFailure = await admin.collection("paideuo_programs").getOne(createdProgram.id);
     assert.equal(afterFailure.description, beforeFailure.description);
@@ -362,9 +506,12 @@ test("PocketBase-backed hierarchy imports are transactional and schedule-safe", 
       filter: `name = "${injectedFailureMarker}"`,
     });
     assert.equal(componentRows.length, 0);
+    const failedReceipts = await admin.collection("paideuo_import_operations").getFullList({
+      filter: 'operation_id = "integration-rollback-001"',
+    });
+    assert.equal(failedReceipts.length, 0);
   } finally {
-    if (server.exitCode === null) server.kill("SIGTERM");
-    await new Promise((resolve) => server.once("exit", resolve));
+    if (server.exitCode === null) await stopServer(server);
     fs.rmSync(tempRoot, { recursive: true, force: true });
   }
 });

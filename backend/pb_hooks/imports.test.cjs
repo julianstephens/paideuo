@@ -42,13 +42,19 @@ serviceModule.require = (id) => {
 };
 serviceModule._compile(
   `${fs.readFileSync(serviceFilename, "utf8")}
-module.exports.__test = { reconcileTrainingComponents, observationPlan, commitWorkout };`,
+module.exports.__test = {
+  reconcileTrainingComponents,
+  observationPlan,
+  commitWorkout,
+  requestWindows,
+};`,
   serviceFilename,
 );
 const { commit, preview, __test } = serviceModule.exports;
 
 class FakeRecord {
-  constructor(_collection, fields = {}) {
+  constructor(collection, fields = {}) {
+    this.collection = collection;
     this.id = fields.id ?? `record-${Math.random()}`;
     this.fields = { ...fields };
   }
@@ -96,10 +102,14 @@ const document = () => ({
 });
 
 const database = () => {
-  const state = { saves: 0, records: new Map() };
+  const state = { saves: 0, records: new Map(), operations: new Map() };
   return {
     state,
     findRecordsByFilter(collection, _filter, _sort, _limit, _offset, params) {
+      if (collection === "paideuo_import_operations") {
+        const record = state.operations.get(`${params.owner}:${params.operationId}`);
+        return record ? [record] : [];
+      }
       if (collection !== "paideuo_daily_recovery") return [];
       const record = state.records.get(params.date);
       return record ? [record] : [];
@@ -109,6 +119,10 @@ const database = () => {
     },
     save(record) {
       state.saves += 1;
+      if (record.collection?.name === "paideuo_import_operations") {
+        state.operations.set(`${record.fields.owner}:${record.fields.operation_id}`, record);
+        return;
+      }
       state.records.set(record.fields.date, record);
     },
     runInTransaction(callback) {
@@ -168,36 +182,96 @@ test("operation replay returns the same result and conflicting reuse is rejected
   const db = database();
   const source = document();
   const prepared = preview(event(db, source)).value;
-  const first = commit(event(db, {
-    document: source,
-    previewToken: prepared.previewToken,
-    operationId: "import-001",
-    sourceLabel: "sensor",
-    credentialRef: "credential-001",
-  }));
+  const first = commit(
+    event(db, {
+      document: source,
+      previewToken: prepared.previewToken,
+      operationId: "import-001",
+      sourceLabel: "sensor",
+      credentialRef: "credential-001",
+    }),
+  );
 
   assert.equal(first.status, 200);
   assert.equal(first.value.operationId, "import-001");
   assert.equal(first.value.audit.provenance.sourceLabel, "sensor");
   assert.equal(first.value.audit.provenance.actor, "owner-id");
+  assert.equal(first.value.audit.provenance.credentialRef, "user:owner-id");
+  assert.equal(first.value.audit.provenance.sourceCredentialRef, "credential-001");
+  assert.equal(first.value.audit.summary.created, 1);
 
-  const replay = commit(event(db, {
-    document: source,
-    previewToken: prepared.previewToken,
-    operationId: "import-001",
-  }));
+  const replay = commit(
+    event(db, {
+      document: source,
+      previewToken: prepared.previewToken,
+      operationId: "import-001",
+    }),
+  );
   assert.deepEqual(replay.value, first.value);
 
   const changed = structuredClone(source);
   changed.data.entries[0].recovery.sleepHours = 9;
   assert.throws(
-    () => commit(event(db, {
-      document: changed,
-      previewToken: prepared.previewToken,
-      operationId: "import-001",
-    })),
+    () =>
+      commit(
+        event(db, {
+          document: changed,
+          previewToken: prepared.previewToken,
+          operationId: "import-001",
+        }),
+      ),
     (error) => error.status === 409 && /different import payload/.test(error.message),
   );
+});
+
+test("operation replay does not revalidate references after the commit", () => {
+  const source = {
+    schema: "paideuo",
+    version: 1,
+    kind: "workout-component-results",
+    data: {
+      sourceSessionId: "deleted-session",
+      sourceWorkoutKey: "workout-1",
+      completedDate: "2026-11-18",
+      actualDurationMin: 45,
+      sessionRpe: 7,
+      notes: "",
+      components: [],
+    },
+  };
+  const normalized = schemaModule.normalize(source, { authorizeReference: () => true });
+  const operation = new FakeRecord(
+    { name: "paideuo_import_operations" },
+    {
+      owner: "owner-id",
+      operation_id: "workout-001",
+      payload_hash: crypto.createHash("sha256").update(JSON.stringify(normalized)).digest("hex"),
+      provenance_json: JSON.stringify({ actor: "owner-id" }),
+      summary_json: JSON.stringify({ committed: 1 }),
+      result_json: JSON.stringify({ committed: true, operationId: "workout-001" }),
+    },
+  );
+  const db = {
+    findRecordsByFilter(collection) {
+      if (collection !== "paideuo_import_operations") {
+        throw new Error("Replay unexpectedly revalidated a domain reference.");
+      }
+      return [operation];
+    },
+    findCollectionByNameOrId() {
+      throw new Error("Replay unexpectedly attempted a write.");
+    },
+  };
+
+  const response = commit(
+    event(db, {
+      document: source,
+      previewToken: "already-consumed",
+      operationId: "workout-001",
+    }),
+  );
+
+  assert.deepEqual(response.value, { committed: true, operationId: "workout-001" });
 });
 
 test("import requests are bounded by encoded byte size", () => {
@@ -295,7 +369,9 @@ test("reconcileTrainingComponents preserves unchanged ids and updates in place",
     },
     delete(record) {
       this.state.deletes += 1;
-      this.state.components = this.state.components.filter((candidate) => candidate.id !== record.id);
+      this.state.components = this.state.components.filter(
+        (candidate) => candidate.id !== record.id,
+      );
     },
   };
 
@@ -320,7 +396,7 @@ test("reconcileTrainingComponents preserves unchanged ids and updates in place",
   assert.equal(db.state.components[1].getString("instructions"), "Project tries");
 });
 
-test("workout result preview conflicts on replacing existing completion without authorization", () => {
+test("workout result preview conflicts even when replacement is requested", () => {
   const session = new FakeRecord(
     {},
     {
@@ -405,15 +481,15 @@ test("workout result preview conflicts on replacing existing completion without 
           notes: "Changed",
         },
       ],
-      replaceExistingCompletion: false,
+      replaceExistingCompletion: true,
     },
   });
 
   assert.equal(plan.items[0].status, "conflict");
-  assert.match(plan.items[0].error, /requires explicit historical replacement authorization/);
+  assert.match(plan.items[0].error, /not supported by the import endpoint/);
 });
 
-test("commitWorkout rejects historical overwrite without explicit authorization", () => {
+test("commitWorkout rejects caller-requested historical overwrite", () => {
   const completion = new FakeRecord(
     {},
     {
@@ -460,7 +536,7 @@ test("commitWorkout rejects historical overwrite without explicit authorization"
           sessionRpe: 7,
           notes: "Adjusted",
           components: [],
-          replaceExistingCompletion: false,
+          replaceExistingCompletion: true,
         },
         {
           items: [{ status: "update" }],
@@ -470,8 +546,27 @@ test("commitWorkout rejects historical overwrite without explicit authorization"
     (error) =>
       error instanceof ApiError &&
       error.status === 409 &&
-      /requires explicit historical replacement authorization/.test(error.message),
+      /not supported by the import endpoint/.test(error.message),
   );
   assert.equal(db.state.saves, 0);
   assert.equal(db.state.deletes, 0);
+});
+
+test("rate limiting expires owner windows and rejects request 61", () => {
+  const db = database();
+  const source = document();
+  const requestEvent = event(db, source);
+  requestEvent.auth.id = "rate-limited-owner";
+  __test.requestWindows.clear();
+
+  for (let index = 0; index < 60; index += 1) {
+    assert.equal(preview(requestEvent).status, 200);
+  }
+  assert.throws(
+    () => preview(requestEvent),
+    (error) => error.status === 429 && /rate limit/.test(error.message),
+  );
+
+  __test.requestWindows.get("rate-limited-owner").expiresAt = Date.now() - 1;
+  assert.equal(preview(requestEvent).status, 200);
 });
