@@ -486,7 +486,7 @@ test("workout result preview conflicts even when replacement is requested", () =
   });
 
   assert.equal(plan.items[0].status, "conflict");
-  assert.match(plan.items[0].error, /not supported by the import endpoint/);
+  assert.match(plan.items[0].error, /destructive-history authorization/);
 });
 
 test("commitWorkout rejects caller-requested historical overwrite", () => {
@@ -550,6 +550,64 @@ test("commitWorkout rejects caller-requested historical overwrite", () => {
   );
   assert.equal(db.state.saves, 0);
   assert.equal(db.state.deletes, 0);
+});
+
+test("commitWorkout allows authorized historical overwrite", () => {
+  const completion = new FakeRecord(
+    {},
+    {
+      id: "completion-1",
+      session: "session-1",
+      completed_date: "2026-11-18",
+      actual_duration_min: 45,
+      session_rpe: 7,
+      notes: "Saved manually",
+    },
+  );
+  const db = {
+    state: { saves: 0, deletes: 0 },
+    findRecordsByFilter(collection, _filter, _sort, _limit, _offset, params) {
+      if (collection === "paideuo_session_completions") {
+        return params.session === "session-1" ? [completion] : [];
+      }
+      if (collection === "paideuo_workout_component_results") return [];
+      return [];
+    },
+    findCollectionByNameOrId(name) {
+      return { name };
+    },
+    findRecordById() {
+      return new FakeRecord({}, { id: "session-1", status: "scheduled" });
+    },
+    save() {
+      this.state.saves += 1;
+    },
+    delete() {
+      this.state.deletes += 1;
+    },
+  };
+
+  const result = __test.commitWorkout(
+    db,
+    "owner-id",
+    {
+      sourceWorkoutKey: "workout-1",
+      completedDate: "2026-11-18",
+      actualDurationMin: 42,
+      sessionRpe: 8,
+      notes: "Imported overwrite",
+      components: [],
+      replaceExistingCompletion: true,
+    },
+    {
+      items: [{ status: "update" }],
+      state: [{ sessionId: "session-1" }],
+    },
+    { allowHistoryRewrite: true },
+  );
+
+  assert.deepEqual(result, [{ key: "workout-1", status: "committed" }]);
+  assert.equal(db.state.saves > 0, true);
 });
 
 test("rate limiting expires owner windows and rejects request 61", () => {

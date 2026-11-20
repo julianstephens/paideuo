@@ -166,6 +166,33 @@ const commitImport = (client, document, previewToken, metadata = {}) =>
     body: { document, previewToken, ...metadata },
   });
 
+const serviceImportRequest = async (baseUrl, path, token, body) => {
+  const response = await fetch(`${baseUrl}${path}`, {
+    method: "POST",
+    headers: { Authorization: "Bearer " + token, "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  });
+  const text = await response.text();
+  const payload = text ? JSON.parse(text) : {};
+  if (!response.ok) {
+    const error = new Error(payload?.message || `Request failed (${response.status})`);
+    error.status = response.status;
+    error.response = payload;
+    throw error;
+  }
+  return payload;
+};
+
+const servicePreviewImport = (baseUrl, token, document) =>
+  serviceImportRequest(baseUrl, "/api/paideuo/v1/imports/service/preview", token, document);
+
+const serviceCommitImport = (baseUrl, token, document, previewToken, metadata = {}) =>
+  serviceImportRequest(baseUrl, "/api/paideuo/v1/imports/service/commit", token, {
+    document,
+    previewToken,
+    ...metadata,
+  });
+
 const createAuthedUser = async (admin, baseUrl, suffix) => {
   const email = `imports-integration-${suffix}@example.com`;
   const password = "Password123!";
@@ -445,6 +472,119 @@ test("PocketBase-backed hierarchy imports are transactional and schedule-safe", 
         ],
       },
     };
+    const credentialListPath = "/api/paideuo/v1/service-credentials";
+    const emptyCredentialList = await owner.client.send(credentialListPath);
+    assert.deepEqual(emptyCredentialList.credentials, []);
+    assert.ok(emptyCredentialList.availableScopes.includes("imports:commit"));
+
+    const scopeDenied = await owner.client.send("/api/paideuo/v1/service-credentials/issue", {
+      method: "POST",
+      body: { label: "scope-denied", scopes: ["imports:commit"], expiresAt: "" },
+    });
+    await assert.rejects(
+      () => servicePreviewImport(baseUrl, scopeDenied.plaintextToken, concurrentDocument),
+      (error) => error?.status === 403 && /metrics:write/.test(error?.response?.message ?? ""),
+    );
+
+    const tokenCredential = await owner.client.send("/api/paideuo/v1/service-credentials/issue", {
+      method: "POST",
+      body: {
+        label: "ingestion-agent",
+        scopes: ["imports:commit", "metrics:write", "workouts:write", "programs:write"],
+        allowHistoryRewrite: true,
+      },
+    });
+    const credentialList = await owner.client.send(credentialListPath);
+    assert.equal(credentialList.credentials.length, 2);
+    const listedCredential = credentialList.credentials.find(
+      (credential) => credential.id === tokenCredential.credential.id,
+    );
+    assert.deepEqual(listedCredential, tokenCredential.credential);
+    assert.ok(listedCredential.created);
+    assert.deepEqual((await intruder.client.send(credentialListPath)).credentials, []);
+
+    const tokenPreview = await servicePreviewImport(
+      baseUrl,
+      tokenCredential.plaintextToken,
+      concurrentDocument,
+    );
+    const tokenCommit = await serviceCommitImport(
+      baseUrl,
+      tokenCredential.plaintextToken,
+      concurrentDocument,
+      tokenPreview.previewToken,
+      { operationId: "integration-service-token-001" },
+    );
+    assert.equal(
+      tokenCommit.audit.provenance.credentialRef,
+      `service:${tokenCredential.credential.id}`,
+    );
+
+    const replacementWithTokenPreview = await servicePreviewImport(
+      baseUrl,
+      tokenCredential.plaintextToken,
+      replacementDocument,
+    );
+    assert.equal(replacementWithTokenPreview.conflicting, 0);
+    await serviceCommitImport(
+      baseUrl,
+      tokenCredential.plaintextToken,
+      replacementDocument,
+      replacementWithTokenPreview.previewToken,
+    );
+
+    const rewrittenCompletion = await admin
+      .collection("paideuo_session_completions")
+      .getFirstListItem(`session = "${scheduledSession.id}"`);
+    assert.equal(rewrittenCompletion.notes, "Replacement");
+
+    const intruderProgram = await admin.collection("paideuo_programs").create({
+      owner: intruder.userId,
+      name: "Intruder program",
+      objective: "",
+      description: "",
+      status: "draft",
+    });
+    const ownerBoundProgramDocument = structuredClone(initialDocument);
+    ownerBoundProgramDocument.data.program.id = intruderProgram.id;
+    await assert.rejects(
+      () =>
+        servicePreviewImport(
+          baseUrl,
+          tokenCredential.plaintextToken,
+          ownerBoundProgramDocument,
+        ),
+      (error) =>
+        error?.status === 400 && /Unauthorized program id/.test(error?.response?.message ?? ""),
+    );
+
+    await owner.client.send(
+      `/api/paideuo/v1/service-credentials/${tokenCredential.credential.id}/revoke`,
+      {
+        method: "POST",
+      },
+    );
+    await assert.rejects(
+      () => servicePreviewImport(baseUrl, tokenCredential.plaintextToken, concurrentDocument),
+      (error) => error?.status === 401 && /revoked/.test(error?.response?.message ?? ""),
+    );
+
+    const expiredCredential = await owner.client.send("/api/paideuo/v1/service-credentials/issue", {
+      method: "POST",
+      body: {
+        label: "expired-token",
+        scopes: ["imports:commit", "metrics:write"],
+      },
+    });
+    const expiredRecord = await admin.collection("paideuo_service_credentials").update(
+      expiredCredential.credential.id,
+      { expires_at: "2000-01-01T00:00:00.000Z" },
+    );
+    assert.equal(expiredRecord.expires_at, "2000-01-01T00:00:00.000Z");
+    await assert.rejects(
+      () => servicePreviewImport(baseUrl, expiredCredential.plaintextToken, concurrentDocument),
+      (error) => error?.status === 401 && /expired/.test(error?.response?.message ?? ""),
+    );
     const [concurrentPreviewA, concurrentPreviewB] = await Promise.all([
       previewImport(owner.client, concurrentDocument),
       previewImport(owner.client, concurrentDocument),

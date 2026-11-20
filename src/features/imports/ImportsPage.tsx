@@ -867,7 +867,6 @@ export const ImportsPage = () => {
   );
 
   const columnLayout = { base: "minmax(0, 1fr)", md: "repeat(2, minmax(0, 1fr))" };
-
   return (
     <Stack gap="6">
       <PageHeader title="Bulk imports" />

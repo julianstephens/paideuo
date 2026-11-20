@@ -1,4 +1,5 @@
 const schema = require(__hooks + "/import-schemas.js");
+const credentials = require(__hooks + "/service-credentials.cjs");
 
 const previewLifetimeMs = 15 * 60 * 1000;
 const maxRequestBytes = 2 * 1024 * 1024;
@@ -21,11 +22,10 @@ const requestBytes = (value) => {
   return bytes;
 };
 
-const boundedRequest = (event) => {
+const boundedRequest = (owner, event) => {
   const body = event.requestInfo().body;
   const bytes = requestBytes(JSON.stringify(body ?? null));
   if (bytes > maxRequestBytes) throw new ApiError(413, "Import request exceeds the 2 MB limit.");
-  const owner = event.auth.id;
   const now = Date.now();
   for (const [key, current] of requestWindows) {
     if (current.expiresAt <= now) requestWindows.delete(key);
@@ -407,7 +407,8 @@ const dailyDesired = (entry) => ({
   nutrition_json: { ...entry.nutrition },
 });
 
-const observationPlan = (db, owner, document) => {
+const observationPlan = (db, owner, document, options = {}) => {
+  const allowHistoryRewrite = options.allowHistoryRewrite === true;
   const items = [];
   const state = [];
   if (document.kind === "daily-check-ins") {
@@ -537,9 +538,15 @@ const observationPlan = (db, owner, document) => {
       completionPlan.item.status = "update";
     }
     if (completion && completionPlan.item.status === "update") {
-      completionPlan.item.status = "conflict";
-      completionPlan.item.error =
-        "Historical completed workout replacement is not supported by the import endpoint.";
+      if (!data.replaceExistingCompletion) {
+        completionPlan.item.status = "conflict";
+        completionPlan.item.error =
+          "Historical completed workout replacement is not supported by the import endpoint.";
+      } else if (!allowHistoryRewrite) {
+        completionPlan.item.status = "conflict";
+        completionPlan.item.error =
+          "Historical completed workout replacement requires destructive-history authorization.";
+      }
     }
     items.push(completionPlan.item);
     return { items, state };
@@ -613,20 +620,20 @@ const observationPlan = (db, owner, document) => {
   return { items: [result.item], state };
 };
 
-const plan = (db, owner, document) =>
+const plan = (db, owner, document, options = {}) =>
   document.kind === "program"
     ? programPlan(db, owner, document.data)
-    : observationPlan(db, owner, document);
+    : observationPlan(db, owner, document, options);
 
-const preparePreview = (db, owner, document) => {
+const preparePreview = (db, owner, document, options = {}) => {
   const normalized = normalize(db, owner, document);
-  const result = plan(db, owner, normalized);
+  const result = plan(db, owner, normalized, options);
   const fingerprint = JSON.stringify({ schema: normalized, state: result.state });
   return { document: normalized, fingerprint, plan: result };
 };
 
-const preview = (db, owner, document) => {
-  const prepared = preparePreview(db, owner, document);
+const preview = (db, owner, document, options = {}) => {
+  const prepared = preparePreview(db, owner, document, options);
   const now = Date.now();
   for (const [token, issued] of issuedPreviews) {
     if (issued.expiresAt <= now) issuedPreviews.delete(token);
@@ -652,7 +659,7 @@ const preview = (db, owner, document) => {
   };
 };
 
-const verifyPreview = (db, owner, document, token) => {
+const verifyPreview = (db, owner, document, token, options = {}) => {
   const issued = issuedPreviews.get(token);
   if (!issued || issued.owner !== owner || issued.expiresAt <= Date.now()) {
     throw new ApiError(409, "This import preview is stale or has been tampered with.");
@@ -660,7 +667,7 @@ const verifyPreview = (db, owner, document, token) => {
   if (issued.consumed) {
     throw new ApiError(409, "This import preview has already been committed.");
   }
-  const prepared = preparePreview(db, owner, document);
+  const prepared = preparePreview(db, owner, document, options);
   if (issued.fingerprint !== prepared.fingerprint) {
     throw new ApiError(409, "This import preview is stale or has been tampered with.");
   }
@@ -933,7 +940,8 @@ const commitDaily = (db, owner, data, plan) => {
   return statuses;
 };
 
-const commitWorkout = (db, owner, data, plan) => {
+const commitWorkout = (db, owner, data, plan, options = {}) => {
+  const allowHistoryRewrite = options.allowHistoryRewrite === true;
   if (plan.items[0].status === "skip") {
     return [{ key: data.sourceWorkoutKey, status: "skipped" }];
   }
@@ -943,7 +951,7 @@ const commitWorkout = (db, owner, data, plan) => {
   let completion = first(db, "paideuo_session_completions", "session = {:session}", {
     session: state.sessionId,
   });
-  if (completion && plan.items[0].status === "update") {
+  if (completion && plan.items[0].status === "update" && !allowHistoryRewrite) {
     throw new ApiError(
       409,
       "Historical completed workout replacement is not supported by the import endpoint.",
@@ -1057,7 +1065,7 @@ const declaredTextValue = (value, fallback, maximum, label) => {
   return value;
 };
 
-const provenanceValue = (body, owner) => {
+const provenanceValue = (body, owner, principal) => {
   const source = body.provenance && typeof body.provenance === "object" ? body.provenance : {};
   const textValue = (value, fallback, maximum) =>
     declaredTextValue(value, fallback, maximum, "import source label");
@@ -1071,7 +1079,7 @@ const provenanceValue = (body, owner) => {
   return {
     sourceLabel,
     actor: owner,
-    credentialRef: `user:${owner}`,
+    credentialRef: principal?.credentialRef ?? `user:${owner}`,
     sourceCredentialRef,
     sourceTimestamp: sourceTimestampValue(body),
     importedAt: new Date().toISOString(),
@@ -1141,8 +1149,9 @@ const verifyOperationPayload = (existing, hash) => {
   throw new ApiError(409, "This operationId is already used with different import payload.");
 };
 
-const commit = (event) => {
-  boundedRequest(event);
+const commit = (event, principal = credentials.importPrincipalFromEvent(event)) => {
+  const owner = principal.ownerId;
+  boundedRequest(owner, event);
   const body = event.requestInfo().body;
   if (
     !body ||
@@ -1168,9 +1177,12 @@ const commit = (event) => {
   ) {
     throw new BadRequestError("Enter a valid import commit.");
   }
-  const owner = event.auth.id;
+  if (!body.document || typeof body.document !== "object" || Array.isArray(body.document)) {
+    throw new BadRequestError("Enter a valid import commit.");
+  }
+  credentials.ensureScopes(principal, credentials.requiredScopesForImportKind(body.document.kind));
   const operationId = operationIdValue(body);
-  const provenance = provenanceValue(body, owner);
+  const provenance = provenanceValue(body, owner, principal);
   const preparedHash = payloadHash(body.document);
   let result;
   let issued;
@@ -1198,7 +1210,7 @@ const commit = (event) => {
           return;
         }
       }
-      const verified = verifyPreview(tx, owner, body.document, body.previewToken);
+      const verified = verifyPreview(tx, owner, body.document, body.previewToken, principal);
       issued = verified.issued;
       issued.consumed = true;
       const document = verified.document;
@@ -1206,7 +1218,7 @@ const commit = (event) => {
       else if (document.kind === "daily-check-ins")
         result = commitDaily(tx, owner, document.data, verified.plan);
       else if (document.kind === "workout-component-results")
-        result = commitWorkout(tx, owner, document.data, verified.plan);
+        result = commitWorkout(tx, owner, document.data, verified.plan, principal);
       else result = commitHeartRate(tx, owner, document.data, verified.plan);
       if (operationId) {
         const summary = auditSummary(document.kind, result, verified.plan);
@@ -1239,9 +1251,17 @@ const commit = (event) => {
   return event.json(200, response ?? { committed: true, rows: result });
 };
 
-const previewRequest = (event) => {
-  boundedRequest(event);
-  return event.json(200, preview(event.app, event.auth.id, event.requestInfo().body).result);
+const previewRequest = (event, principal = credentials.importPrincipalFromEvent(event)) => {
+  const owner = principal.ownerId;
+  boundedRequest(owner, event);
+  credentials.ensureScopes(
+    principal,
+    credentials.requiredScopesForImportKind(event.requestInfo().body?.kind),
+  );
+  return event.json(
+    200,
+    preview(event.app, owner, event.requestInfo().body, principal).result,
+  );
 };
 
 // oxlint-disable-next-line import/no-commonjs
