@@ -119,6 +119,32 @@ Authenticated clients send any document above directly to:
 POST /api/paideuo/v1/imports/preview
 ```
 
+Non-human writers can use owner-scoped service credentials instead of a user password. Send an
+`Authorization` header with the issued service token:
+
+```text
+POST /api/paideuo/v1/imports/service/preview
+```
+
+and:
+
+```text
+POST /api/paideuo/v1/imports/service/commit
+```
+
+Service credentials are issued and revoked by authenticated owners at:
+
+```text
+GET  /api/paideuo/v1/service-credentials
+POST /api/paideuo/v1/service-credentials/issue
+POST /api/paideuo/v1/service-credentials/{id}/revoke
+```
+
+Plaintext tokens are returned only once at issuance time. Stored credentials are hash-only, owner
+bound, revocable, and may include an expiry timestamp plus explicit scopes:
+`imports:commit`, `programs:read`, `programs:write`, `workouts:write`, `metrics:write`,
+`recordings:write`.
+
 The server validates and normalizes the complete document, checks every supplied PocketBase ID
 against the authenticated owner, and compares it with current state. Preview responses contain an
 opaque `previewToken` and one `items` entry per logical row:
@@ -174,6 +200,9 @@ heart-rate recordings return a status for their single source workout. Observati
 atomic at present; Paideuo does not expose partial-best-effort observation mode. A future partial
 mode must be explicitly requested and must return a per-row `committed`, `skipped`, or `failed`
 status without allowing failures to make committed rows ambiguous.
+
+Historical completed-workout replacement remains blocked unless the import request explicitly asks
+for replacement and the service credential was issued with destructive-history authorization.
 
 ## Versioning policy
 
