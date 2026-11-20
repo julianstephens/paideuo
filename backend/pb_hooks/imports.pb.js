@@ -12,6 +12,13 @@ routerAdd(
   $apis.requireAuth("paideuo_users"),
 );
 
+routerAdd(
+  "POST",
+  "/api/paideuo/v1/imports/approve",
+  (event) => require(__hooks + "/imports.js").approvePreview(event),
+  $apis.requireAuth("paideuo_users"),
+);
+
 routerAdd("POST", "/api/paideuo/v1/imports/service/preview", (event) => {
   const principal = require(__hooks + "/service-credentials.cjs").servicePrincipalFromEvent(event);
   return require(__hooks + "/imports.js").preview(event, principal);

@@ -627,11 +627,43 @@ const plan = (db, owner, document, options = {}) =>
     ? programPlan(db, owner, document.data)
     : observationPlan(db, owner, document, options);
 
+const protectedProgram = (db, document, plan) => {
+  const program = plan.items[0];
+  if (
+    document.kind !== "program" ||
+    !program?.id ||
+    !plan.items.some(({ status }) => status === "create" || status === "update")
+  )
+    return null;
+  const completed = plan.state[0].current.status === "completed";
+  const schedule = first(db, "paideuo_program_schedules", "program = {:program}", {
+    program: program.id,
+  });
+  return completed || schedule
+    ? {
+        completed,
+        schedule: schedule
+          ? {
+              id: schedule.id,
+              ...recordSnapshot(schedule, [
+                "source_revision",
+                "start_date",
+                "timezone",
+                "status",
+                "updated",
+              ]),
+            }
+          : null,
+      }
+    : null;
+};
+
 const preparePreview = (db, owner, document, options = {}) => {
   const normalized = normalize(db, owner, document);
   const result = plan(db, owner, normalized, options);
-  const fingerprint = JSON.stringify({ schema: normalized, state: result.state });
-  return { document: normalized, fingerprint, plan: result };
+  const protection = protectedProgram(db, normalized, result);
+  const fingerprint = JSON.stringify({ schema: normalized, state: result.state, protection });
+  return { document: normalized, fingerprint, plan: result, protection };
 };
 
 const preview = (db, owner, document, options = {}) => {
@@ -669,6 +701,7 @@ const preview = (db, owner, document, options = {}) => {
       version: prepared.document.version,
       kind: prepared.document.kind,
       items: prepared.plan.items,
+      approvalRequired: Boolean(prepared.protection),
       conflicting: prepared.plan.items.filter((item) => item.status === "conflict").length,
     },
   };
@@ -690,6 +723,35 @@ const verifyPreview = (db, owner, document, token, options = {}) => {
     throw new ApiError(409, "Resolve every conflicting import item before committing.");
   }
   return { ...prepared, issued };
+};
+
+// Approval is issued only through the authenticated owner route.
+const approvePreview = (event) => {
+  const principal = credentials.importPrincipalFromEvent(event);
+  boundedRequest(principal.ownerId, event);
+  const { document, previewToken } = event.requestInfo().body ?? {};
+  if (!document || typeof previewToken !== "string") {
+    throw new BadRequestError("Provide the reviewed program document and preview token.");
+  }
+  let approval;
+  event.app.runInTransaction((tx) => {
+    const { issued, protection } = verifyPreview(
+      tx,
+      principal.ownerId,
+      document,
+      previewToken,
+      principal,
+    );
+    if (!protection)
+      throw new BadRequestError("This preview does not require protected-plan approval.");
+    approval = issued.approval ?? {
+      receipt: $security.randomString(48),
+      approvedBy: principal.ownerId,
+      approvedAt: new Date().toISOString(),
+    };
+    tx.store().set(previewKey(previewToken), JSON.stringify({ ...issued, approval }));
+  });
+  return event.json(200, { approvalReceipt: approval.receipt });
 };
 
 const save = (db, collection, fields) => {
@@ -1212,7 +1274,11 @@ const ingest = (app, principal, kind, body, hashPayload, execute, generatedId = 
   return response;
 };
 
-const commit = (event, principal = credentials.importPrincipalFromEvent(event)) => {
+const commit = (
+  event,
+  principal = credentials.importPrincipalFromEvent(event),
+  { requireApproval = principal.type === "service", generatedOperationId = null } = {},
+) => {
   boundedRequest(principal.ownerId, event);
   const body = event.requestInfo().body;
   if (
@@ -1223,6 +1289,7 @@ const commit = (event, principal = credentials.importPrincipalFromEvent(event)) 
       (key) =>
         ![
           "previewToken",
+          "approvalReceipt",
           "document",
           "operationId",
           "provenance",
@@ -1252,17 +1319,27 @@ const commit = (event, principal = credentials.importPrincipalFromEvent(event)) 
       () => payloadHash(body.document),
       (tx, owner) => {
         const prepared = verifyPreview(tx, owner, body.document, body.previewToken, principal);
+        const approval = requireApproval && prepared.protection ? prepared.issued.approval : null;
+        if (
+          requireApproval &&
+          prepared.protection &&
+          (!approval || body.approvalReceipt !== approval.receipt)
+        ) {
+          throw new ApiError(409, "Owner approval is required for this protected program preview.");
+        }
         issued = prepared.issued;
         tx.store().set(
           previewKey(body.previewToken),
           JSON.stringify({ ...issued, consumed: true }),
         );
         const rows = writePrepared(tx, owner, prepared, principal);
-        return {
-          response: { committed: true, rows },
-          summary: auditSummary(prepared.document.kind, rows, prepared.plan),
-        };
+        const summary = auditSummary(prepared.document.kind, rows, prepared.plan);
+        if (approval) {
+          summary.approval = { approvedBy: approval.approvedBy, approvedAt: approval.approvedAt };
+        }
+        return { response: { committed: true, rows }, summary };
       },
+      generatedOperationId,
     );
     return event.json(200, response);
   } catch (error) {
@@ -1350,7 +1427,12 @@ const prepareDomain = (db, owner, document, principal) => {
   if (document.kind === "daily-check-ins") {
     mergeCheckIn(db, owner, normalized.data.entries[0], document.data.entries[0]);
   }
-  return { document: normalized, plan: plan(db, owner, normalized, principal) };
+  const proposed = plan(db, owner, normalized, principal);
+  return {
+    document: normalized,
+    plan: proposed,
+    protection: protectedProgram(db, normalized, proposed),
+  };
 };
 
 const countDomainRows = (rows) => {
@@ -1465,7 +1547,12 @@ const prepareDomainRows = (tx, owner, documents, kind, principal) => {
   };
 };
 
-const domainBatch = (event, kind, principal = credentials.importPrincipalFromEvent(event)) => {
+const domainBatch = (
+  event,
+  kind,
+  principal = credentials.importPrincipalFromEvent(event),
+  { createOnly = false } = {},
+) => {
   boundedRequest(principal.ownerId, event);
   const body = event.requestInfo().body;
   if (!body || typeof body !== "object") throw new BadRequestError("Enter a valid domain batch.");
@@ -1481,11 +1568,29 @@ const domainBatch = (event, kind, principal = credentials.importPrincipalFromEve
       body,
       () => {
         documents = domainDocuments(kind, body);
-        return $security.sha256(JSON.stringify([kind, orderedPayload(documents)]));
+        return $security.sha256(
+          JSON.stringify([createOnly ? "create-only" : kind, orderedPayload(documents)]),
+        );
       },
       (tx, owner) => {
         const { staged, rows } = prepareDomainRows(tx, owner, documents, kind, principal);
         plannedRows = rows;
+        for (const { prepared, rows: itemRows } of staged) {
+          if (itemRows[0]?.status !== "not_committed") continue;
+          if (createOnly && prepared.plan.items[0]?.id) {
+            Object.assign(itemRows[0], {
+              status: "conflict",
+              code: "program_exists",
+              error: "A program with this external ID already exists.",
+            });
+          } else if (principal.type === "service" && prepared.protection) {
+            Object.assign(itemRows[0], {
+              status: "conflict",
+              code: "approval_required",
+              error: "Use a preview and owner approval to change this protected program.",
+            });
+          }
+        }
         if (rows.some((row) => row.status !== "not_committed")) {
           failureStatus = rows.some((row) => row.code === "planning_failed")
             ? 500
@@ -1527,4 +1632,4 @@ const domainBatch = (event, kind, principal = credentials.importPrincipalFromEve
 };
 
 // oxlint-disable-next-line import/no-commonjs
-module.exports = { commit, preview: previewRequest, domainBatch };
+module.exports = { approvePreview, commit, preview: previewRequest, domainBatch };
