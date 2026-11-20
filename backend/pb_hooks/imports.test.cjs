@@ -164,6 +164,63 @@ test("commit applies once and rejects a stale replay", () => {
   assert.equal(db.state.saves, 1);
 });
 
+test("operation replay returns the same result and conflicting reuse is rejected", () => {
+  const db = database();
+  const source = document();
+  const prepared = preview(event(db, source)).value;
+  const first = commit(event(db, {
+    document: source,
+    previewToken: prepared.previewToken,
+    operationId: "import-001",
+    sourceLabel: "sensor",
+    credentialRef: "credential-001",
+  }));
+
+  assert.equal(first.status, 200);
+  assert.equal(first.value.operationId, "import-001");
+  assert.equal(first.value.audit.provenance.sourceLabel, "sensor");
+  assert.equal(first.value.audit.provenance.actor, "owner-id");
+
+  const replay = commit(event(db, {
+    document: source,
+    previewToken: prepared.previewToken,
+    operationId: "import-001",
+  }));
+  assert.deepEqual(replay.value, first.value);
+
+  const changed = structuredClone(source);
+  changed.data.entries[0].recovery.sleepHours = 9;
+  assert.throws(
+    () => commit(event(db, {
+      document: changed,
+      previewToken: prepared.previewToken,
+      operationId: "import-001",
+    })),
+    (error) => error.status === 409 && /different import payload/.test(error.message),
+  );
+});
+
+test("import requests are bounded by encoded byte size", () => {
+  const db = database();
+  const source = document();
+  source.data.entries = Array.from({ length: 367 }, (_, index) => ({
+    date: `2026-11-${String(index + 1).padStart(2, "0")}`,
+  }));
+
+  assert.throws(
+    () => preview(event(db, source)),
+    (error) => /at most 366/.test(error.message),
+  );
+
+  const oversized = source;
+  oversized.data.entries = [];
+  oversized.padding = "x".repeat(2 * 1024 * 1024 + 1);
+  assert.throws(
+    () => preview(event(db, oversized)),
+    (error) => error.status === 413,
+  );
+});
+
 test("preview and commit preserve per-row skip status", () => {
   const db = database();
   const source = document();

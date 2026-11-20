@@ -1,7 +1,41 @@
 const schema = require(__hooks + "/import-schemas.js");
 
 const previewLifetimeMs = 15 * 60 * 1000;
+const maxRequestBytes = 2 * 1024 * 1024;
+const rateLimitWindowMs = 60 * 1000;
+const rateLimit = 60;
 const issuedPreviews = new Map();
+const issuedOperations = new Map();
+const requestWindows = new Map();
+
+const requestBytes = (value) => {
+  let bytes = 0;
+  for (let index = 0; index < value.length; index += 1) {
+    const code = value.charCodeAt(index);
+    if (code <= 0x7f) bytes += 1;
+    else if (code <= 0x7ff) bytes += 2;
+    else if (0xd800 <= code && code <= 0xdbff) {
+      bytes += 4;
+      index += 1;
+    } else bytes += 3;
+  }
+  return bytes;
+};
+
+const boundedRequest = (event) => {
+  const body = event.requestInfo().body;
+  const bytes = requestBytes(JSON.stringify(body ?? null));
+  if (bytes > maxRequestBytes) throw new ApiError(413, "Import request exceeds the 2 MB limit.");
+  const owner = event.auth.id;
+  const now = Date.now();
+  const window = requestWindows.get(owner);
+  if (!window || window.expiresAt <= now) {
+    requestWindows.set(owner, { expiresAt: now + rateLimitWindowMs, count: 1 });
+  } else {
+    window.count += 1;
+    if (window.count > rateLimit) throw new ApiError(429, "Import request rate limit exceeded.");
+  }
+};
 
 const find = (db, collection, filter, params, sort = "") =>
   db.findRecordsByFilter(collection, filter, sort, 0, 0, params);
@@ -988,43 +1022,193 @@ const commitHeartRate = (db, owner, data, plan) => {
   return [{ key: data.sourceWorkoutKey, status: state.id ? "updated" : "created" }];
 };
 
+const operationIdValue = (body) => {
+  if (body.operationId == null) return null;
+  if (
+    typeof body.operationId !== "string" ||
+    body.operationId.length < 1 ||
+    body.operationId.length > 200 ||
+    !/^[A-Za-z0-9._:-]+$/.test(body.operationId)
+  ) {
+    throw new BadRequestError("Enter a valid import operationId.");
+  }
+  return body.operationId;
+};
+
+const payloadHash = (document) =>
+  $security.sha256(JSON.stringify(document));
+
+const provenanceValue = (body, owner) => {
+  const source = body.provenance && typeof body.provenance === "object" ? body.provenance : {};
+  const textValue = (value, fallback, maximum) =>
+    typeof value === "string" && value.length <= maximum ? value : fallback;
+  const sourceLabel = textValue(
+    body.sourceLabel ?? source.sourceLabel,
+    "api",
+    200,
+  );
+  const credentialRef = textValue(
+    body.credentialRef ?? body.credential ?? source.credentialRef ?? source.credential,
+    "",
+    200,
+  );
+  const importTimestamp =
+    typeof (body.importTimestamp ?? body.importedAt ?? source.importedAt) === "string"
+      ? body.importTimestamp ?? body.importedAt ?? source.importedAt
+      : new Date().toISOString();
+  if (importTimestamp.length > 100) throw new BadRequestError("Enter a valid import timestamp.");
+  return {
+    sourceLabel,
+    actor: owner,
+    credentialRef,
+    importedAt: importTimestamp,
+  };
+};
+
+const auditSummary = (rows) => {
+  const summary = { created: 0, updated: 0, skipped: 0, conflict: 0 };
+  for (const row of Array.isArray(rows) ? rows : []) {
+    const status = typeof row === "object" ? row.status : null;
+    if (status === "created") summary.created += 1;
+    else if (status === "updated") summary.updated += 1;
+    else if (status === "skipped") summary.skipped += 1;
+    else if (status === "conflict") summary.conflict += 1;
+  }
+  return summary;
+};
+
+const findOperation = (db, owner, operationId) => {
+  const memory = issuedOperations.get(`${owner}:${operationId}`);
+  if (memory) return memory;
+  try {
+    const record = first(
+      db,
+      "paideuo_import_operations",
+      "owner = {:owner} && operation_id = {:operationId}",
+      { owner, operationId },
+    );
+    if (!record) return null;
+    return {
+      payloadHash: record.getString("payload_hash"),
+      result: JSON.parse(record.getString("result_json")),
+      provenance: JSON.parse(record.getString("provenance_json")),
+      summary: JSON.parse(record.getString("summary_json")),
+    };
+  } catch (_error) {
+    return null;
+  }
+};
+
+const saveOperation = (db, owner, operationId, hash, provenance, response) => {
+  const record = new Record(db.findCollectionByNameOrId("paideuo_import_operations"));
+  record.set("owner", owner);
+  record.set("operation_id", operationId);
+  record.set("payload_hash", hash);
+  record.set("status", "committed");
+  record.set("provenance_json", provenance);
+  record.set("summary_json", auditSummary(response.rows));
+  record.set("result_json", response);
+  db.save(record);
+};
+
 const commit = (event) => {
+  boundedRequest(event);
   const body = event.requestInfo().body;
   if (
     !body ||
     typeof body !== "object" ||
     Array.isArray(body) ||
-    Object.keys(body).some((key) => !["previewToken", "document"].includes(key)) ||
+    Object.keys(body).some((key) =>
+      ![
+        "previewToken",
+        "document",
+        "operationId",
+        "provenance",
+        "sourceLabel",
+        "actor",
+        "credential",
+        "credentialRef",
+        "importedAt",
+        "importTimestamp",
+      ].includes(key),
+    ) ||
     typeof body.previewToken !== "string" ||
     !body.document
   ) {
     throw new BadRequestError("Enter a valid import commit.");
   }
   const owner = event.auth.id;
+  const operationId = operationIdValue(body);
+  const provenance = provenanceValue(body, owner);
   let result;
   let issued;
+  let preparedHash = null;
+  let response = null;
+
+  if (operationId) {
+    const existing = findOperation(event.app, owner, operationId);
+    if (existing) {
+      const normalized = normalize(event.app, owner, body.document);
+      const replayHash = payloadHash(normalized);
+      if (existing.payloadHash !== replayHash) {
+        throw new ApiError(409, "This operationId is already used with different import payload.");
+      }
+      return event.json(200, existing.result);
+    }
+  }
+
   try {
     event.app.runInTransaction((tx) => {
       const verified = verifyPreview(tx, owner, body.document, body.previewToken);
       issued = verified.issued;
       issued.consumed = true;
       const document = verified.document;
+      preparedHash = payloadHash(document);
       if (document.kind === "program") result = commitProgram(tx, owner, document, verified.plan);
       else if (document.kind === "daily-check-ins")
         result = commitDaily(tx, owner, document.data, verified.plan);
       else if (document.kind === "workout-component-results")
         result = commitWorkout(tx, owner, document.data, verified.plan);
       else result = commitHeartRate(tx, owner, document.data, verified.plan);
+      if (operationId) {
+        const existing = findOperation(tx, owner, operationId);
+        if (existing) {
+          if (existing.payloadHash !== preparedHash) {
+            throw new ApiError(409, "This operationId is already used with different import payload.");
+          }
+          return;
+        }
+        const summary = auditSummary(result);
+        const auditResponse = {
+          committed: true,
+          rows: result,
+          operationId,
+          payloadHash: preparedHash,
+          audit: { operationId, payloadHash: preparedHash, provenance, summary },
+        };
+        response = auditResponse;
+        saveOperation(tx, owner, operationId, preparedHash, provenance, auditResponse);
+      }
     });
   } catch (error) {
     if (issued) issued.consumed = false;
     throw error;
   }
-  return event.json(200, { committed: true, rows: result });
+  if (operationId && response) {
+    issuedOperations.set(`${owner}:${operationId}`, {
+      payloadHash: preparedHash,
+      result: response,
+      provenance,
+      summary: auditSummary(result),
+    });
+  }
+  return event.json(200, response ?? { committed: true, rows: result });
 };
 
-const previewRequest = (event) =>
-  event.json(200, preview(event.app, event.auth.id, event.requestInfo().body).result);
+const previewRequest = (event) => {
+  boundedRequest(event);
+  return event.json(200, preview(event.app, event.auth.id, event.requestInfo().body).result);
+};
 
 // oxlint-disable-next-line import/no-commonjs
 module.exports = { commit, preview: previewRequest };
