@@ -50,7 +50,7 @@ module.exports.__test = {
 };`,
   serviceFilename,
 );
-const { commit, preview, __test } = serviceModule.exports;
+const { commit, preview, domainBatch, __test } = serviceModule.exports;
 
 class FakeRecord {
   constructor(collection, fields = {}) {
@@ -146,6 +146,32 @@ test("preview does not mutate data and reports create", () => {
   assert.equal(response.value.items[0].status, "create");
   assert.match(response.value.previewToken, /^[a-f0-9]{64}$/);
   assert.equal(db.state.saves, 0);
+});
+
+test("domain check-in upsert reports stable batch counts", () => {
+  const db = database();
+  const request = event(db, {
+    entries: [
+      {
+        date: "2026-11-20",
+        recovery: { sleepHours: 8 },
+        nutrition: { proteinGrams: 100 },
+      },
+    ],
+  });
+  const response = domainBatch(request, "daily-check-ins");
+
+  assert.equal(response.status, 200);
+  assert.deepEqual(
+    {
+      created: response.value.created,
+      updated: response.value.updated,
+      skipped: response.value.skipped,
+      error: response.value.error,
+    },
+    { created: 1, updated: 0, skipped: 0, error: 0 },
+  );
+  assert.equal(response.value.rows[0].status, "created");
 });
 
 test("commit rejects a tampered document", () => {

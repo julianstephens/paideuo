@@ -204,6 +204,32 @@ status without allowing failures to make committed rows ambiguous.
 Historical completed-workout replacement remains blocked unless the import request explicitly asks
 for replacement and the service credential was issued with destructive-history authorization.
 
+## Stable domain HTTP endpoints
+
+The domain endpoints are versioned convenience entry points over the same schema normalizers,
+preview planning, and commit services. They accept domain payloads directly rather than generic
+import envelopes and return batch counts:
+
+```json
+{ "created": 1, "updated": 0, "skipped": 0, "error": 0, "rows": [] }
+```
+
+- `POST /api/paideuo/v1/programs` creates or reconciles a program (`data.program` and `data.blocks`,
+  or the payload's `program` and `blocks` directly).
+- `POST /api/paideuo/v1/workouts/results/batch` accepts `{ "results": [...] }` (or a result array).
+- `POST /api/paideuo/v1/check-ins/upsert` accepts `{ "entries": [...] }`; dates are keys.
+- `POST /api/paideuo/v1/heart-rate/recordings/attach` attaches one recording by domain data.
+
+For service credentials, use the corresponding `/api/paideuo/v1/service/...` routes. Human routes
+use normal authenticated-user permissions. Service routes require `imports:commit` plus the domain
+scope: `programs:write`, `workouts:write`, `metrics:write`, or `recordings:write`.
+
+Merge semantics for domain upserts: an omitted field is unchanged; an explicit JSON `null` clears
+that field where the collection and credential authorize it. Arrays and required identity fields
+still follow the v1 schema. Validation and conflict errors are returned as `400` or `409`,
+respectively, and conflicting batches make no writes. Retry with the same payload is safe; unchanged
+rows are reported as `skipped`.
+
 ## Versioning policy
 
 - `schema` and `version` are mandatory, and unknown major versions are rejected.

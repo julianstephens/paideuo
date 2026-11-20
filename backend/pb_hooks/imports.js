@@ -1261,5 +1261,136 @@ const previewRequest = (event, principal = credentials.importPrincipalFromEvent(
   return event.json(200, preview(event.app, owner, event.requestInfo().body, principal).result);
 };
 
+const domainDocument = (kind, body) => {
+  if (body?.document && typeof body.document === "object") body = body.document;
+  if (kind === "daily-check-ins") {
+    const entries = Array.isArray(body?.entries)
+      ? body.entries
+      : (body?.data?.entries ?? (Array.isArray(body) ? body : [body]));
+    return { schema: "paideuo", version: 1, kind, data: { entries } };
+  }
+  if (kind === "workout-component-results") {
+    const results = Array.isArray(body?.results)
+      ? body.results
+      : Array.isArray(body)
+        ? body
+        : [body?.data ?? body];
+    return results.map((data) => ({ schema: "paideuo", version: 1, kind, data }));
+  }
+  if (kind === "heart-rate-recording") {
+    const data = body?.data ?? body;
+    return { schema: "paideuo", version: 1, kind, data };
+  }
+  const data = body?.data ?? body;
+  return { schema: "paideuo", version: 1, kind, data };
+};
+
+const domainBatch = (event, kind, principal = credentials.importPrincipalFromEvent(event)) => {
+  boundedRequest(principal.ownerId, event);
+  credentials.ensureScopes(principal, credentials.requiredScopesForImportKind(kind));
+  const body = event.requestInfo().body;
+  if (!body || typeof body !== "object") throw new BadRequestError("Enter a valid domain batch.");
+  const documents = domainDocument(kind, body);
+  const batch = Array.isArray(documents) ? documents : [documents];
+  const counts = { created: 0, updated: 0, skipped: 0, error: 0 };
+  const rows = [];
+  let failureStatus = 409;
+  let response;
+
+  try {
+    event.app.runInTransaction((tx) => {
+      const preparedBatch = [];
+      for (const document of batch) {
+        let prepared;
+        try {
+          if (kind === "daily-check-ins") {
+            for (const entry of document.data.entries) {
+              const existing = first(
+                tx,
+                "paideuo_daily_recovery",
+                "owner = {:owner} && date = {:date}",
+                { owner: principal.ownerId, date: entry.date },
+              );
+              if (existing) {
+                const measurements = existing.get("measurements") ?? {};
+                const nutrition = existing.get("nutrition") ?? {};
+                const recovery = entry.recovery ?? {};
+                const nutritionData = entry.nutrition ?? {};
+                for (const key of Object.keys(measurements)) {
+                  if (!Object.prototype.hasOwnProperty.call(recovery, key))
+                    recovery[key] = measurements[key];
+                }
+                for (const key of Object.keys(nutrition)) {
+                  if (!Object.prototype.hasOwnProperty.call(nutritionData, key))
+                    nutritionData[key] = nutrition[key];
+                }
+                entry.recovery = recovery;
+                entry.nutrition = nutritionData;
+              }
+            }
+          }
+          prepared = preparePreview(tx, principal.ownerId, document, principal);
+        } catch (error) {
+          counts.error += 1;
+          failureStatus = error?.status ?? 400;
+          rows.push({
+            status: "error",
+            error: error?.message ?? "Import item failed.",
+          });
+        }
+        if (prepared) {
+          if (prepared.plan.items.some((item) => item.status === "conflict")) {
+            counts.error += prepared.plan.items.length;
+            for (const item of prepared.plan.items) {
+              rows.push({
+                key: item.key,
+                status: "error",
+                error: item.error ?? "Import item conflicts.",
+              });
+            }
+          } else {
+            preparedBatch.push({ document: prepared.document, plan: prepared.plan });
+          }
+        }
+      }
+      if (counts.error) throw new ApiError(failureStatus, "One or more domain batch items failed.");
+      for (const prepared of preparedBatch) {
+        let result;
+        if (kind === "program")
+          result = commitProgram(tx, principal.ownerId, prepared.document, prepared.plan);
+        else if (kind === "daily-check-ins")
+          result = commitDaily(tx, principal.ownerId, prepared.document.data, prepared.plan);
+        else if (kind === "workout-component-results")
+          result = commitWorkout(
+            tx,
+            principal.ownerId,
+            prepared.document.data,
+            prepared.plan,
+            principal,
+          );
+        else result = commitHeartRate(tx, principal.ownerId, prepared.document.data, prepared.plan);
+        for (const row of result) {
+          if (row.status === "created" || row.status === "committed") counts.created += 1;
+          else if (row.status === "updated") counts.updated += 1;
+          else if (row.status === "skipped") counts.skipped += 1;
+          else counts.error += 1;
+          rows.push(row);
+        }
+      }
+    });
+  } catch (error) {
+    response = { created: 0, updated: 0, skipped: 0, error: counts.error || 1, rows };
+    return event.json(error?.status ?? 409, response);
+  }
+  response = {
+    created: counts.created,
+    updated: counts.updated,
+    skipped: counts.skipped,
+    error: counts.error,
+    rows,
+  };
+  return event.json(counts.error ? 409 : 200, response);
+};
+
 // oxlint-disable-next-line import/no-commonjs
-module.exports = { commit, preview: previewRequest };
+module.exports = { commit, preview: previewRequest, domainBatch };
