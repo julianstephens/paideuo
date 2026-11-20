@@ -9,6 +9,7 @@ RUN --mount=type=cache,id=paideuo-pnpm,target=/pnpm/store \
 COPY index.html tsconfig.json vite.config.ts ./
 COPY public ./public
 COPY src ./src
+COPY docs/examples ./docs/examples
 # The preceding install already verified the lockfile.
 RUN pnpm_config_verify_deps_before_run=false pnpm run build
 

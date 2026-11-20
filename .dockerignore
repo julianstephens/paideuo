@@ -10,3 +10,6 @@
 !public/**
 !src/
 !src/**
+!docs/
+!docs/examples/
+!docs/examples/import-v1-*.json

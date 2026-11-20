@@ -3,16 +3,19 @@ import {
   Box,
   Button,
   Checkbox,
+  Flex,
   Grid,
   Heading,
   Input,
+  Link,
   NativeSelect,
   Stack,
   Table,
   Text,
+  Textarea,
 } from "@chakra-ui/react";
-import { useMemo, useState } from "react";
-import { Notice, PageHeader, Panel } from "../../components/ui";
+import { useEffect, useMemo, useRef, useState } from "react";
+import { Disclosure, FormField, Notice, PageHeader, Panel } from "../../components/ui";
 import { errorMessage } from "../../lib/api/request";
 import { type ImportDocumentV1, type ImportItem, importsApi } from "./imports";
 
@@ -37,14 +40,13 @@ type CsvColumn = {
   choices?: readonly string[];
 };
 
-type MappedCsv = {
-  kind: CsvKind;
+type MappedImport = {
   documents: ImportDocumentV1[];
   rowIssues: RowIssue[];
 };
 
 type PreviewState = {
-  mapped: MappedCsv;
+  mapped: MappedImport;
   prepared: { document: ImportDocumentV1; previewToken: string; items: ImportItem[] }[];
   previewItems: (ImportItem & { source: string })[];
   previewErrors: { source: string; message: string }[];
@@ -54,7 +56,7 @@ type CommitRow = { source: string; key: string; status: string; error?: string }
 
 type CommitState = {
   rows: CommitRow[];
-  errors: { source: string; message: string }[];
+  scheduleReviewRequired: boolean;
 };
 
 const statusPalette: Record<string, "gray" | "teal" | "green" | "red"> = {
@@ -66,6 +68,7 @@ const statusPalette: Record<string, "gray" | "teal" | "green" | "red"> = {
   updated: "green",
   skipped: "gray",
   failed: "red",
+  committed: "teal",
 };
 
 const dailyColumns: CsvColumn[] = [
@@ -255,7 +258,7 @@ const mapDailyCsv = (
   headers: string[],
   rows: string[][],
   mapping: Record<string, string>,
-): MappedCsv => {
+): MappedImport => {
   const issues: RowIssue[] = [];
   const rowObjects = toObjectRows(headers, rows);
   const seenDates = new Map<string, number>();
@@ -357,14 +360,14 @@ const mapDailyCsv = (
     },
   ];
 
-  return { kind: "daily-check-ins", documents, rowIssues: issues };
+  return { documents, rowIssues: issues };
 };
 
 const mapWorkoutCsv = (
   headers: string[],
   rows: string[][],
   mapping: Record<string, string>,
-): MappedCsv => {
+): MappedImport => {
   const issues: RowIssue[] = [];
   const rowObjects = toObjectRows(headers, rows);
   const grouped = new Map<
@@ -576,7 +579,7 @@ const mapWorkoutCsv = (
     },
   }));
 
-  return { kind: "workout-component-results", documents, rowIssues: issues };
+  return { documents, rowIssues: issues };
 };
 
 const mapCsv = (
@@ -584,12 +587,11 @@ const mapCsv = (
   headers: string[],
   rows: string[][],
   mapping: Record<string, string>,
-): MappedCsv => {
+): MappedImport => {
   const required = columnSets[kind].filter((column) => column.required).map((column) => column.key);
   const missingMappedRequired = required.filter((key) => !mapping[key]);
   if (missingMappedRequired.length) {
     return {
-      kind,
       documents: [],
       rowIssues: missingMappedRequired.map((key) => ({
         row: 1,
@@ -604,111 +606,167 @@ const mapCsv = (
     : mapWorkoutCsv(headers, rows, mapping);
 };
 
-const readFileText = (file: File) =>
-  new Promise<string>((resolve, reject) => {
-    const reader = new FileReader();
-    reader.onload = () => resolve(typeof reader.result === "string" ? reader.result : "");
-    reader.onerror = () => reject(new Error("Unable to read file."));
-    reader.readAsText(file);
-  });
+const jsonExamples = [
+  [
+    "Training program",
+    "import-v1-program.json",
+    new URL("../../../docs/examples/import-v1-program.json", import.meta.url).href,
+  ],
+  [
+    "Daily check-ins",
+    "import-v1-daily-check-ins.json",
+    new URL("../../../docs/examples/import-v1-daily-check-ins.json", import.meta.url).href,
+  ],
+  [
+    "Workout results",
+    "import-v1-workout-results.json",
+    new URL("../../../docs/examples/import-v1-workout-results.json", import.meta.url).href,
+  ],
+  [
+    "Heart rate recording",
+    "import-v1-heart-rate.json",
+    new URL("../../../docs/examples/import-v1-heart-rate.json", import.meta.url).href,
+  ],
+] as const;
 
 const sourceLabel = (document: ImportDocumentV1) => {
   if (document.kind === "daily-check-ins") {
-    return `daily-check-ins (${(document.data as { entries: unknown[] }).entries.length} rows)`;
+    const entries = document.data?.entries;
+    return Array.isArray(entries) ? `Daily check-ins (${entries.length} rows)` : "Daily check-ins";
   }
   if (document.kind === "workout-component-results") {
-    const data = document.data as { sourceWorkoutKey: string; completedDate: string };
-    return `${data.sourceWorkoutKey} · ${data.completedDate}`;
+    const { sourceWorkoutKey, completedDate } = document.data ?? {};
+    if (typeof sourceWorkoutKey === "string" && typeof completedDate === "string") {
+      return `${sourceWorkoutKey} · ${completedDate}`;
+    }
+    return "Workout results";
   }
-  return document.kind;
+  return formatStatus(document.kind);
 };
-
-const defaultMapping = (kind: CsvKind) =>
-  Object.fromEntries(columnSets[kind].map((column) => [column.key, ""])) as Record<string, string>;
 
 const formatStatus = (status: string) => status.replaceAll("-", " ");
 
+const previewLabels: Record<ImportItem["status"], string> = {
+  create: "New",
+  update: "Updates",
+  skip: "Unchanged",
+  conflict: "Conflicts",
+};
+
 export const ImportsPage = () => {
-  const [sourceKind, setSourceKind] = useState<SourceKind>("json");
+  const [formatOverride, setFormatOverride] = useState<SourceKind | null>(null);
   const [csvKind, setCsvKind] = useState<CsvKind>("daily-check-ins");
   const [fileName, setFileName] = useState("");
   const [rawText, setRawText] = useState("");
-  const [csvHeaders, setCsvHeaders] = useState<string[]>([]);
-  const [csvRows, setCsvRows] = useState<string[][]>([]);
-  const [mapping, setMapping] = useState<Record<string, string>>(defaultMapping("daily-check-ins"));
-  const [busy, setBusy] = useState(false);
+  const [columnOverrides, setColumnOverrides] = useState<Record<string, string>>({});
+  const [operation, setOperation] = useState<"read" | "preview" | "commit" | null>(null);
   const [parseError, setParseError] = useState<string | null>(null);
-  const [previewError, setPreviewError] = useState<string | null>(null);
   const [preview, setPreview] = useState<PreviewState | null>(null);
   const [confirmCommit, setConfirmCommit] = useState(false);
   const [commit, setCommit] = useState<CommitState | null>(null);
+  const fileInput = useRef<HTMLInputElement>(null);
+  const previewHeading = useRef<HTMLHeadingElement>(null);
+  const resultHeading = useRef<HTMLHeadingElement>(null);
 
-  const mappingColumns = useMemo(() => columnSets[csvKind], [csvKind]);
+  const firstCharacter = rawText.trimStart()[0];
+  const sourceKind =
+    formatOverride ?? (firstCharacter === "{" || firstCharacter === "[" ? "json" : "csv");
+  const busy = operation !== null;
+  const csv = useMemo(
+    () => (sourceKind === "csv" ? parseCsv(rawText) : null),
+    [sourceKind, rawText],
+  );
+  const mappingColumns = columnSets[csvKind];
+  const mapping = csv ? { ...inferMapping(csv.headers, csvKind), ...columnOverrides } : {};
+  const missingColumns = mappingColumns.filter((column) => column.required && !mapping[column.key]);
   const rowIssues = preview?.mapped.rowIssues ?? [];
   const blockingIssues = rowIssues.filter((issue) => issue.level === "error");
-  const hasConflicts = (preview?.previewItems ?? []).some((item) => item.status === "conflict");
+  const hasConflicts = preview?.previewItems.some((item) => item.status === "conflict");
+  const canCommit = Boolean(
+    preview?.previewItems.length &&
+    !preview.previewErrors.length &&
+    !blockingIssues.length &&
+    !hasConflicts,
+  );
+
+  useEffect(() => {
+    if (preview) previewHeading.current?.focus();
+  }, [preview]);
+
+  useEffect(() => {
+    if (commit) resultHeading.current?.focus();
+  }, [commit]);
 
   const resetResults = () => {
     setPreview(null);
-    setPreviewError(null);
     setCommit(null);
     setConfirmCommit(false);
   };
 
-  const onFile = async (file: File | null) => {
-    resetResults();
+  const updateText = (text: string) => {
+    // Keep manual mappings when only the CSV data rows change.
+    const nextHeader = text.split("\n", 1)[0];
+    if (nextHeader !== rawText.split("\n", 1)[0]) setColumnOverrides({});
+    setRawText(text);
     setParseError(null);
-    if (!file) {
-      setFileName("");
-      setRawText("");
-      setCsvHeaders([]);
-      setCsvRows([]);
-      return;
-    }
+    resetResults();
+  };
 
-    setFileName(file.name);
+  const onFile = async (file: File) => {
+    setOperation("read");
     try {
-      const text = await readFileText(file);
-      setRawText(text);
-      if (sourceKind === "csv") {
-        const parsed = parseCsv(text);
-        setCsvHeaders(parsed.headers);
-        setCsvRows(parsed.rows);
-        setMapping(inferMapping(parsed.headers, csvKind));
-      }
+      const content = await file.text();
+      updateText(content);
+      setColumnOverrides({});
+      setFileName(file.name);
+      setFormatOverride(
+        /\.csv$/i.test(file.name) ? "csv" : /\.json$/i.test(file.name) ? "json" : null,
+      );
     } catch {
-      setParseError("Unable to read the selected file.");
+      setParseError(`Could not read ${file.name}. Choose the file again or paste its contents.`);
+    } finally {
+      setOperation(null);
     }
   };
 
-  const toDocuments = (): MappedCsv | { error: string } => {
+  const toDocuments = (): MappedImport | { error: string } => {
     if (sourceKind === "json") {
       let document: ImportDocumentV1;
       try {
         document = JSON.parse(rawText) as ImportDocumentV1;
       } catch {
-        return { error: "Malformed JSON. Provide a valid import envelope." };
+        return { error: "This data is not valid JSON. Check the syntax and try again." };
       }
-      return { kind: document.kind as CsvKind, documents: [document], rowIssues: [] };
+      if (
+        document?.schema !== "paideuo" ||
+        document.version !== 1 ||
+        typeof document.kind !== "string" ||
+        !document.data ||
+        typeof document.data !== "object" ||
+        Array.isArray(document.data)
+      ) {
+        return {
+          error:
+            "Use a Paideuo JSON import with schema, version, kind, and data fields. See the examples above.",
+        };
+      }
+      return { documents: [document], rowIssues: [] };
     }
-    if (!csvHeaders.length) return { error: "CSV must include a header row." };
-    if (!csvRows.length) return { error: "CSV has no data rows." };
-    return mapCsv(csvKind, csvHeaders, csvRows, mapping);
+    if (!csv?.headers.length || !csv.rows.length) {
+      return { error: "CSV needs a header row and at least one data row." };
+    }
+    return mapCsv(csvKind, csv.headers, csv.rows, mapping);
   };
 
   const previewImport = async () => {
-    setBusy(true);
+    if (busy || !rawText.trim()) return;
+    setOperation("preview");
     setParseError(null);
-    setPreviewError(null);
     resetResults();
     try {
       const mapped = toDocuments();
       if ("error" in mapped) {
         setParseError(mapped.error);
-        return;
-      }
-      if (!mapped.documents.length) {
-        setParseError("No import records were found.");
         return;
       }
       if (mapped.rowIssues.some((issue) => issue.level === "error")) {
@@ -735,21 +793,17 @@ export const ImportsPage = () => {
       }
 
       setPreview({ mapped, prepared, previewItems, previewErrors });
-      if (!previewItems.length && !previewErrors.length) {
-        setPreviewError("No preview rows were returned.");
-      }
     } finally {
-      setBusy(false);
+      setOperation(null);
     }
   };
 
   const commitImport = async () => {
-    if (!preview || !confirmCommit || busy) return;
-    setBusy(true);
-    setCommit(null);
+    if (!preview || !canCommit || !confirmCommit || busy || commit) return;
+    setOperation("commit");
     try {
       const rows: CommitRow[] = [];
-      const errors: CommitState["errors"] = [];
+      let scheduleReviewRequired = false;
       for (const prepared of preview.prepared) {
         const source = sourceLabel(prepared.document);
         try {
@@ -763,6 +817,7 @@ export const ImportsPage = () => {
               })),
             );
           } else {
+            scheduleReviewRequired ||= result.rows.scheduleSynchronization === "review-required";
             rows.push({
               source,
               key: result.rows.programId,
@@ -770,7 +825,6 @@ export const ImportsPage = () => {
             });
           }
         } catch (error) {
-          errors.push({ source, message: errorMessage(error, "Unable to commit import.") });
           rows.push({
             source,
             key: source,
@@ -779,172 +833,255 @@ export const ImportsPage = () => {
           });
         }
       }
-      setCommit({ rows, errors });
+      setConfirmCommit(false);
+      setCommit({ rows, scheduleReviewRequired });
     } finally {
-      setBusy(false);
+      setOperation(null);
     }
   };
+
+  const renderMapping = (column: CsvColumn) => (
+    <FormField key={column.key}>
+      {column.label}
+      {column.required ? " (required)" : ""}
+      <NativeSelect.Root disabled={busy} invalid={column.required && !mapping[column.key]}>
+        <NativeSelect.Field
+          value={mapping[column.key] ?? ""}
+          onChange={(event) => {
+            const value = event.target.value;
+            setColumnOverrides((current) => ({ ...current, [column.key]: value }));
+            setParseError(null);
+            resetResults();
+          }}
+        >
+          <option value="">{column.required ? "Choose a column" : "Not mapped"}</option>
+          {[...new Set(csv?.headers.filter(Boolean))].map((header) => (
+            <option key={header} value={header}>
+              {header}
+            </option>
+          ))}
+        </NativeSelect.Field>
+        <NativeSelect.Indicator />
+      </NativeSelect.Root>
+    </FormField>
+  );
+
+  const columnLayout = { base: "minmax(0, 1fr)", md: "repeat(2, minmax(0, 1fr))" };
 
   return (
     <Stack gap="6">
       <PageHeader title="Bulk imports" />
-      <Panel as="section" gap="4">
-        <Heading as="h2" size="md">
-          1. Upload import file
-        </Heading>
-        <Grid templateColumns={{ base: "minmax(0, 1fr)", md: "repeat(2, minmax(0, 1fr))" }} gap="3">
-          <label>
-            <Text fontSize="sm" fontWeight="medium" mb="1.5">
-              File format
+      <Panel as="section" gap="5">
+        <Stack gap="1">
+          <Heading as="h2" size="md">
+            Add import data
+          </Heading>
+          <Text color="fg.muted" fontSize="sm">
+            Choose a JSON or CSV file, or paste your data. Preview the changes before saving them.
+          </Text>
+        </Stack>
+
+        <Stack bg="bg.inset" borderWidth="1px" borderRadius="md" p="4" gap="2">
+          <Flex gap="3" align="center" wrap="wrap">
+            <Button variant="outline" disabled={busy} onClick={() => fileInput.current?.click()}>
+              {fileName ? "Replace file" : "Choose file"}
+            </Button>
+            <Input
+              ref={fileInput}
+              type="file"
+              hidden
+              disabled={busy}
+              accept=".json,.csv,application/json,text/csv"
+              onChange={(event) => {
+                const file = event.currentTarget.files?.[0];
+                event.currentTarget.value = "";
+                if (file) void onFile(file);
+              }}
+            />
+            <Text fontSize="sm" color="fg.muted" role="status">
+              {operation === "read" ? "Reading file…" : fileName || "JSON or CSV"}
             </Text>
-            <NativeSelect.Root>
-              <NativeSelect.Field
-                value={sourceKind}
-                onChange={(event) => {
-                  const next = event.target.value as SourceKind;
-                  setSourceKind(next);
-                  setParseError(null);
-                  resetResults();
+            {(fileName || rawText) && (
+              <Button
+                size="sm"
+                variant="ghost"
+                disabled={busy}
+                onClick={() => {
+                  updateText("");
+                  setFileName("");
+                  setFormatOverride(null);
                 }}
               >
-                <option value="json">JSON</option>
-                <option value="csv">CSV</option>
-              </NativeSelect.Field>
-              <NativeSelect.Indicator />
-            </NativeSelect.Root>
-          </label>
-          {sourceKind === "csv" && (
-            <label>
-              <Text fontSize="sm" fontWeight="medium" mb="1.5">
-                CSV dataset
-              </Text>
-              <NativeSelect.Root>
+                Clear data
+              </Button>
+            )}
+          </Flex>
+          <Disclosure label={fileName ? "View or edit file contents" : "Paste import data"}>
+            <FormField>
+              File contents
+              <Textarea
+                rows={6}
+                fontFamily="mono"
+                spellCheck={false}
+                placeholder="Paste JSON or CSV here"
+                value={rawText}
+                disabled={busy}
+                onChange={(event) => {
+                  updateText(event.target.value);
+                  setFileName("");
+                  if (!event.target.value.trim()) setFormatOverride(null);
+                }}
+              />
+            </FormField>
+          </Disclosure>
+        </Stack>
+
+        <Disclosure label="Supported formats and examples">
+          <Stack gap="3" fontSize="sm">
+            <Text color="fg.muted">
+              Download a Paideuo JSON example for the dataset you want to import.
+            </Text>
+            <Flex gapX="4" gapY="2" wrap="wrap">
+              {jsonExamples.map(([label, filename, href]) => (
+                <Link
+                  key={label}
+                  color="teal.fg"
+                  textDecoration="underline"
+                  href={href}
+                  download={filename}
+                >
+                  {label}
+                </Link>
+              ))}
+            </Flex>
+            <Text color="fg.muted">
+              CSV supports daily check-ins and workout results. Put column names on the first row
+              and use YYYY-MM-DD dates. For workout results, use one row per workout component.
+            </Text>
+          </Stack>
+        </Disclosure>
+
+        {rawText.trim() && (
+          <Grid templateColumns={columnLayout} gap="3">
+            <FormField>
+              File format
+              <NativeSelect.Root disabled={busy}>
                 <NativeSelect.Field
-                  value={csvKind}
+                  value={sourceKind}
                   onChange={(event) => {
-                    const next = event.target.value as CsvKind;
-                    setCsvKind(next);
-                    setMapping(defaultMapping(next));
+                    setFormatOverride(event.target.value as SourceKind);
                     setParseError(null);
                     resetResults();
-                    if (csvHeaders.length) setMapping(inferMapping(csvHeaders, next));
                   }}
                 >
-                  <option value="daily-check-ins">Daily check-ins</option>
-                  <option value="workout-component-results">Workout results</option>
+                  <option value="json">JSON</option>
+                  <option value="csv">CSV</option>
                 </NativeSelect.Field>
                 <NativeSelect.Indicator />
               </NativeSelect.Root>
-            </label>
-          )}
-        </Grid>
-
-        <Stack gap="2">
-          <Input
-            type="file"
-            accept={sourceKind === "json" ? ".json,application/json" : ".csv,text/csv"}
-            onChange={(event) => {
-              const file = event.target.files?.[0] ?? null;
-              void onFile(file);
-            }}
-          />
-          {fileName && (
-            <Text fontSize="sm" color="fg.muted">
-              Selected file: {fileName}
-            </Text>
-          )}
-        </Stack>
-
-        <Box>
-          <Text fontSize="sm" fontWeight="medium" mb="1.5">
-            {sourceKind === "json" ? "Import JSON" : "CSV data"}
-          </Text>
-          <Input
-            as="textarea"
-            minH="12rem"
-            fontFamily="mono"
-            value={rawText}
-            onChange={(event) => {
-              setRawText(event.target.value);
-              resetResults();
-              setParseError(null);
-              if (sourceKind === "csv") {
-                const parsed = parseCsv(event.target.value);
-                setCsvHeaders(parsed.headers);
-                setCsvRows(parsed.rows);
-                setMapping(inferMapping(parsed.headers, csvKind));
-              }
-            }}
-          />
-        </Box>
-
-        {sourceKind === "csv" && (
-          <Stack gap="3">
-            <Heading as="h3" size="sm">
-              Column mapping
-            </Heading>
-            {!csvHeaders.length ? (
-              <Notice>Upload or paste CSV data with a header row to map columns.</Notice>
-            ) : (
-              <Grid
-                templateColumns={{ base: "minmax(0, 1fr)", lg: "repeat(2, minmax(0, 1fr))" }}
-                gap="3"
-              >
-                {mappingColumns.map((column) => (
-                  <label key={column.key}>
-                    <Text fontSize="sm" fontWeight="medium" mb="1.5">
-                      {column.label}
-                      {column.required ? " *" : ""}
-                    </Text>
-                    <NativeSelect.Root>
-                      <NativeSelect.Field
-                        value={mapping[column.key] ?? ""}
-                        onChange={(event) => {
-                          setMapping((current) => ({
-                            ...current,
-                            [column.key]: event.target.value,
-                          }));
-                          resetResults();
-                        }}
-                      >
-                        <option value="">Not mapped</option>
-                        {csvHeaders.map((header) => (
-                          <option key={`${column.key}:${header}`} value={header}>
-                            {header}
-                          </option>
-                        ))}
-                      </NativeSelect.Field>
-                      <NativeSelect.Indicator />
-                    </NativeSelect.Root>
-                  </label>
-                ))}
-              </Grid>
+            </FormField>
+            {csv && (
+              <FormField>
+                CSV dataset
+                <NativeSelect.Root disabled={busy}>
+                  <NativeSelect.Field
+                    value={csvKind}
+                    onChange={(event) => {
+                      setCsvKind(event.target.value as CsvKind);
+                      setColumnOverrides({});
+                      setParseError(null);
+                      resetResults();
+                    }}
+                  >
+                    <option value="daily-check-ins">Daily check-ins</option>
+                    <option value="workout-component-results">Workout results</option>
+                  </NativeSelect.Field>
+                  <NativeSelect.Indicator />
+                </NativeSelect.Root>
+              </FormField>
             )}
+          </Grid>
+        )}
+
+        {csv && csv.rows.length > 0 && (
+          <Stack gap="3" borderTopWidth="1px" pt="4">
+            <Flex justify="space-between" align="center" gap="2" wrap="wrap">
+              <Heading as="h3" size="sm">
+                Match CSV columns
+              </Heading>
+              <Badge>
+                {csv.rows.length} {csv.rows.length === 1 ? "row" : "rows"}
+              </Badge>
+            </Flex>
+            <Text fontSize="sm" color="fg.muted">
+              {missingColumns.length > 0
+                ? "Choose a CSV column for each required field."
+                : "All required fields are matched. Review optional fields before previewing."}
+            </Text>
+            <Grid templateColumns={columnLayout} gap="3">
+              {mappingColumns.filter((column) => column.required).map(renderMapping)}
+            </Grid>
+            <Disclosure
+              label={`Optional fields (${mappingColumns.filter((column) => !column.required && mapping[column.key]).length} matched)`}
+            >
+              <Grid templateColumns={columnLayout} gap="3">
+                {mappingColumns.filter((column) => !column.required).map(renderMapping)}
+              </Grid>
+            </Disclosure>
           </Stack>
         )}
 
         {parseError && <Notice role="alert">{parseError}</Notice>}
-        <Button alignSelf="start" onClick={() => void previewImport()} loading={busy}>
-          2. Validate and preview
+        <Button
+          alignSelf="start"
+          colorPalette="teal"
+          onClick={() => void previewImport()}
+          loading={operation === "preview"}
+          loadingText="Validating…"
+          disabled={busy || !rawText.trim() || Boolean(csv?.rows.length && missingColumns.length)}
+        >
+          Preview changes
         </Button>
       </Panel>
 
       {preview && (
         <Panel as="section" gap="4">
-          <Heading as="h2" size="md">
-            3. Review validation and preview
+          <Heading as="h2" size="md" ref={previewHeading} tabIndex={-1}>
+            Review changes
           </Heading>
+          {preview.previewItems.length > 0 && (
+            <Flex gap="2" wrap="wrap">
+              {Object.entries(previewLabels).map(([status, label]) => (
+                <Badge key={status} colorPalette={statusPalette[status]}>
+                  {preview.previewItems.filter((item) => item.status === status).length} {label}
+                </Badge>
+              ))}
+            </Flex>
+          )}
 
+          {blockingIssues.length > 0 && (
+            <Notice role="alert">Fix the CSV errors below, then preview again.</Notice>
+          )}
           {rowIssues.length > 0 && (
             <Stack gap="2">
-              {rowIssues.map((issue) => (
-                <Notice
-                  key={`${issue.level}:${issue.row}:${issue.message}`}
-                  role={issue.level === "error" ? "alert" : "status"}
-                >
-                  Row {issue.row}: {issue.message}
+              {blockingIssues.map((issue, index) => (
+                <Notice key={index}>
+                  Row {issue.row} · {issue.message}
                 </Notice>
               ))}
+              {rowIssues.length > blockingIssues.length && (
+                <Disclosure label={`CSV warnings (${rowIssues.length - blockingIssues.length})`}>
+                  <Stack gap="2">
+                    {rowIssues
+                      .filter((issue) => issue.level === "warning")
+                      .map((issue, index) => (
+                        <Notice key={index}>
+                          Row {issue.row} · {issue.message}
+                        </Notice>
+                      ))}
+                  </Stack>
+                </Disclosure>
+              )}
             </Stack>
           )}
 
@@ -960,14 +1097,14 @@ export const ImportsPage = () => {
 
           {preview.previewItems.length > 0 && (
             <Box overflowX="auto">
-              <Table.Root size="sm" variant="outline">
+              <Table.Root size="sm" variant="outline" aria-label="Import preview">
                 <Table.Header>
                   <Table.Row>
                     <Table.ColumnHeader>Source</Table.ColumnHeader>
                     <Table.ColumnHeader>Type</Table.ColumnHeader>
                     <Table.ColumnHeader>Key</Table.ColumnHeader>
                     <Table.ColumnHeader>Status</Table.ColumnHeader>
-                    <Table.ColumnHeader>Error</Table.ColumnHeader>
+                    <Table.ColumnHeader>Details</Table.ColumnHeader>
                   </Table.Row>
                 </Table.Header>
                 <Table.Body>
@@ -989,60 +1126,68 @@ export const ImportsPage = () => {
             </Box>
           )}
 
-          {previewError && <Notice role="alert">{previewError}</Notice>}
-          {preview.previewItems.length > 0 &&
+          {hasConflicts && (
+            <Notice role="alert">Resolve the conflicts above and preview again.</Notice>
+          )}
+          {!preview.previewItems.length &&
             !preview.previewErrors.length &&
             !blockingIssues.length && (
-              <Stack gap="3" align="start">
-                {hasConflicts ? (
-                  <Notice role="alert">Resolve conflicts in preview before commit.</Notice>
-                ) : (
-                  <Notice role="status">Preview is ready. Confirm to commit the import.</Notice>
-                )}
-                <Checkbox.Root
-                  checked={confirmCommit}
-                  onCheckedChange={({ checked }) => setConfirmCommit(checked === true)}
-                >
-                  <Checkbox.HiddenInput />
-                  <Checkbox.Control />
-                  <Checkbox.Label>I confirm these rows should be committed.</Checkbox.Label>
-                </Checkbox.Root>
-                <Button
-                  onClick={() => void commitImport()}
-                  loading={busy}
-                  disabled={!confirmCommit || hasConflicts}
-                  colorPalette="teal"
-                >
-                  4. Commit import
-                </Button>
-              </Stack>
+              <Notice role="status">No records were found to preview.</Notice>
             )}
+          {canCommit && !commit && (
+            <Stack gap="3" align="start" borderTopWidth="1px" pt="4">
+              <Checkbox.Root
+                checked={confirmCommit}
+                disabled={busy}
+                onCheckedChange={({ checked }) => setConfirmCommit(checked === true)}
+              >
+                <Checkbox.HiddenInput />
+                <Checkbox.Control />
+                <Checkbox.Label>
+                  I reviewed the preview and want to save these changes.
+                </Checkbox.Label>
+              </Checkbox.Root>
+              <Button
+                onClick={() => void commitImport()}
+                loading={operation === "commit"}
+                loadingText="Importing…"
+                disabled={!confirmCommit || busy}
+                colorPalette="teal"
+              >
+                Import records
+              </Button>
+            </Stack>
+          )}
         </Panel>
       )}
 
       {commit && (
         <Panel as="section" gap="4">
-          <Heading as="h2" size="md">
-            5. Commit results
+          <Heading as="h2" size="md" ref={resultHeading} tabIndex={-1}>
+            Import results
           </Heading>
-          {commit.errors.length > 0 && (
-            <Stack gap="2">
-              {commit.errors.map((entry) => (
-                <Notice key={`${entry.source}:${entry.message}`} role="alert">
-                  {entry.source}: {entry.message}
-                </Notice>
-              ))}
-            </Stack>
+          {commit.rows.some((row) => row.status === "failed") ? (
+            <Notice role="alert">
+              {commit.rows.filter((row) => row.status === "failed").length} failed. Check the
+              details below, then run a fresh preview before retrying.
+            </Notice>
+          ) : (
+            <Notice role="status">Import complete. The results below show what changed.</Notice>
+          )}
+          {commit.scheduleReviewRequired && (
+            <Notice>
+              Review the program’s schedule to synchronize it with the imported changes.
+            </Notice>
           )}
           {commit.rows.length > 0 && (
             <Box overflowX="auto">
-              <Table.Root size="sm" variant="outline">
+              <Table.Root size="sm" variant="outline" aria-label="Import results">
                 <Table.Header>
                   <Table.Row>
                     <Table.ColumnHeader>Source</Table.ColumnHeader>
                     <Table.ColumnHeader>Key</Table.ColumnHeader>
                     <Table.ColumnHeader>Status</Table.ColumnHeader>
-                    <Table.ColumnHeader>Error</Table.ColumnHeader>
+                    <Table.ColumnHeader>Details</Table.ColumnHeader>
                   </Table.Row>
                 </Table.Header>
                 <Table.Body>
