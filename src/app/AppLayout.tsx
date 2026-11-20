@@ -11,6 +11,7 @@ const navigation = [
   { to: "/programs", label: "Programs" },
   { to: "/metrics", label: "Metrics" },
   { to: "/library", label: "Library" },
+  { to: "/imports", label: "Imports" },
 ];
 
 const Navigation = ({ placement }: { placement: "sidebar" | "header" | "bottom" }) => (
