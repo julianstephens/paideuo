@@ -1,0 +1,61 @@
+{
+  "schema": "paideuo",
+  "version": 1,
+  "kind": "program",
+  "data": {
+    "program": {
+      "externalId": "foundation-program",
+      "name": "Foundation",
+      "description": "",
+      "objective": "Build consistent training capacity.",
+      "status": "draft"
+    },
+    "blocks": [
+      {
+        "externalId": "foundation-base",
+        "name": "Base",
+        "objective": "",
+        "position": 1,
+        "durationWeeks": 1,
+        "slots": [
+          {
+            "externalId": "foundation-base-climbing",
+            "weekday": 1,
+            "position": 1,
+            "label": "Climbing"
+          }
+        ],
+        "weeks": [
+          {
+            "externalId": "foundation-base-week-1",
+            "position": 1,
+            "label": "",
+            "focus": "",
+            "weekType": "normal",
+            "prescriptions": [
+              {
+                "slotExternalId": "foundation-base-climbing",
+                "workout": {
+                  "title": "Technique",
+                  "sessionType": "climbing",
+                  "description": "",
+                  "notes": "",
+                  "plannedDurationMin": 60,
+                  "plannedIntensity": "moderate",
+                  "components": [
+                    {
+                      "name": "Warm-up",
+                      "instructions": "",
+                      "durationMin": 10,
+                      "targets": null
+                    }
+                  ]
+                }
+              }
+            ]
+          }
+        ]
+      }
+    ]
+  }
+}
