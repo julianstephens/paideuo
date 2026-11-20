@@ -2,7 +2,9 @@ const serviceScopes = [
   "imports:commit",
   "programs:read",
   "programs:write",
+  "workouts:read",
   "workouts:write",
+  "metrics:read",
   "metrics:write",
   "recordings:write",
 ];

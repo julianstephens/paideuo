@@ -142,8 +142,8 @@ POST /api/paideuo/v1/service-credentials/{id}/revoke
 
 Plaintext tokens are returned only once at issuance time. Stored credentials are hash-only, owner
 bound, revocable, and may include an expiry timestamp plus explicit scopes:
-`imports:commit`, `programs:read`, `programs:write`, `workouts:write`, `metrics:write`,
-`recordings:write`.
+`imports:commit`, `programs:read`, `programs:write`, `workouts:read`, `workouts:write`,
+`metrics:read`, `metrics:write`, `recordings:write`.
 
 The server validates and normalizes the complete document, checks every supplied PocketBase ID
 against the authenticated owner, and compares it with current state. Preview responses contain an
@@ -239,6 +239,20 @@ difference between omission and explicit null are significant. Send the same pay
 retry. The server generates an ID when omitted. Successful batches persist the payload hash,
 original response, provenance, and audit summary in the same transaction as the writes. Top-level
 provenance fields have the same meaning as on the generic commit endpoint.
+
+## MCP tools
+
+The JSON-RPC 2.0 MCP endpoint is `POST /api/paideuo/v1/service/mcp` for service credentials and
+`POST /api/paideuo/v1/mcp` for authenticated human sessions. It supports `tools/list` and
+`tools/call`. Available tools are `list_programs`, `get_program`, `create_draft`,
+`preview_import`, `commit_import`, `record_workout`, `submit_check_ins`, and `fetch_metrics`.
+
+Read tools require `programs:read` or `metrics:read`. Mutations require `imports:commit` plus the
+matching `programs:write`, `workouts:write`, `metrics:write`, or `recordings:write` scope.
+`preview_import` is side-effect-free. `commit_import` consumes an exact preview and is auditable;
+changing a scheduled or completed program requires `approvedScheduledPlanChanges: true`.
+Create-draft and batch tools use the same schemas and transactional domain services as the HTTP
+ingestion API. Successful retries can use `operationId` to replay the original response.
 
 Successful batches return `200` with `created`, `updated`, `skipped`, and `error` counts,
 `rows`, `operationId`, `payloadHash`, and `audit`. Rows have a domain key and a status of
