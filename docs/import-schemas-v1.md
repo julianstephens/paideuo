@@ -249,10 +249,27 @@ The JSON-RPC 2.0 MCP endpoint is `POST /api/paideuo/v1/service/mcp` for service 
 
 Read tools require `programs:read` or `metrics:read`. Mutations require `imports:commit` plus the
 matching `programs:write`, `workouts:write`, `metrics:write`, or `recordings:write` scope.
-`preview_import` is side-effect-free. `commit_import` consumes an exact preview and is auditable;
-changing a scheduled or completed program requires `approvedScheduledPlanChanges: true`.
-Create-draft and batch tools use the same schemas and transactional domain services as the HTTP
-ingestion API. Successful retries can use `operationId` to replay the original response.
+`get_program` returns the owned program with blocks, slots, slot baselines, weeks,
+prescriptions, and training components. Prescriptions reference their session slot by ID.
+`preview_import` returns planned changes without writing domain records.
+
+When `preview_import` returns `approvalRequired: true`, the program owner reviews the
+proposed document and sends `{ "previewToken": "...", "document": { ... } }` to
+`POST /api/paideuo/v1/imports/approve` with their authenticated Paideuo user session.
+The owner can then provide the returned `approvalReceipt` to the client that calls
+`commit_import` with the same preview token and document. Service credentials cannot issue
+receipts. The receipt expires with the preview and applies to that owner, document, and
+current program and schedule revision. This workflow also applies to the service HTTP import
+commit endpoint. Identical imports with an empty write set need no approval.
+
+`create_draft` creates a new program and rejects external IDs already owned by the caller.
+`commit_import` is audited and can replay the original receipt using the same preview token or
+a caller-provided `operationId`. Pass the same `operationId` when retrying a convenience
+mutation. The tools reuse the schemas and transaction handling of the HTTP ingestion API.
+
+Tool failures set `isError: true` and return the underlying status in `structuredContent.status`.
+When batch diagnostics are available, `structuredContent.details` contains the row results and
+rollback status.
 
 Successful batches return `200` with `created`, `updated`, `skipped`, and `error` counts,
 `rows`, `operationId`, `payloadHash`, and `audit`. Rows have a domain key and a status of

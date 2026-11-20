@@ -1,5 +1,7 @@
-routerAdd("POST", "/api/paideuo/v1/mcp", (event) =>
-  require(__hooks + "/mcp-tools.js").handle(event),
+routerAdd(
+  "POST",
+  "/api/paideuo/v1/mcp",
+  (event) => require(__hooks + "/mcp-tools.js").handle(event),
   $apis.requireAuth("paideuo_users"),
 );
 

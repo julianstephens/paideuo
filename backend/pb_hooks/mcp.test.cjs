@@ -16,6 +16,7 @@ global.ApiError = class ApiError extends Error {
 global.NotFoundError = class NotFoundError extends Error {};
 
 const credentials = {
+  requiredScopesForImportKind: () => ["imports:commit"],
   servicePrincipalFromEvent: () => ({
     type: "service",
     ownerId: "owner",
@@ -72,17 +73,19 @@ test("MCP exposes the constrained ingestion tool set", () => {
 test("read-only service cannot create or commit", () => {
   const principal = credentials.servicePrincipalFromEvent();
   assert.throws(
-    () => callTool(event({}), principal, "create_draft", {
-      name: "Draft",
-      externalId: "draft",
-    }),
+    () =>
+      callTool(event({}), principal, "create_draft", {
+        name: "Draft",
+        externalId: "draft",
+      }),
     /Missing required scope/,
   );
   assert.throws(
-    () => callTool(event({}), principal, "commit_import", {
-      previewToken: "preview",
-      document: { kind: "daily-check-ins" },
-    }),
+    () =>
+      callTool(event({}), principal, "commit_import", {
+        previewToken: "preview",
+        document: { kind: "daily-check-ins" },
+      }),
     /Missing required scope/,
   );
 });

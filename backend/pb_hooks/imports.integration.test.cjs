@@ -859,6 +859,244 @@ onRecordValidate((event) => {
       filter: 'operation_id = "integration-rollback-001"',
     });
     assert.equal(failedReceipts.length, 0);
+
+    // Start the MCP scenarios with a fresh request-rate window for the same owner.
+    await stopServer(server);
+    server = startServer();
+    await waitForHealth(baseUrl, 20000, server);
+
+    const issueMcpCredential = async (scopes, allowHistoryRewrite = false) =>
+      (
+        await owner.client.send("/api/paideuo/v1/service-credentials/issue", {
+          method: "POST",
+          body: { label: "mcp-test", scopes, allowHistoryRewrite },
+        })
+      ).plaintextToken;
+    const mcpRequest = (name, args) => ({
+      jsonrpc: "2.0",
+      id: 1,
+      method: "tools/call",
+      params: { name, arguments: args },
+    });
+    const callMcp = async (token, name, args) =>
+      (
+        await serviceImportRequest(
+          baseUrl,
+          "/api/paideuo/v1/service/mcp",
+          token,
+          mcpRequest(name, args),
+        )
+      ).result;
+    const expectMcpError = (result, status) => {
+      assert.equal(result.isError, true, JSON.stringify(result));
+      assert.equal(result.structuredContent.status, status, JSON.stringify(result));
+      return result.structuredContent.details;
+    };
+    const readOnly = await issueMcpCredential(["programs:read"]);
+    const missingCommit = await issueMcpCredential([
+      "programs:write",
+      "workouts:write",
+      "metrics:write",
+    ]);
+    const writer = await issueMcpCredential(
+      ["imports:commit", "programs:read", "programs:write", "workouts:write", "metrics:write"],
+      true,
+    );
+    const draftArgs = { name: "MCP draft", externalId: "mcp-draft", operationId: "mcp-draft-1" };
+    for (const token of [readOnly, missingCommit]) {
+      for (const [tool, args] of [
+        ["create_draft", draftArgs],
+        ["commit_import", { document: scheduleUpdateDocument, previewToken: "missing" }],
+        ["record_workout", { data: workoutDocument.data }],
+        ["submit_check_ins", { entries: [validEntry] }],
+      ])
+        expectMcpError(await callMcp(token, tool, args), 403);
+    }
+
+    const ownedRead = await callMcp(readOnly, "get_program", { id: createdProgram.id });
+    assert.equal(ownedRead.isError, false);
+    const readBlock = ownedRead.structuredContent.blocks.find(({ weeks }) =>
+      weeks.some(({ prescriptions }) => prescriptions.length),
+    );
+    const readPrescription = readBlock.weeks.flatMap(({ prescriptions }) => prescriptions)[0];
+    assert.ok(readBlock.slots.some(({ id }) => id === readPrescription.slotId));
+    assert.ok(readPrescription.workout.components[0].name);
+    expectMcpError(await callMcp(readOnly, "get_program", { id: intruderProgram.id }), 404);
+
+    const draftResult = await callMcp(writer, "create_draft", draftArgs);
+    assert.equal(draftResult.isError, false);
+    assert.equal(draftResult.structuredContent.created, 1);
+    assert.deepEqual(
+      (await callMcp(writer, "create_draft", draftArgs)).structuredContent,
+      draftResult.structuredContent,
+    );
+    const existingDraftConflict = expectMcpError(
+      await callMcp(writer, "create_draft", {
+        name: "Do not overwrite",
+        externalId: scheduleUpdateDocument.data.program.externalId,
+      }),
+      409,
+    );
+    assert.equal(existingDraftConflict.rows[0].code, "program_exists");
+
+    const change = structuredClone(scheduleUpdateDocument);
+    change.data.program.description = "Approved MCP change";
+    const mcpPreview = (await callMcp(writer, "preview_import", { document: change }))
+      .structuredContent;
+    assert.equal(mcpPreview.approvalRequired, true);
+    const currentDescription = async () =>
+      (await admin.collection("paideuo_programs").getOne(createdProgram.id)).description;
+    assert.equal(await currentDescription(), beforeFailure.description);
+    const commitArgs = { document: change, previewToken: mcpPreview.previewToken };
+    expectMcpError(await callMcp(writer, "commit_import", commitArgs), 409);
+    expectMcpError(
+      await callMcp(writer, "commit_import", {
+        ...commitArgs,
+        approvedScheduledPlanChanges: true,
+        approvalReceipt: "forged",
+      }),
+      409,
+    );
+    const humanMcp = await owner.client.send("/api/paideuo/v1/mcp", {
+      method: "POST",
+      body: mcpRequest("commit_import", commitArgs),
+    });
+    expectMcpError(humanMcp.result, 409);
+    assert.equal(await currentDescription(), beforeFailure.description);
+    await assert.rejects(
+      () => domainRequest(intruder.client, "imports/approve", commitArgs),
+      (error) => error.status === 409,
+    );
+
+    await assert.rejects(
+      () => serviceImportRequest(baseUrl, "/api/paideuo/v1/imports/approve", writer, commitArgs),
+      (error) => error.status === 401,
+    );
+    await assert.rejects(
+      () => serviceCommitImport(baseUrl, writer, change, mcpPreview.previewToken),
+      (error) => error.status === 409,
+    );
+    await assert.rejects(
+      () => serviceImportRequest(baseUrl, "/api/paideuo/v1/service/programs", writer, change.data),
+      (error) => error.status === 409 && error.response.rows[0].code === "approval_required",
+    );
+
+    const { approvalReceipt } = await domainRequest(owner.client, "imports/approve", commitArgs);
+    const otherPreview = (await callMcp(writer, "preview_import", { document: change }))
+      .structuredContent;
+    expectMcpError(
+      await callMcp(writer, "commit_import", {
+        ...commitArgs,
+        previewToken: otherPreview.previewToken,
+        approvalReceipt,
+      }),
+      409,
+    );
+    const approvedCommit = await callMcp(writer, "commit_import", {
+      ...commitArgs,
+      approvalReceipt,
+    });
+    assert.equal(approvedCommit.isError, false, JSON.stringify(approvedCommit));
+    assert.equal(approvedCommit.structuredContent.audit.summary.approval.approvedBy, owner.userId);
+    assert.deepEqual(
+      (await callMcp(writer, "commit_import", { ...commitArgs, approvalReceipt }))
+        .structuredContent,
+      approvedCommit.structuredContent,
+    );
+    assert.equal(await currentDescription(), change.data.program.description);
+    const noOpPreview = (await callMcp(writer, "preview_import", { document: change }))
+      .structuredContent;
+    assert.equal(noOpPreview.approvalRequired, false);
+    const noOpCommit = await callMcp(writer, "commit_import", {
+      document: change,
+      previewToken: noOpPreview.previewToken,
+    });
+    assert.equal(noOpCommit.structuredContent.rows.unchanged, true);
+    expectMcpError(await callMcp(writer, "commit_import", { document: change }), 400);
+
+    const laterChange = structuredClone(change);
+    laterChange.data.program.objective = "A later MCP change";
+    const laterPreview = (await callMcp(writer, "preview_import", { document: laterChange }))
+      .structuredContent;
+    const laterArgs = { document: laterChange, previewToken: laterPreview.previewToken };
+    const laterApproval = await domainRequest(owner.client, "imports/approve", laterArgs);
+    await admin.collection("paideuo_program_schedules").update(schedule.id, {
+      source_revision: "new-schedule-revision",
+    });
+    expectMcpError(await callMcp(writer, "commit_import", { ...laterArgs, ...laterApproval }), 409);
+    assert.equal(
+      (await admin.collection("paideuo_programs").getOne(createdProgram.id)).objective,
+      change.data.program.objective,
+    );
+
+    const draftProgramId = draftResult.structuredContent.rows[0].programId;
+    await admin.collection("paideuo_programs").update(draftProgramId, { status: "completed" });
+    const completedChange = {
+      schema: "paideuo",
+      version: 1,
+      kind: "program",
+      data: {
+        program: { externalId: draftArgs.externalId, name: "New name", status: "completed" },
+        blocks: [],
+      },
+    };
+    const completedPreview = (
+      await callMcp(writer, "preview_import", { document: completedChange })
+    ).structuredContent;
+    assert.equal(completedPreview.approvalRequired, true, JSON.stringify(completedPreview));
+    expectMcpError(
+      await callMcp(writer, "commit_import", {
+        document: completedChange,
+        previewToken: completedPreview.previewToken,
+      }),
+      409,
+    );
+    assert.equal(
+      (await admin.collection("paideuo_programs").getOne(draftProgramId)).name,
+      draftArgs.name,
+    );
+
+    const entry = { date: "2026-10-14", recovery: { sleepHours: 7 } };
+    const checkInConflict = expectMcpError(
+      await callMcp(writer, "submit_check_ins", {
+        entries: [entry, entry],
+      }),
+      409,
+    );
+    assert.equal(checkInConflict.rolledBack, true);
+    assert.ok(checkInConflict.rows.every(({ code }) => code === "duplicate_target"));
+    const mcpCheckIns = () =>
+      admin.collection("paideuo_daily_recovery").getFullList({
+        filter: admin.filter("owner = {:owner} && date = {:date}", {
+          owner: owner.userId,
+          date: entry.date,
+        }),
+      });
+    assert.equal((await mcpCheckIns()).length, 0);
+    const checkInArgs = { entries: [entry], operationId: "mcp-check-in-1" };
+    const checkInResult = await callMcp(writer, "submit_check_ins", checkInArgs);
+    assert.equal(checkInResult.structuredContent.created, 1);
+    assert.deepEqual(
+      (await callMcp(writer, "submit_check_ins", checkInArgs)).structuredContent,
+      checkInResult.structuredContent,
+    );
+    assert.equal((await mcpCheckIns()).length, 1);
+
+    const workoutArgs = {
+      data: { ...replacementDocument.data, notes: "MCP workout result" },
+      operationId: "mcp-workout-1",
+      replaceExistingCompletion: true,
+    };
+    const workoutResult = await callMcp(writer, "record_workout", workoutArgs);
+    assert.equal(workoutResult.structuredContent.updated, 1, JSON.stringify(workoutResult));
+    assert.deepEqual(
+      (await callMcp(writer, "record_workout", workoutArgs)).structuredContent,
+      workoutResult.structuredContent,
+    );
+    assert.equal(
+      (await admin.collection("paideuo_session_completions").getOne(rewrittenCompletion.id)).notes,
+      workoutArgs.data.notes,
+    );
   } finally {
     if (server.exitCode === null) await stopServer(server);
     fs.rmSync(tempRoot, { recursive: true, force: true });
