@@ -1,3 +1,4 @@
+/* oxlint-disable import/no-commonjs */
 const assert = require("node:assert/strict");
 const fs = require("node:fs");
 const Module = require("node:module");
@@ -12,6 +13,8 @@ sourceModule._compile(fs.readFileSync(filename, "utf8"), filename);
 const { ImportValidationError, normalize } = sourceModule.exports;
 
 const envelope = (kind, data) => ({ schema: "paideuo", version: 1, kind, data });
+const sample = (name) =>
+  JSON.parse(fs.readFileSync(path.join(__dirname, "..", "..", "docs", "examples", name), "utf8"));
 
 const program = () =>
   envelope("program", {
@@ -72,7 +75,22 @@ test("normalizes a versioned hierarchical program without mutating input", () =>
   assert.equal(normalized.data.program.description, "");
   assert.equal(normalized.data.program.status, null);
   assert.equal(normalized.data.blocks[0].weeks[0].weekType, "normal");
-  assert.equal(normalized.data.blocks[0].weeks[0].prescriptions[0].workout.components[0].targets.intensity.scale, "RPE");
+  assert.equal(
+    normalized.data.blocks[0].weeks[0].prescriptions[0].workout.components[0].targets.intensity
+      .scale,
+    "RPE",
+  );
+});
+
+test("normalizes every published sample", () => {
+  for (const name of [
+    "import-v1-program.json",
+    "import-v1-workout-results.json",
+    "import-v1-daily-check-ins.json",
+    "import-v1-heart-rate.json",
+  ]) {
+    assert.equal(normalize(sample(name)).version, 1);
+  }
 });
 
 test("rejects stale object shapes and unknown nested keys", () => {
@@ -165,4 +183,8 @@ test("normalizes heart-rate metadata and rejects invalid recording bounds", () =
 
   valid.data.endedAt = valid.data.startedAt;
   assert.throws(() => normalize(valid), /end must be after recording start/);
+
+  valid.data.startedAt = "2026-02-30T17:00:00Z";
+  valid.data.endedAt = "2026-03-01T17:00:00Z";
+  assert.throws(() => normalize(valid), /recording start/);
 });

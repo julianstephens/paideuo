@@ -82,11 +82,7 @@ const finite = (value, label, minimum, maximum, nullable = false) => {
 };
 
 const civilDate = (value, label) => {
-  if (
-    typeof value !== "string" ||
-    !/^\d{4}-\d{2}-\d{2}$/.test(value) ||
-    value.startsWith("0000")
-  ) {
+  if (typeof value !== "string" || !/^\d{4}-\d{2}-\d{2}$/.test(value) || value.startsWith("0000")) {
     fail(`Enter a valid ${label}.`);
   }
   const parsed = new Date(`${value}T00:00:00Z`);
@@ -97,15 +93,23 @@ const civilDate = (value, label) => {
 };
 
 const timestamp = (value, label) => {
-  if (
-    typeof value !== "string" ||
-    !/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{1,9})?(?:Z|[+-]\d{2}:\d{2})$/.test(
+  if (typeof value !== "string") fail(`Enter a valid ${label}.`);
+  const match =
+    /^(\d{4}-\d{2}-\d{2})T(\d{2}):(\d{2}):(\d{2})(?:\.\d{1,9})?(?:Z|[+-](\d{2}):(\d{2}))$/.exec(
       value,
-    ) ||
-    !Number.isFinite(Date.parse(value))
+    );
+  if (
+    !match ||
+    Number(match[2]) > 23 ||
+    Number(match[3]) > 59 ||
+    Number(match[4]) > 59 ||
+    Number(match[5] ?? 0) > 23 ||
+    Number(match[6] ?? 0) > 59
   ) {
     fail(`Enter a valid ${label}.`);
   }
+  civilDate(match[1], label);
+  if (!Number.isFinite(Date.parse(value))) fail(`Enter a valid ${label}.`);
   return value;
 };
 
@@ -151,16 +155,7 @@ const targets = (value, label) => {
   if (value == null) return null;
   const fields = object(
     value,
-    [
-      "sets",
-      "reps",
-      "load",
-      "intensity",
-      "grade",
-      "angle_degrees",
-      "work_seconds",
-      "rest_seconds",
-    ],
+    ["sets", "reps", "load", "intensity", "grade", "angle_degrees", "work_seconds", "rest_seconds"],
     [],
     label,
   );
@@ -190,16 +185,13 @@ const targets = (value, label) => {
     const grade = object(fields.grade, ["min", "max"], [], `${label} grade`);
     if (!Object.keys(grade).length) fail(`${label} grade must contain min or max.`);
     normalized.grade = {};
-    if (has(grade, "min")) normalized.grade.min = text(grade.min, `${label} minimum grade`, 64, true);
-    if (has(grade, "max")) normalized.grade.max = text(grade.max, `${label} maximum grade`, 64, true);
+    if (has(grade, "min"))
+      normalized.grade.min = text(grade.min, `${label} minimum grade`, 64, true);
+    if (has(grade, "max"))
+      normalized.grade.max = text(grade.max, `${label} maximum grade`, 64, true);
   }
   if (has(fields, "angle_degrees")) {
-    normalized.angle_degrees = finite(
-      fields.angle_degrees,
-      `${label} angle`,
-      0,
-      Number.MAX_VALUE,
-    );
+    normalized.angle_degrees = finite(fields.angle_degrees, `${label} angle`, 0, Number.MAX_VALUE);
   }
   if (has(fields, "work_seconds")) {
     normalized.work_seconds = whole(fields.work_seconds, `${label} work duration`);
@@ -212,12 +204,7 @@ const targets = (value, label) => {
 
 const component = (value, index) => {
   const label = `component ${index + 1}`;
-  const fields = object(
-    value,
-    ["name", "instructions", "durationMin", "targets"],
-    ["name"],
-    label,
-  );
+  const fields = object(value, ["name", "instructions", "durationMin", "targets"], ["name"], label);
   return {
     name: text(fields.name, `${label} name`, 200, true),
     instructions: text(fields.instructions ?? "", `${label} instructions`, 10000),
@@ -282,16 +269,7 @@ const normalizeProgram = (value, context) => {
     (rawBlock, blockIndex) => {
       const block = object(
         rawBlock,
-        [
-          "id",
-          "externalId",
-          "name",
-          "objective",
-          "position",
-          "durationWeeks",
-          "slots",
-          "weeks",
-        ],
+        ["id", "externalId", "name", "objective", "position", "durationWeeks", "slots", "weeks"],
         ["externalId", "name", "position", "durationWeeks", "slots", "weeks"],
         `block ${blockIndex + 1}`,
       );
@@ -321,21 +299,19 @@ const normalizeProgram = (value, context) => {
           ["externalId", "position", "weekType", "prescriptions"],
           `week ${weekIndex + 1}`,
         );
-        const prescriptions = list(
-          week.prescriptions,
-          limits.slots,
-          "week prescriptions",
-        ).map((rawPrescription, prescriptionIndex) => {
-          const item = object(
-            rawPrescription,
-            ["slotExternalId", "workout"],
-            ["slotExternalId", "workout"],
-            `week prescription ${prescriptionIndex + 1}`,
-          );
-          const ref = externalId(item.slotExternalId, "prescription slot external ID");
-          if (!slotIds.has(ref)) fail(`Prescription references unknown slot "${ref}".`);
-          return { slotExternalId: ref, workout: prescription(item.workout, prescriptionIndex) };
-        });
+        const prescriptions = list(week.prescriptions, limits.slots, "week prescriptions").map(
+          (rawPrescription, prescriptionIndex) => {
+            const item = object(
+              rawPrescription,
+              ["slotExternalId", "workout"],
+              ["slotExternalId", "workout"],
+              `week prescription ${prescriptionIndex + 1}`,
+            );
+            const ref = externalId(item.slotExternalId, "prescription slot external ID");
+            if (!slotIds.has(ref)) fail(`Prescription references unknown slot "${ref}".`);
+            return { slotExternalId: ref, workout: prescription(item.workout, prescriptionIndex) };
+          },
+        );
         unique(prescriptions, (item) => item.slotExternalId, "week prescriptions");
         return {
           id: authorize(week.id, "program-week", "week id", context),
@@ -399,63 +375,64 @@ const normalizeWorkoutResults = (value, context) => {
     ["sourceWorkoutKey", "completedDate", "components"],
     "workout component result data",
   );
-  const components = list(
-    data.components,
-    limits.resultComponents,
-    "result components",
-  ).map((value, index) => {
-    const label = `result component ${index + 1}`;
-    const item = object(
-      value,
-      [
-        "key",
-        "plannedPosition",
-        "name",
-        "completed",
-        "actualDurationMin",
-        "setsCompleted",
-        "repsCompleted",
-        "actualLoad",
-        "rpe",
-        "notes",
-      ],
-      ["key", "plannedPosition", "name", "completed"],
-      label,
-    );
-    const load =
-      item.actualLoad == null
-        ? null
-        : object(item.actualLoad, ["value", "unit"], ["value", "unit"], `${label} actual load`);
-    return {
-      key: externalId(item.key, `${label} key`),
-      plannedPosition: whole(item.plannedPosition, `${label} planned position`, 1),
-      name: text(item.name, `${label} name`, 200, true),
-      completed: typeof item.completed === "boolean" ? item.completed : fail(`${label} completion is invalid.`),
-      actualDurationMin: whole(
-        item.actualDurationMin,
-        `${label} actual duration`,
-        0,
-        Number.MAX_SAFE_INTEGER,
-        true,
-      ),
-      setsCompleted: whole(
-        item.setsCompleted,
-        `${label} completed sets`,
-        0,
-        Number.MAX_SAFE_INTEGER,
-        true,
-      ),
-      repsCompleted: optionalText(item.repsCompleted, `${label} completed reps`, 200),
-      actualLoad: load
-        ? {
-            value: finite(load.value, `${label} load value`, 0, Number.MAX_VALUE),
-            unit: text(load.unit, `${label} load unit`, 32, true),
-          }
-        : null,
-      rpe: finite(item.rpe, `${label} RPE`, 1, 10, true),
-      notes: text(item.notes ?? "", `${label} notes`, 10000),
-    };
-  });
+  const components = list(data.components, limits.resultComponents, "result components").map(
+    (value, index) => {
+      const label = `result component ${index + 1}`;
+      const item = object(
+        value,
+        [
+          "key",
+          "plannedPosition",
+          "name",
+          "completed",
+          "actualDurationMin",
+          "setsCompleted",
+          "repsCompleted",
+          "actualLoad",
+          "rpe",
+          "notes",
+        ],
+        ["key", "plannedPosition", "name", "completed"],
+        label,
+      );
+      const load =
+        item.actualLoad == null
+          ? null
+          : object(item.actualLoad, ["value", "unit"], ["value", "unit"], `${label} actual load`);
+      return {
+        key: externalId(item.key, `${label} key`),
+        plannedPosition: whole(item.plannedPosition, `${label} planned position`, 1),
+        name: text(item.name, `${label} name`, 200, true),
+        completed:
+          typeof item.completed === "boolean"
+            ? item.completed
+            : fail(`${label} completion is invalid.`),
+        actualDurationMin: whole(
+          item.actualDurationMin,
+          `${label} actual duration`,
+          0,
+          Number.MAX_SAFE_INTEGER,
+          true,
+        ),
+        setsCompleted: whole(
+          item.setsCompleted,
+          `${label} completed sets`,
+          0,
+          Number.MAX_SAFE_INTEGER,
+          true,
+        ),
+        repsCompleted: optionalText(item.repsCompleted, `${label} completed reps`, 200),
+        actualLoad: load
+          ? {
+              value: finite(load.value, `${label} load value`, 0, Number.MAX_VALUE),
+              unit: text(load.unit, `${label} load unit`, 32, true),
+            }
+          : null,
+        rpe: finite(item.rpe, `${label} RPE`, 1, 10, true),
+        notes: text(item.notes ?? "", `${label} notes`, 10000),
+      };
+    },
+  );
   unique(components, (item) => item.key, "result components");
   unique(components, (item) => item.plannedPosition, "result components");
   return {
@@ -502,12 +479,7 @@ const normalizeDailyCheckIns = (value) => {
       );
       const nutrition = object(
         entry.nutrition ?? {},
-        [
-          "nutritionAdequacy",
-          "trainingFueling",
-          "proteinGrams",
-          "nutritionNotes",
-        ],
+        ["nutritionAdequacy", "trainingFueling", "proteinGrams", "nutritionNotes"],
         [],
         `${label} nutrition`,
       );
@@ -541,13 +513,7 @@ const normalizeDailyCheckIns = (value) => {
             "training fueling",
             true,
           ),
-          proteinGrams: finite(
-            nutrition.proteinGrams,
-            "protein intake",
-            0,
-            Number.MAX_VALUE,
-            true,
-          ),
+          proteinGrams: finite(nutrition.proteinGrams, "protein intake", 0, Number.MAX_VALUE, true),
           nutritionNotes: text(nutrition.nutritionNotes ?? "", "nutrition notes", 10000),
         },
       };
@@ -584,12 +550,7 @@ const normalizeHeartRateRecording = (value, context) => {
     [],
     "heart-rate device",
   );
-  const algorithm = object(
-    data.algorithm ?? {},
-    ["name", "version"],
-    [],
-    "heart-rate algorithm",
-  );
+  const algorithm = object(data.algorithm ?? {}, ["name", "version"], [], "heart-rate algorithm");
   const startedAt = timestamp(data.startedAt, "recording start");
   const endedAt = timestamp(data.endedAt, "recording end");
   if (Date.parse(endedAt) <= Date.parse(startedAt)) {
@@ -620,13 +581,7 @@ const normalizeHeartRateRecording = (value, context) => {
       Number.MAX_VALUE,
       true,
     ),
-    sampleCount: whole(
-      data.sampleCount,
-      "sample count",
-      0,
-      Number.MAX_SAFE_INTEGER,
-      true,
-    ),
+    sampleCount: whole(data.sampleCount, "sample count", 0, Number.MAX_SAFE_INTEGER, true),
     units: choice(data.units, ["bpm"], "heart-rate units"),
     algorithm: {
       name: optionalText(algorithm.name, "algorithm name", 200),
