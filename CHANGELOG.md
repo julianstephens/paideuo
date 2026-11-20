@@ -1,3 +1,7 @@
+## v0.4.0
+
+- Add ability to batch import training components
+
 ## v0.3.0
 
 - Add ability to edit and delete scheduled workouts

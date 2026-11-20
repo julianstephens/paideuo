@@ -1,6 +1,6 @@
 {
   "name": "paideuo",
-  "version": "0.3.0",
+  "version": "0.4.0",
   "private": true,
   "type": "module",
   "scripts": {
@@ -9,6 +9,7 @@
     "lint": "oxlint",
     "typecheck": "tsc --noEmit",
     "build": "pnpm run typecheck && vite build",
+    "test": "node --test backend/pb_hooks/*.test.cjs",
     "fmt": "oxfmt",
     "fmt:check": "oxfmt --check",
     "seed:program": "node --env-file-if-exists=.env scripts/seed-program.mjs"

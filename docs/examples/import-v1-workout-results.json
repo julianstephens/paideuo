@@ -1,0 +1,26 @@
+{
+  "schema": "paideuo",
+  "version": 1,
+  "kind": "workout-component-results",
+  "data": {
+    "sourceWorkoutKey": "foundation-program/foundation-base/foundation-base-week-1/foundation-base-climbing",
+    "completedDate": "2026-11-20",
+    "actualDurationMin": 58,
+    "sessionRpe": 6,
+    "notes": "",
+    "components": [
+      {
+        "key": "warm-up",
+        "plannedPosition": 1,
+        "name": "Warm-up",
+        "completed": true,
+        "actualDurationMin": 10,
+        "setsCompleted": null,
+        "repsCompleted": null,
+        "actualLoad": null,
+        "rpe": 3,
+        "notes": ""
+      }
+    ]
+  }
+}

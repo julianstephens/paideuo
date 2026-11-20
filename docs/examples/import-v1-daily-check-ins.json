@@ -1,0 +1,27 @@
+{
+  "schema": "paideuo",
+  "version": 1,
+  "kind": "daily-check-ins",
+  "data": {
+    "entries": [
+      {
+        "date": "2026-11-20",
+        "recovery": {
+          "sleepHours": 8,
+          "sleepQuality": 4,
+          "fatigue": 2,
+          "soreness": 2,
+          "readiness": 4,
+          "restingHeartRate": 52,
+          "notes": ""
+        },
+        "nutrition": {
+          "nutritionAdequacy": "adequate",
+          "trainingFueling": "adequate",
+          "proteinGrams": 110,
+          "nutritionNotes": ""
+        }
+      }
+    ]
+  }
+}
