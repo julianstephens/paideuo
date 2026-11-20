@@ -204,6 +204,56 @@ status without allowing failures to make committed rows ambiguous.
 Historical completed-workout replacement remains blocked unless the import request explicitly asks
 for replacement and the service credential was issued with destructive-history authorization.
 
+## Stable domain HTTP endpoints
+
+The domain endpoints use the same v1 validation, authorization, and transactional ingestion
+service as preview and commit. Send the domain payload directly or in a `data` object.
+
+- `POST /api/paideuo/v1/programs` creates or reconciles a program from `program` and `blocks`.
+  Supply complete v1 values for each submitted program, block, slot, week, and prescription.
+  Omitted optional fields on submitted records take their schema defaults. An omitted program
+  status retains the current status on update and defaults to draft on creation. Records outside
+  the submitted hierarchy are retained. The response counts the program as one row and supplies
+  `programId` and `scheduleSynchronization` on that row. Changes anywhere in an existing hierarchy
+  count as a program update.
+- `POST /api/paideuo/v1/workouts/results/batch` accepts `{ "results": [...] }`.
+  Each result is a complete completion and component list. Replacement requires
+  `replaceExistingCompletion: true` and a service credential with destructive-history authorization.
+  A batch cannot repeat a source workout key or resolve multiple results to the same session.
+- `POST /api/paideuo/v1/check-ins/upsert` accepts `{ "entries": [...] }`. Each date may appear once.
+  Omitted fields and groups retain their stored values. Explicit `null` clears a field to its v1
+  default (null for optional measurements and empty text for notes). A null group clears all
+  fields in that group.
+- `POST /api/paideuo/v1/heart-rate/recordings/attach` accepts one complete recording. Omitted
+  optional fields take their schema defaults. The recording is identified by its external ID
+  when supplied, with the existing source workout key fallback for recordings without one.
+
+For service credentials, use the corresponding `/api/paideuo/v1/service/...` routes. Human routes
+require an authenticated user. Service routes require `imports:commit` plus the corresponding
+`programs:write`, `workouts:write`, `metrics:write`, or `recordings:write` scope.
+
+Supply a top-level `operationId` to make retries replay the original successful response. IDs are
+shared across ingestion endpoints for each owner. Reusing an ID for different content or another
+endpoint domain returns `409`. Object property order is ignored, while array order and the
+difference between omission and explicit null are significant. Send the same payload and ID on
+retry. The server generates an ID when omitted. Successful batches persist the payload hash,
+original response, provenance, and audit summary in the same transaction as the writes. Top-level
+provenance fields have the same meaning as on the generic commit endpoint.
+
+Successful batches return `200` with `created`, `updated`, `skipped`, and `error` counts,
+`rows`, `operationId`, `payloadHash`, and `audit`. Rows have a domain key and a status of
+`created`, `updated`, or `skipped`.
+
+A failed batch rolls back all writes and creates no receipt. Item validation failures return
+`400`, conflicts and persistence failures return `409`, and unexpected planning failures return
+`500`. Batch failures include `rolledBack: true`, zero success counts, and rows identifying
+the input index and key when available. `error` counts only rows marked `error` or `conflict`.
+Other rows are marked `not_committed`. The `code` field identifies the failure, including
+`invalid_item`, `item_conflict`, `duplicate_target`, `planning_failed`, `write_failed`, and
+`transaction_failed`. A program validation conflict can identify individual hierarchy records.
+Invalid request envelopes, authentication and scope failures, and operation ID collisions use
+the standard PocketBase error response.
+
 ## Versioning policy
 
 - `schema` and `version` are mandatory, and unknown major versions are rejected.

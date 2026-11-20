@@ -5,7 +5,9 @@ const previewLifetimeMs = 15 * 60 * 1000;
 const maxRequestBytes = 2 * 1024 * 1024;
 const rateLimitWindowMs = 60 * 1000;
 const rateLimit = 60;
-const issuedPreviews = new Map();
+// PocketBase can serve preview and commit in separate JavaScript runtimes.
+const previewStorePrefix = "paideuo:import-preview:";
+const previewKey = (token) => previewStorePrefix + token;
 const requestWindows = new Map();
 
 const requestBytes = (value) => {
@@ -635,17 +637,30 @@ const preparePreview = (db, owner, document, options = {}) => {
 const preview = (db, owner, document, options = {}) => {
   const prepared = preparePreview(db, owner, document, options);
   const now = Date.now();
-  for (const [token, issued] of issuedPreviews) {
-    if (issued.expiresAt <= now) issuedPreviews.delete(token);
+  const store = db.store();
+  const active = [];
+  for (const key of store.keys()) {
+    if (!key.startsWith(previewStorePrefix)) continue;
+    const issued = JSON.parse(store.get(key) ?? "null");
+    if (!issued) continue;
+    if (issued.expiresAt <= now) store.remove(key);
+    else active.push({ key, expiresAt: issued.expiresAt });
   }
-  if (issuedPreviews.size >= 10000) issuedPreviews.delete(issuedPreviews.keys().next().value);
-  const token = $security.sha256(`${$security.randomString(32)}:${owner}:${prepared.fingerprint}`);
-  issuedPreviews.set(token, {
-    consumed: false,
-    expiresAt: now + previewLifetimeMs,
-    fingerprint: prepared.fingerprint,
-    owner,
-  });
+  if (active.length >= 10000) {
+    active.sort((a, b) => a.expiresAt - b.expiresAt);
+    store.remove(active[0].key);
+  }
+  const fingerprint = $security.sha256(prepared.fingerprint);
+  const token = $security.sha256(`${$security.randomString(32)}:${owner}:${fingerprint}`);
+  store.set(
+    previewKey(token),
+    JSON.stringify({
+      consumed: false,
+      expiresAt: now + previewLifetimeMs,
+      fingerprint,
+      owner,
+    }),
+  );
   return {
     document: prepared.document,
     result: {
@@ -660,7 +675,7 @@ const preview = (db, owner, document, options = {}) => {
 };
 
 const verifyPreview = (db, owner, document, token, options = {}) => {
-  const issued = issuedPreviews.get(token);
+  const issued = JSON.parse(db.store().get(previewKey(token)) ?? "null");
   if (!issued || issued.owner !== owner || issued.expiresAt <= Date.now()) {
     throw new ApiError(409, "This import preview is stale or has been tampered with.");
   }
@@ -668,7 +683,7 @@ const verifyPreview = (db, owner, document, token, options = {}) => {
     throw new ApiError(409, "This import preview has already been committed.");
   }
   const prepared = preparePreview(db, owner, document, options);
-  if (issued.fingerprint !== prepared.fingerprint) {
+  if (issued.fingerprint !== $security.sha256(prepared.fingerprint)) {
     throw new ApiError(409, "This import preview is stale or has been tampered with.");
   }
   if (prepared.plan.items.some((item) => item.status === "conflict")) {
@@ -951,7 +966,10 @@ const commitWorkout = (db, owner, data, plan, options = {}) => {
   let completion = first(db, "paideuo_session_completions", "session = {:session}", {
     session: state.sessionId,
   });
-  if (completion && plan.items[0].status === "update" && !allowHistoryRewrite) {
+  if (
+    completion &&
+    (plan.items[0].status !== "update" || !allowHistoryRewrite || !data.replaceExistingCompletion)
+  ) {
     throw new ApiError(
       409,
       "Historical completed workout replacement is not supported by the import endpoint.",
@@ -1102,7 +1120,7 @@ const auditSummary = (kind, rows, plan) => {
       else if (item.status === "skip") summary.skipped += 1;
       else if (item.status === "conflict") summary.conflict += 1;
     }
-    if (rows && !rows.unchanged && rows.programId) summary.programs = 1;
+    if (rows?.programId && !rows.unchanged && rows.status !== "skipped") summary.programs = 1;
     return summary;
   }
   for (const row of Array.isArray(rows) ? rows : []) {
@@ -1149,9 +1167,53 @@ const verifyOperationPayload = (existing, hash) => {
   throw new ApiError(409, "This operationId is already used with different import payload.");
 };
 
-const commit = (event, principal = credentials.importPrincipalFromEvent(event)) => {
+const writePrepared = (db, owner, { document, plan }, principal) => {
+  if (document.kind === "program") return commitProgram(db, owner, document, plan);
+  if (document.kind === "daily-check-ins") return commitDaily(db, owner, document.data, plan);
+  if (document.kind === "workout-component-results")
+    return commitWorkout(db, owner, document.data, plan, principal);
+  return commitHeartRate(db, owner, document.data, plan);
+};
+
+const ingest = (app, principal, kind, body, hashPayload, execute, generatedId = null) => {
+  credentials.ensureScopes(principal, credentials.requiredScopesForImportKind(kind));
   const owner = principal.ownerId;
-  boundedRequest(owner, event);
+  const operationId = operationIdValue(body) ?? generatedId;
+  const provenance = provenanceValue(body, owner, principal);
+  const hash = hashPayload();
+  const replay = (db) =>
+    operationId ? verifyOperationPayload(findOperation(db, owner, operationId), hash) : null;
+  const existing = replay(app);
+  if (existing) return existing.result;
+
+  let response;
+  try {
+    app.runInTransaction((tx) => {
+      const existing = replay(tx);
+      if (existing) {
+        response = existing.result;
+        return;
+      }
+      const completed = execute(tx, owner);
+      response = completed.response;
+      if (operationId) {
+        const audit = { operationId, payloadHash: hash, provenance, summary: completed.summary };
+        response = { ...response, operationId, payloadHash: hash, audit };
+        saveOperation(tx, owner, operationId, hash, provenance, completed.summary, response);
+      }
+    });
+  } catch (error) {
+    if (operationId && /UNIQUE constraint failed/i.test(error?.message ?? "")) {
+      const existing = replay(app);
+      if (existing) return existing.result;
+    }
+    throw error;
+  }
+  return response;
+};
+
+const commit = (event, principal = credentials.importPrincipalFromEvent(event)) => {
+  boundedRequest(principal.ownerId, event);
   const body = event.requestInfo().body;
   if (
     !body ||
@@ -1180,75 +1242,33 @@ const commit = (event, principal = credentials.importPrincipalFromEvent(event)) 
   if (!body.document || typeof body.document !== "object" || Array.isArray(body.document)) {
     throw new BadRequestError("Enter a valid import commit.");
   }
-  credentials.ensureScopes(principal, credentials.requiredScopesForImportKind(body.document.kind));
-  const operationId = operationIdValue(body);
-  const provenance = provenanceValue(body, owner, principal);
-  const preparedHash = payloadHash(body.document);
-  let result;
   let issued;
-  let response = null;
-
-  if (operationId) {
-    const existing = verifyOperationPayload(
-      findOperation(event.app, owner, operationId),
-      preparedHash,
-    );
-    if (existing) {
-      return event.json(200, existing.result);
-    }
-  }
-
   try {
-    event.app.runInTransaction((tx) => {
-      if (operationId) {
-        const existing = verifyOperationPayload(
-          findOperation(tx, owner, operationId),
-          preparedHash,
+    const response = ingest(
+      event.app,
+      principal,
+      body.document.kind,
+      body,
+      () => payloadHash(body.document),
+      (tx, owner) => {
+        const prepared = verifyPreview(tx, owner, body.document, body.previewToken, principal);
+        issued = prepared.issued;
+        tx.store().set(
+          previewKey(body.previewToken),
+          JSON.stringify({ ...issued, consumed: true }),
         );
-        if (existing) {
-          response = existing.result;
-          return;
-        }
-      }
-      const verified = verifyPreview(tx, owner, body.document, body.previewToken, principal);
-      issued = verified.issued;
-      issued.consumed = true;
-      const document = verified.document;
-      if (document.kind === "program") result = commitProgram(tx, owner, document, verified.plan);
-      else if (document.kind === "daily-check-ins")
-        result = commitDaily(tx, owner, document.data, verified.plan);
-      else if (document.kind === "workout-component-results")
-        result = commitWorkout(tx, owner, document.data, verified.plan, principal);
-      else result = commitHeartRate(tx, owner, document.data, verified.plan);
-      if (operationId) {
-        const summary = auditSummary(document.kind, result, verified.plan);
-        const auditResponse = {
-          committed: true,
-          rows: result,
-          operationId,
-          payloadHash: preparedHash,
-          audit: { operationId, payloadHash: preparedHash, provenance, summary },
+        const rows = writePrepared(tx, owner, prepared, principal);
+        return {
+          response: { committed: true, rows },
+          summary: auditSummary(prepared.document.kind, rows, prepared.plan),
         };
-        response = auditResponse;
-        saveOperation(tx, owner, operationId, preparedHash, provenance, summary, auditResponse);
-      }
-    });
+      },
+    );
+    return event.json(200, response);
   } catch (error) {
-    if (issued) issued.consumed = false;
-    if (
-      operationId &&
-      typeof error?.message === "string" &&
-      /UNIQUE constraint failed/i.test(error.message)
-    ) {
-      const existing = verifyOperationPayload(
-        findOperation(event.app, owner, operationId),
-        preparedHash,
-      );
-      if (existing) return event.json(200, existing.result);
-    }
+    if (issued) event.app.store().set(previewKey(body.previewToken), JSON.stringify(issued));
     throw error;
   }
-  return event.json(200, response ?? { committed: true, rows: result });
 };
 
 const previewRequest = (event, principal = credentials.importPrincipalFromEvent(event)) => {
@@ -1261,5 +1281,250 @@ const previewRequest = (event, principal = credentials.importPrincipalFromEvent(
   return event.json(200, preview(event.app, owner, event.requestInfo().body, principal).result);
 };
 
+const metadataKeys = [
+  "operationId",
+  "provenance",
+  "sourceLabel",
+  "actor",
+  "credential",
+  "credentialRef",
+  "importedAt",
+  "importTimestamp",
+];
+
+const domainDocuments = (kind, body) => {
+  const payload =
+    body.document ??
+    (Array.isArray(body)
+      ? body
+      : Object.fromEntries(Object.entries(body).filter(([key]) => !metadataKeys.includes(key))));
+  const data = payload?.data ?? payload;
+  const wrap = (data) => ({ schema: "paideuo", version: 1, kind, data });
+  if (kind === "daily-check-ins") {
+    const entries = data?.entries ?? (Array.isArray(data) ? data : [data]);
+    if (!Array.isArray(entries) || entries.length > schema.limits.dailyEntries) {
+      throw new BadRequestError(`Provide at most ${schema.limits.dailyEntries} check-in entries.`);
+    }
+    return entries.map((entry) => wrap({ entries: [entry] }));
+  }
+  if (kind === "workout-component-results") {
+    const results = data?.results ?? (Array.isArray(data) ? data : [data]);
+    if (!Array.isArray(results)) throw new BadRequestError("Workout results must be an array.");
+    return results.map(wrap);
+  }
+  return [wrap(data)];
+};
+
+// Hash the submitted fields before merging with stored values. Presence matters for check-ins.
+const orderedPayload = (value) => {
+  if (Array.isArray(value)) return value.map(orderedPayload);
+  if (!value || typeof value !== "object") return value;
+  return Object.fromEntries(
+    Object.keys(value)
+      .sort()
+      .map((key) => [key, orderedPayload(value[key])]),
+  );
+};
+
+const mergeCheckIn = (db, owner, entry, submitted) => {
+  const existing = first(db, "paideuo_daily_recovery", "owner = {:owner} && date = {:date}", {
+    owner,
+    date: entry.date,
+  });
+  if (!existing) return;
+  for (const [group, field] of [
+    ["recovery", "measurements"],
+    ["nutrition", "nutrition"],
+  ]) {
+    if (submitted[group] === null) continue;
+    const previous = JSON.parse(existing.getString(field) || "null") ?? {};
+    for (const key of Object.keys(entry[group])) {
+      if (Object.prototype.hasOwnProperty.call(submitted[group] ?? {}, key)) continue;
+      if (Object.prototype.hasOwnProperty.call(previous, key)) entry[group][key] = previous[key];
+    }
+  }
+};
+
+const prepareDomain = (db, owner, document, principal) => {
+  const normalized = normalize(db, owner, document);
+  if (document.kind === "daily-check-ins") {
+    mergeCheckIn(db, owner, normalized.data.entries[0], document.data.entries[0]);
+  }
+  return { document: normalized, plan: plan(db, owner, normalized, principal) };
+};
+
+const countDomainRows = (rows) => {
+  const counts = { created: 0, updated: 0, skipped: 0, error: 0 };
+  for (const { status } of rows) {
+    if (status === "conflict" || status === "error") counts.error += 1;
+    else if (status !== "not_committed") counts[status] += 1;
+  }
+  return counts;
+};
+
+const domainResult = (db, owner, kind, prepared, principal) => {
+  const result = writePrepared(db, owner, prepared, principal);
+  const items = prepared.plan.items;
+  if (kind === "program") {
+    const status =
+      items[0].status === "create" ? "created" : result.unchanged ? "skipped" : "updated";
+    return {
+      key: items[0].key,
+      status,
+      programId: result.programId,
+      scheduleSynchronization: result.scheduleSynchronization,
+    };
+  }
+  const row = result[0];
+  if (row.status === "committed") {
+    row.status = items[0].status === "create" ? "created" : "updated";
+  }
+  return { ...row, key: items[0].key };
+};
+
+const domainKey = (document) => {
+  const data = document.data;
+  const key =
+    data?.program?.externalId ??
+    data?.entries?.[0]?.date ??
+    data?.externalId ??
+    data?.sourceWorkoutKey;
+  return typeof key === "string" && key.length <= schema.limits.externalId ? key : null;
+};
+
+const prepareDomainRows = (tx, owner, documents, kind, principal) => {
+  const seen = new Map();
+  const staged = [];
+  const failures = [];
+  for (const [index, document] of documents.entries()) {
+    let prepared;
+    try {
+      prepared = prepareDomain(tx, owner, document, principal);
+    } catch (error) {
+      if (!(error instanceof BadRequestError) && !(error instanceof schema.ImportValidationError)) {
+        failures.push({
+          index,
+          key: domainKey(document),
+          status: "error",
+          code: "planning_failed",
+        });
+        continue;
+      }
+      failures.push({
+        index,
+        key: domainKey(document),
+        status: "error",
+        code: "invalid_item",
+        error: error.message,
+      });
+      continue;
+    }
+    const rows = prepared.plan.items.map((item) => ({
+      index,
+      key: item.key,
+      type: item.type,
+      status: "not_committed",
+    }));
+    for (const [itemIndex, item] of prepared.plan.items.entries()) {
+      if (item.status === "conflict") {
+        Object.assign(rows[itemIndex], {
+          status: "conflict",
+          code: "item_conflict",
+          error: item.error ?? "Import item conflicts.",
+        });
+      }
+    }
+    staged.push({ prepared, rows });
+    const identities = [];
+    if (kind === "workout-component-results") {
+      identities.push(`source:${prepared.document.data.sourceWorkoutKey}`);
+      const session = prepared.plan.state[0]?.sessionId;
+      if (session) identities.push(`session:${session}`);
+    } else if (kind === "daily-check-ins") {
+      identities.push(rows[0].key);
+    }
+    for (const identity of identities) {
+      const previous = seen.get(identity);
+      if (previous) {
+        for (const row of [previous, rows[0]]) {
+          if (row.status === "conflict") continue;
+          Object.assign(row, {
+            status: "conflict",
+            code: "duplicate_target",
+            error: "Duplicate target in batch.",
+          });
+        }
+      } else {
+        seen.set(identity, rows[0]);
+      }
+    }
+  }
+  return {
+    staged,
+    rows: [...failures, ...staged.flatMap((item) => item.rows)].sort((a, b) => a.index - b.index),
+  };
+};
+
+const domainBatch = (event, kind, principal = credentials.importPrincipalFromEvent(event)) => {
+  boundedRequest(principal.ownerId, event);
+  const body = event.requestInfo().body;
+  if (!body || typeof body !== "object") throw new BadRequestError("Enter a valid domain batch.");
+  let documents;
+  let plannedRows;
+  let failureStatus;
+  let activeRow;
+  try {
+    const response = ingest(
+      event.app,
+      principal,
+      kind,
+      body,
+      () => {
+        documents = domainDocuments(kind, body);
+        return $security.sha256(JSON.stringify([kind, orderedPayload(documents)]));
+      },
+      (tx, owner) => {
+        const { staged, rows } = prepareDomainRows(tx, owner, documents, kind, principal);
+        plannedRows = rows;
+        if (rows.some((row) => row.status !== "not_committed")) {
+          failureStatus = rows.some((row) => row.code === "planning_failed")
+            ? 500
+            : rows.some((row) => row.code === "invalid_item")
+              ? 400
+              : 409;
+          throw new ApiError(failureStatus, "One or more domain batch items failed.");
+        }
+        const results = [];
+        for (const item of staged) {
+          activeRow = item.rows[0];
+          results.push(domainResult(tx, owner, kind, item.prepared, principal));
+        }
+        activeRow = null;
+        const counts = countDomainRows(results);
+        const summary =
+          kind === "program"
+            ? auditSummary(kind, results[0], staged[0].prepared.plan)
+            : auditSummary(kind, results);
+        return { response: { ...counts, rows: results }, summary };
+      },
+      `server:${$security.randomString(32)}`,
+    );
+    return event.json(200, response);
+  } catch (error) {
+    if (!plannedRows) throw error;
+    if (!failureStatus) {
+      failureStatus = 409;
+      const failure = { status: "error", code: activeRow ? "write_failed" : "transaction_failed" };
+      if (activeRow) Object.assign(activeRow, failure);
+      else plannedRows.push(failure);
+    }
+    return event.json(failureStatus, {
+      ...countDomainRows(plannedRows),
+      rolledBack: true,
+      rows: plannedRows,
+    });
+  }
+};
+
 // oxlint-disable-next-line import/no-commonjs
-module.exports = { commit, preview: previewRequest };
+module.exports = { commit, preview: previewRequest, domainBatch };

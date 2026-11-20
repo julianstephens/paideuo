@@ -166,6 +166,9 @@ const commitImport = (client, document, previewToken, metadata = {}) =>
     body: { document, previewToken, ...metadata },
   });
 
+const domainRequest = (client, path, body) =>
+  client.send("/api/paideuo/v1/" + path, { method: "POST", body });
+
 const serviceImportRequest = async (baseUrl, path, token, body) => {
   const response = await fetch(`${baseUrl}${path}`, {
     method: "POST",
@@ -220,6 +223,12 @@ test("PocketBase-backed hierarchy imports are transactional and schedule-safe", 
   }
   event.next();
 }, "paideuo_training_components");
+onRecordValidate((event) => {
+  if (event.record.getString("measurements").includes("__INJECT_NESTED_FAIL__")) {
+    throw new BadRequestError("Injected check-in write failure.");
+  }
+  event.next();
+}, "paideuo_daily_recovery");
 `,
     "utf8",
   );
@@ -265,6 +274,37 @@ test("PocketBase-backed hierarchy imports are transactional and schedule-safe", 
     const intruder = await createAuthedUser(admin, baseUrl, "intruder");
 
     const initialDocument = makeProgramDocument();
+    const domainProgramBody = { ...initialDocument.data, operationId: "domain-program" };
+    const domainProgram = await domainRequest(intruder.client, "programs", domainProgramBody);
+    assert.equal(domainProgram.created, 1);
+    assert.equal(domainProgram.rows[0].status, "created");
+    const domainProgramRecord = await admin
+      .collection("paideuo_programs")
+      .getOne(domainProgram.rows[0].programId);
+    assert.equal(domainProgramRecord.owner, intruder.userId);
+    assert.equal(domainProgramRecord.external_id, initialDocument.data.program.externalId);
+
+    const conflictingProgram = structuredClone(initialDocument.data);
+    conflictingProgram.program.description = "Must roll back";
+    conflictingProgram.blocks = [conflictingProgram.blocks[0]];
+    conflictingProgram.blocks[0].position = 2;
+    await assert.rejects(
+      () => domainRequest(intruder.client, "programs", conflictingProgram),
+      (error) => {
+        assert.equal(error.status, 409);
+        assert.equal(error.response.rolledBack, true);
+        assert.equal(error.response.error, 1);
+        const conflict = error.response.rows.find((row) => row.status === "conflict");
+        assert.equal(conflict.key, conflictingProgram.blocks[0].externalId);
+        assert.ok(error.response.rows.some((row) => row.status === "not_committed"));
+        return true;
+      },
+    );
+    assert.equal(
+      (await admin.collection("paideuo_programs").getOne(domainProgramRecord.id)).description,
+      domainProgramRecord.description,
+    );
+
     const initialPreview = await previewImport(owner.client, initialDocument);
     assert.equal(initialPreview.conflicting, 0);
     const initialCommit = await commitImport(
@@ -286,6 +326,22 @@ test("PocketBase-backed hierarchy imports are transactional and schedule-safe", 
     await stopServer(server);
     server = startServer();
     await waitForHealth(baseUrl, 20000, server);
+    assert.deepEqual(
+      await domainRequest(intruder.client, "programs", domainProgramBody),
+      domainProgram,
+    );
+    await assert.rejects(
+      () =>
+        domainRequest(intruder.client, "programs", {
+          ...domainProgramBody,
+          program: { ...domainProgramBody.program, name: "Different name" },
+        }),
+      (error) => error?.status === 409,
+    );
+    assert.equal(
+      (await admin.collection("paideuo_programs").getOne(domainProgramRecord.id)).updated,
+      domainProgramRecord.updated,
+    );
     const restartedReplay = await commitImport(
       owner.client,
       initialDocument,
@@ -439,6 +495,28 @@ test("PocketBase-backed hierarchy imports are transactional and schedule-safe", 
         components: [],
       },
     };
+    const workoutPath = "workouts/results/batch";
+    for (const sourceWorkoutKey of [workoutDocument.data.sourceWorkoutKey, "alias-key"]) {
+      await assert.rejects(
+        () =>
+          domainRequest(owner.client, workoutPath, {
+            results: [workoutDocument.data, { ...workoutDocument.data, sourceWorkoutKey }],
+          }),
+        (error) => {
+          assert.equal(error.status, 409);
+          assert.equal(error.response.rolledBack, true);
+          assert.equal(error.response.error, 2);
+          assert.ok(error.response.rows.every((row) => row.code === "duplicate_target"));
+          return true;
+        },
+      );
+    }
+    assert.deepEqual(
+      await admin.collection("paideuo_session_completions").getFullList({
+        filter: admin.filter("session = {:id}", { id: scheduledSession.id }),
+      }),
+      [],
+    );
     const workoutPreview = await previewImport(owner.client, workoutDocument);
     const workoutCommit = await commitImport(
       owner.client,
@@ -451,6 +529,35 @@ test("PocketBase-backed hierarchy imports are transactional and schedule-safe", 
     const replacementDocument = structuredClone(workoutDocument);
     replacementDocument.data.notes = "Replacement";
     replacementDocument.data.replaceExistingCompletion = true;
+    await assert.rejects(
+      () => domainRequest(owner.client, workoutPath, { results: [replacementDocument.data] }),
+      (error) => error?.status === 409 && error.response.rows[0].status === "conflict",
+    );
+
+    const hrBody = {
+      sourceSessionId: scheduledSession.id,
+      sourceWorkoutKey: workoutDocument.data.sourceWorkoutKey,
+      externalId: "sensor-domain-test",
+      startedAt: "2026-11-20T21:00:00Z",
+      endedAt: "2026-11-20T21:58:00Z",
+      timezone: "UTC",
+      units: "bpm",
+      operationId: "domain-recording",
+    };
+    const hrPath = "heart-rate/recordings/attach";
+    const [hr, concurrentHr] = await Promise.all([
+      domainRequest(owner.client, hrPath, hrBody),
+      domainRequest(owner.client, hrPath, hrBody),
+    ]);
+    assert.equal(hr.created, 1);
+    assert.deepEqual(concurrentHr, hr);
+    assert.deepEqual(await domainRequest(owner.client, hrPath, hrBody), hr);
+    const recordings = await admin.collection("paideuo_heart_rate_recordings").getFullList({
+      filter: admin.filter("owner = {:id}", { id: owner.userId }),
+    });
+    assert.equal(recordings.length, 1);
+    assert.equal(recordings[0].session, scheduledSession.id);
+
     const replacementPreview = await previewImport(owner.client, replacementDocument);
     assert.equal(replacementPreview.conflicting, 1);
     await assert.rejects(
@@ -485,6 +592,97 @@ test("PocketBase-backed hierarchy imports are transactional and schedule-safe", 
       () => servicePreviewImport(baseUrl, scopeDenied.plaintextToken, concurrentDocument),
       (error) => error?.status === 403 && /metrics:write/.test(error?.response?.message ?? ""),
     );
+
+    const checkInPath = "check-ins/upsert";
+    await assert.rejects(
+      () =>
+        serviceImportRequest(
+          baseUrl,
+          "/api/paideuo/v1/service/" + checkInPath,
+          scopeDenied.plaintextToken,
+          concurrentDocument.data,
+        ),
+      (error) => error?.status === 403 && /metrics:write/.test(error?.response?.message ?? ""),
+    );
+
+    const checkInDate = "2026-10-11";
+    const submitCheckIn = (entry, operationId) =>
+      domainRequest(owner.client, checkInPath, {
+        entries: [{ date: checkInDate, ...entry }],
+        operationId,
+      });
+    await submitCheckIn(
+      {
+        recovery: { sleepHours: 8, notes: "Keep notes" },
+        nutrition: { proteinGrams: 140 },
+      },
+      "domain-check-in-create",
+    );
+    const checkInPatch = { recovery: { sleepHours: null } };
+    const patched = await submitCheckIn(checkInPatch, "domain-check-in-patch");
+    assert.equal(patched.updated, 1);
+    const [checkIn] = await admin.collection("paideuo_daily_recovery").getFullList({
+      filter: admin.filter("owner = {:owner} && date = {:date}", {
+        owner: owner.userId,
+        date: checkInDate,
+      }),
+    });
+    assert.equal(checkIn.measurements.sleepHours, null);
+    assert.equal(checkIn.measurements.notes, "Keep notes");
+    assert.equal(checkIn.nutrition.proteinGrams, 140);
+    await assert.rejects(
+      () => submitCheckIn({ recovery: {} }, "domain-check-in-patch"),
+      (error) => error?.status === 409,
+    );
+    await submitCheckIn({ recovery: { sleepHours: 6 } }, "domain-check-in-later");
+    assert.deepEqual(await submitCheckIn(checkInPatch, "domain-check-in-patch"), patched);
+    assert.equal(
+      (await admin.collection("paideuo_daily_recovery").getOne(checkIn.id)).measurements.sleepHours,
+      6,
+    );
+
+    const rollbackDate = "2026-10-12";
+    const validEntry = { date: rollbackDate, recovery: { sleepHours: 7 } };
+    for (const [badEntry, status, code] of [
+      [{ date: "2026-10-13", recovery: { sleepHours: 50 } }, 400, "invalid_item"],
+      [{ date: "2026-10-13", recovery: { notes: injectedFailureMarker } }, 409, "write_failed"],
+    ]) {
+      const operationId = "domain-check-in-" + code;
+      await assert.rejects(
+        () =>
+          domainRequest(owner.client, checkInPath, {
+            entries: [validEntry, badEntry],
+            operationId,
+          }),
+        (error) => {
+          assert.equal(error.status, status);
+          assert.equal(error.response.rolledBack, true);
+          assert.equal(error.response.error, 1);
+          assert.equal(error.response.created, 0);
+          assert.equal(error.response.rows[0].status, "not_committed");
+          assert.equal(error.response.rows[1].key, badEntry.date);
+          assert.equal(error.response.rows[1].code, code);
+          assert.doesNotMatch(JSON.stringify(error.response), /Injected check-in write failure/);
+          return true;
+        },
+      );
+      assert.deepEqual(
+        await admin.collection("paideuo_import_operations").getFullList({
+          filter: admin.filter("operation_id = {:id}", { id: operationId }),
+        }),
+        [],
+      );
+      assert.deepEqual(
+        await admin.collection("paideuo_daily_recovery").getFullList({
+          filter: admin.filter("owner = {:owner} && (date = {:first} || date = {:second})", {
+            owner: owner.userId,
+            first: rollbackDate,
+            second: badEntry.date,
+          }),
+        }),
+        [],
+      );
+    }
 
     const tokenCredential = await owner.client.send("/api/paideuo/v1/service-credentials/issue", {
       method: "POST",
@@ -537,6 +735,22 @@ test("PocketBase-backed hierarchy imports are transactional and schedule-safe", 
       .collection("paideuo_session_completions")
       .getFirstListItem(`session = "${scheduledSession.id}"`);
     assert.equal(rewrittenCompletion.notes, "Replacement");
+
+    const domainReplacement = await serviceImportRequest(
+      baseUrl,
+      "/api/paideuo/v1/service/" + workoutPath,
+      tokenCredential.plaintextToken,
+      {
+        operationId: "domain-workout-replacement",
+        results: [{ ...replacementDocument.data, notes: "Domain replacement" }],
+      },
+    );
+    assert.equal(domainReplacement.updated, 1);
+    assert.equal(domainReplacement.audit.summary.updated, 1);
+    assert.equal(
+      (await admin.collection("paideuo_session_completions").getOne(rewrittenCompletion.id)).notes,
+      "Domain replacement",
+    );
 
     const intruderProgram = await admin.collection("paideuo_programs").create({
       owner: intruder.userId,
