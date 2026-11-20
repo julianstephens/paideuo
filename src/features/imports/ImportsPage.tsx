@@ -17,11 +17,20 @@ import {
 import { useEffect, useMemo, useRef, useState } from "react";
 import { Disclosure, FormField, Notice, PageHeader, Panel } from "../../components/ui";
 import { errorMessage } from "../../lib/api/request";
-import { type ImportDocumentV1, type ImportItem, importsApi } from "./imports";
+import {
+  convertMarkdownToProgramDraft,
+  type ImportDocumentV1,
+  type ImportItem,
+  type ProgramDraftConversion,
+  importsApi,
+} from "./imports";
+import { MarkdownDraftReview } from "./MarkdownDraftReview";
 
 type CsvKind = "daily-check-ins" | "workout-component-results";
-type SourceKind = "json" | "csv";
+type SourceKind = "json" | "csv" | "markdown";
 type IssueLevel = "error" | "warning";
+
+const markdownFile = /\.(?:md|markdown)$/i;
 
 type RowIssue = {
   row: number;
@@ -662,6 +671,9 @@ export const ImportsPage = () => {
   const [operation, setOperation] = useState<"read" | "preview" | "commit" | null>(null);
   const [parseError, setParseError] = useState<string | null>(null);
   const [preview, setPreview] = useState<PreviewState | null>(null);
+  const [markdownDraft, setMarkdownDraft] = useState<ProgramDraftConversion | null>(null);
+  const [draftText, setDraftText] = useState("");
+  const draftHeading = useRef<HTMLHeadingElement>(null);
   const [confirmCommit, setConfirmCommit] = useState(false);
   const [commit, setCommit] = useState<CommitState | null>(null);
   const fileInput = useRef<HTMLInputElement>(null);
@@ -670,7 +682,12 @@ export const ImportsPage = () => {
 
   const firstCharacter = rawText.trimStart()[0];
   const sourceKind =
-    formatOverride ?? (firstCharacter === "{" || firstCharacter === "[" ? "json" : "csv");
+    formatOverride ??
+    (firstCharacter === "{" || firstCharacter === "["
+      ? "json"
+      : firstCharacter === "#" || markdownFile.test(fileName)
+        ? "markdown"
+        : "csv");
   const busy = operation !== null;
   const csv = useMemo(
     () => (sourceKind === "csv" ? parseCsv(rawText) : null),
@@ -690,6 +707,10 @@ export const ImportsPage = () => {
   );
 
   useEffect(() => {
+    if (markdownDraft) draftHeading.current?.focus();
+  }, [markdownDraft]);
+
+  useEffect(() => {
     if (preview) previewHeading.current?.focus();
   }, [preview]);
 
@@ -697,10 +718,16 @@ export const ImportsPage = () => {
     if (commit) resultHeading.current?.focus();
   }, [commit]);
 
-  const resetResults = () => {
+  const resetPreview = () => {
     setPreview(null);
     setCommit(null);
     setConfirmCommit(false);
+  };
+
+  const resetResults = () => {
+    resetPreview();
+    setMarkdownDraft(null);
+    setDraftText("");
   };
 
   const updateText = (text: string) => {
@@ -720,7 +747,13 @@ export const ImportsPage = () => {
       setColumnOverrides({});
       setFileName(file.name);
       setFormatOverride(
-        /\.csv$/i.test(file.name) ? "csv" : /\.json$/i.test(file.name) ? "json" : null,
+        /\.csv$/i.test(file.name)
+          ? "csv"
+          : /\.json$/i.test(file.name)
+            ? "json"
+            : markdownFile.test(file.name)
+              ? "markdown"
+              : null,
       );
     } catch {
       setParseError(`Could not read ${file.name}. Choose the file again or paste its contents.`);
@@ -730,10 +763,10 @@ export const ImportsPage = () => {
   };
 
   const toDocuments = (): MappedImport | { error: string } => {
-    if (sourceKind === "json") {
+    if (sourceKind === "json" || sourceKind === "markdown") {
       let document: ImportDocumentV1;
       try {
-        document = JSON.parse(rawText) as ImportDocumentV1;
+        document = JSON.parse(sourceKind === "markdown" ? draftText : rawText) as ImportDocumentV1;
       } catch {
         return { error: "This data is not valid JSON. Check the syntax and try again." };
       }
@@ -741,13 +774,16 @@ export const ImportsPage = () => {
         document?.schema !== "paideuo" ||
         document.version !== 1 ||
         typeof document.kind !== "string" ||
+        (sourceKind === "markdown" && document.kind !== "program") ||
         !document.data ||
         typeof document.data !== "object" ||
         Array.isArray(document.data)
       ) {
         return {
           error:
-            "Use a Paideuo JSON import with schema, version, kind, and data fields. See the examples above.",
+            sourceKind === "markdown"
+              ? "Use a Paideuo schema-v1 program document with a data object."
+              : "Use a Paideuo JSON import with schema, version, kind, and data fields. See the examples above.",
         };
       }
       return { documents: [document], rowIssues: [] };
@@ -759,10 +795,10 @@ export const ImportsPage = () => {
   };
 
   const previewImport = async () => {
-    if (busy || !rawText.trim()) return;
+    if (busy || !rawText.trim() || (sourceKind === "markdown" && !markdownDraft)) return;
     setOperation("preview");
     setParseError(null);
-    resetResults();
+    resetPreview();
     try {
       const mapped = toDocuments();
       if ("error" in mapped) {
@@ -876,7 +912,7 @@ export const ImportsPage = () => {
             Add import data
           </Heading>
           <Text color="fg.muted" fontSize="sm">
-            Choose a JSON or CSV file, or paste your data. Preview the changes before saving them.
+            Upload or paste JSON, CSV, or a Markdown training menu.
           </Text>
         </Stack>
 
@@ -890,7 +926,7 @@ export const ImportsPage = () => {
               type="file"
               hidden
               disabled={busy}
-              accept=".json,.csv,application/json,text/csv"
+              accept=".json,.csv,.md,.markdown,text/markdown,application/json,text/csv"
               onChange={(event) => {
                 const file = event.currentTarget.files?.[0];
                 event.currentTarget.value = "";
@@ -898,7 +934,7 @@ export const ImportsPage = () => {
               }}
             />
             <Text fontSize="sm" color="fg.muted" role="status">
-              {operation === "read" ? "Reading file…" : fileName || "JSON or CSV"}
+              {operation === "read" ? "Reading file…" : fileName || "JSON, CSV, or Markdown"}
             </Text>
             {(fileName || rawText) && (
               <Button
@@ -922,7 +958,7 @@ export const ImportsPage = () => {
                 rows={6}
                 fontFamily="mono"
                 spellCheck={false}
-                placeholder="Paste JSON or CSV here"
+                placeholder="Paste JSON, CSV, or Markdown here"
                 value={rawText}
                 disabled={busy}
                 onChange={(event) => {
@@ -957,6 +993,11 @@ export const ImportsPage = () => {
               CSV supports daily check-ins and workout results. Put column names on the first row
               and use YYYY-MM-DD dates. For workout results, use one row per workout component.
             </Text>
+            <Text color="fg.muted">
+              Markdown supports assisted program drafts. Use an H1 title, H2 block headings, H3 week
+              headings, and H4 or bulleted session names. The draft is never committed until
+              previewed and explicitly confirmed.
+            </Text>
           </Stack>
         </Disclosure>
 
@@ -975,6 +1016,7 @@ export const ImportsPage = () => {
                 >
                   <option value="json">JSON</option>
                   <option value="csv">CSV</option>
+                  <option value="markdown">Markdown</option>
                 </NativeSelect.Field>
                 <NativeSelect.Indicator />
               </NativeSelect.Root>
@@ -1030,18 +1072,56 @@ export const ImportsPage = () => {
           </Stack>
         )}
 
-        {parseError && <Notice role="alert">{parseError}</Notice>}
-        <Button
-          alignSelf="start"
-          colorPalette="teal"
-          onClick={() => void previewImport()}
-          loading={operation === "preview"}
-          loadingText="Validating…"
-          disabled={busy || !rawText.trim() || Boolean(csv?.rows.length && missingColumns.length)}
-        >
-          Preview changes
-        </Button>
+        {parseError && !markdownDraft && <Notice role="alert">{parseError}</Notice>}
+        {sourceKind === "markdown" ? (
+          <Button
+            alignSelf="start"
+            colorPalette="teal"
+            disabled={busy || !rawText.trim() || !!markdownDraft}
+            onClick={() => {
+              const draft = convertMarkdownToProgramDraft(rawText);
+              setMarkdownDraft(draft);
+              setDraftText(JSON.stringify(draft.document, null, 2));
+              setParseError(null);
+            }}
+          >
+            Create program draft
+          </Button>
+        ) : (
+          <Button
+            alignSelf="start"
+            colorPalette="teal"
+            onClick={() => void previewImport()}
+            loading={operation === "preview"}
+            loadingText="Validating…"
+            disabled={busy || !rawText.trim() || Boolean(csv?.rows.length && missingColumns.length)}
+          >
+            Preview changes
+          </Button>
+        )}
       </Panel>
+
+      {markdownDraft && (
+        <MarkdownDraftReview
+          draft={markdownDraft}
+          headingRef={draftHeading}
+          value={draftText}
+          error={parseError}
+          busy={busy}
+          validating={operation === "preview"}
+          saved={commit?.rows.some((row) => row.status === "committed") ?? false}
+          onEdit={(value) => {
+            setDraftText(value);
+            setParseError(null);
+            resetPreview();
+          }}
+          onReject={() => {
+            setParseError(null);
+            resetResults();
+          }}
+          onPreview={() => void previewImport()}
+        />
+      )}
 
       {preview && (
         <Panel as="section" gap="4">
