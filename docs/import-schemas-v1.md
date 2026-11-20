@@ -206,29 +206,53 @@ for replacement and the service credential was issued with destructive-history a
 
 ## Stable domain HTTP endpoints
 
-The domain endpoints are versioned convenience entry points over the same schema normalizers,
-preview planning, and commit services. They accept domain payloads directly rather than generic
-import envelopes and return batch counts:
+The domain endpoints use the same v1 validation, authorization, and transactional ingestion
+service as preview and commit. Send the domain payload directly or in a `data` object.
 
-```json
-{ "created": 1, "updated": 0, "skipped": 0, "error": 0, "rows": [] }
-```
-
-- `POST /api/paideuo/v1/programs` creates or reconciles a program (`data.program` and `data.blocks`,
-  or the payload's `program` and `blocks` directly).
-- `POST /api/paideuo/v1/workouts/results/batch` accepts `{ "results": [...] }` (or a result array).
-- `POST /api/paideuo/v1/check-ins/upsert` accepts `{ "entries": [...] }`; dates are keys.
-- `POST /api/paideuo/v1/heart-rate/recordings/attach` attaches one recording by domain data.
+- `POST /api/paideuo/v1/programs` creates or reconciles a program from `program` and `blocks`.
+  Supply complete v1 values for each submitted program, block, slot, week, and prescription.
+  Omitted optional fields on submitted records take their schema defaults. An omitted program
+  status retains the current status on update and defaults to draft on creation. Records outside
+  the submitted hierarchy are retained. The response counts the program as one row and supplies
+  `programId` and `scheduleSynchronization` on that row. Changes anywhere in an existing hierarchy
+  count as a program update.
+- `POST /api/paideuo/v1/workouts/results/batch` accepts `{ "results": [...] }`.
+  Each result is a complete completion and component list. Replacement requires
+  `replaceExistingCompletion: true` and a service credential with destructive-history authorization.
+  A batch cannot repeat a source workout key or resolve multiple results to the same session.
+- `POST /api/paideuo/v1/check-ins/upsert` accepts `{ "entries": [...] }`. Each date may appear once.
+  Omitted fields and groups retain their stored values. Explicit `null` clears a field to its v1
+  default (null for optional measurements and empty text for notes). A null group clears all
+  fields in that group.
+- `POST /api/paideuo/v1/heart-rate/recordings/attach` accepts one complete recording. Omitted
+  optional fields take their schema defaults. The recording is identified by its external ID
+  when supplied, with the existing source workout key fallback for recordings without one.
 
 For service credentials, use the corresponding `/api/paideuo/v1/service/...` routes. Human routes
-use normal authenticated-user permissions. Service routes require `imports:commit` plus the domain
-scope: `programs:write`, `workouts:write`, `metrics:write`, or `recordings:write`.
+require an authenticated user. Service routes require `imports:commit` plus the corresponding
+`programs:write`, `workouts:write`, `metrics:write`, or `recordings:write` scope.
 
-Merge semantics for domain upserts: an omitted field is unchanged; an explicit JSON `null` clears
-that field where the collection and credential authorize it. Arrays and required identity fields
-still follow the v1 schema. Validation and conflict errors are returned as `400` or `409`,
-respectively, and conflicting batches make no writes. Retry with the same payload is safe; unchanged
-rows are reported as `skipped`.
+Supply a top-level `operationId` to make retries replay the original successful response. IDs are
+shared across ingestion endpoints for each owner. Reusing an ID for different content or another
+endpoint domain returns `409`. Object property order is ignored, while array order and the
+difference between omission and explicit null are significant. Send the same payload and ID on
+retry. The server generates an ID when omitted. Successful batches persist the payload hash,
+original response, provenance, and audit summary in the same transaction as the writes. Top-level
+provenance fields have the same meaning as on the generic commit endpoint.
+
+Successful batches return `200` with `created`, `updated`, `skipped`, and `error` counts,
+`rows`, `operationId`, `payloadHash`, and `audit`. Rows have a domain key and a status of
+`created`, `updated`, or `skipped`.
+
+A failed batch rolls back all writes and creates no receipt. Item validation failures return
+`400`, conflicts and persistence failures return `409`, and unexpected planning failures return
+`500`. Batch failures include `rolledBack: true`, zero success counts, and rows identifying
+the input index and key when available. `error` counts only rows marked `error` or `conflict`.
+Other rows are marked `not_committed`. The `code` field identifies the failure, including
+`invalid_item`, `item_conflict`, `duplicate_target`, `planning_failed`, `write_failed`, and
+`transaction_failed`. A program validation conflict can identify individual hierarchy records.
+Invalid request envelopes, authentication and scope failures, and operation ID collisions use
+the standard PocketBase error response.
 
 ## Versioning policy
 

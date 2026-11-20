@@ -103,7 +103,14 @@ const document = () => ({
 
 const database = () => {
   const state = { saves: 0, records: new Map(), operations: new Map() };
+  const cache = new Map();
   return {
+    store: () => ({
+      keys: () => cache.keys(),
+      get: (key) => cache.get(key),
+      set: (key, value) => cache.set(key, value),
+      remove: (key) => cache.delete(key),
+    }),
     state,
     findRecordsByFilter(collection, _filter, _sort, _limit, _offset, params) {
       if (collection === "paideuo_import_operations") {
