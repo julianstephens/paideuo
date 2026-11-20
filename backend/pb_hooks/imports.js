@@ -1258,10 +1258,7 @@ const previewRequest = (event, principal = credentials.importPrincipalFromEvent(
     principal,
     credentials.requiredScopesForImportKind(event.requestInfo().body?.kind),
   );
-  return event.json(
-    200,
-    preview(event.app, owner, event.requestInfo().body, principal).result,
-  );
+  return event.json(200, preview(event.app, owner, event.requestInfo().body, principal).result);
 };
 
 // oxlint-disable-next-line import/no-commonjs

@@ -244,14 +244,14 @@ test("PocketBase-backed hierarchy imports are transactional and schedule-safe", 
       { cwd: repoRoot, stdio: "pipe" },
     );
   const stopServer = async (processRef) => {
-      await new Promise((resolve) => {
-        if (processRef.exitCode !== null) {
-          resolve();
-          return;
-        }
-        processRef.once("exit", resolve);
-        processRef.kill("SIGTERM");
-      });
+    await new Promise((resolve) => {
+      if (processRef.exitCode !== null) {
+        resolve();
+        return;
+      }
+      processRef.once("exit", resolve);
+      processRef.kill("SIGTERM");
+    });
   };
   let server = startServer();
 
@@ -549,11 +549,7 @@ test("PocketBase-backed hierarchy imports are transactional and schedule-safe", 
     ownerBoundProgramDocument.data.program.id = intruderProgram.id;
     await assert.rejects(
       () =>
-        servicePreviewImport(
-          baseUrl,
-          tokenCredential.plaintextToken,
-          ownerBoundProgramDocument,
-        ),
+        servicePreviewImport(baseUrl, tokenCredential.plaintextToken, ownerBoundProgramDocument),
       (error) =>
         error?.status === 400 && /Unauthorized program id/.test(error?.response?.message ?? ""),
     );
@@ -576,10 +572,9 @@ test("PocketBase-backed hierarchy imports are transactional and schedule-safe", 
         scopes: ["imports:commit", "metrics:write"],
       },
     });
-    const expiredRecord = await admin.collection("paideuo_service_credentials").update(
-      expiredCredential.credential.id,
-      { expires_at: "2000-01-01T00:00:00.000Z" },
-    );
+    const expiredRecord = await admin
+      .collection("paideuo_service_credentials")
+      .update(expiredCredential.credential.id, { expires_at: "2000-01-01T00:00:00.000Z" });
     assert.equal(expiredRecord.expires_at, "2000-01-01T00:00:00.000Z");
     await assert.rejects(
       () => servicePreviewImport(baseUrl, expiredCredential.plaintextToken, concurrentDocument),

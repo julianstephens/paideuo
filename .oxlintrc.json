@@ -9,7 +9,7 @@
     "import/no-commonjs": "error",
     "paideuo/arrow-functions": "error"
   },
-  "ignorePatterns": ["dist/", "backend/pb_data/"],
+  "ignorePatterns": ["dist/", "backend/pb_data/", "scripts/"],
   "jsPlugins": ["./oxlint-plugin.js"],
   "overrides": [
     {

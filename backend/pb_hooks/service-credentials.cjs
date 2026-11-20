@@ -127,18 +127,20 @@ const revokeCredential = (event) => {
   const owner = requireOwner(event);
   const id = event.request.pathValue("id");
   if (!id) throw new BadRequestError("Enter a valid credential id.");
-  const record = first(
-    event.app,
-    "paideuo_service_credentials",
-    "id = {:id} && owner = {:owner}",
-    { id, owner },
-  );
+  const record = first(event.app, "paideuo_service_credentials", "id = {:id} && owner = {:owner}", {
+    id,
+    owner,
+  });
   if (!record) throw new NotFoundError("Service credential not found.");
   if (!record.getString("revoked_at")) {
     record.set("revoked_at", new Date().toISOString());
     event.app.save(record);
   }
-  return event.json(200, { revoked: true, id: record.id, revokedAt: record.getString("revoked_at") });
+  return event.json(200, {
+    revoked: true,
+    id: record.id,
+    revokedAt: record.getString("revoked_at"),
+  });
 };
 
 const requiredScopesForImportKind = (kind) => {
@@ -166,12 +168,9 @@ const authenticateServiceCredential = (app, plaintextToken) => {
     throw new UnauthorizedError("Provide a valid service credential bearer token.");
   }
   const tokenHash = $security.sha256(plaintextToken);
-  const record = first(
-    app,
-    "paideuo_service_credentials",
-    "token_hash = {:tokenHash}",
-    { tokenHash },
-  );
+  const record = first(app, "paideuo_service_credentials", "token_hash = {:tokenHash}", {
+    tokenHash,
+  });
   if (!record) throw new UnauthorizedError("Service credential is invalid.");
   if (record.getString("revoked_at")) {
     throw new UnauthorizedError("Service credential has been revoked.");
