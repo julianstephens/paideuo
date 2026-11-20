@@ -14,13 +14,19 @@ import {
   Text,
   Textarea,
 } from "@chakra-ui/react";
-import { useEffect, useMemo, useRef, useState } from "react";
+import { Fragment, useEffect, useMemo, useRef, useState } from "react";
 import { Disclosure, FormField, Notice, PageHeader, Panel } from "../../components/ui";
 import { errorMessage } from "../../lib/api/request";
-import { type ImportDocumentV1, type ImportItem, importsApi } from "./imports";
+import {
+  convertMarkdownToProgramDraft,
+  type ImportDocumentV1,
+  type ImportItem,
+  type ProgramDraftConversion,
+  importsApi,
+} from "./imports";
 
 type CsvKind = "daily-check-ins" | "workout-component-results";
-type SourceKind = "json" | "csv";
+type SourceKind = "json" | "csv" | "markdown";
 type IssueLevel = "error" | "warning";
 
 type RowIssue = {
@@ -662,6 +668,7 @@ export const ImportsPage = () => {
   const [operation, setOperation] = useState<"read" | "preview" | "commit" | null>(null);
   const [parseError, setParseError] = useState<string | null>(null);
   const [preview, setPreview] = useState<PreviewState | null>(null);
+  const [markdownDraft, setMarkdownDraft] = useState<ProgramDraftConversion | null>(null);
   const [confirmCommit, setConfirmCommit] = useState(false);
   const [commit, setCommit] = useState<CommitState | null>(null);
   const fileInput = useRef<HTMLInputElement>(null);
@@ -670,7 +677,12 @@ export const ImportsPage = () => {
 
   const firstCharacter = rawText.trimStart()[0];
   const sourceKind =
-    formatOverride ?? (firstCharacter === "{" || firstCharacter === "[" ? "json" : "csv");
+    formatOverride ??
+    (firstCharacter === "{" || firstCharacter === "["
+      ? "json"
+      : firstCharacter === "#" || fileName.match(/\.md$/i)
+        ? "markdown"
+        : "csv");
   const busy = operation !== null;
   const csv = useMemo(
     () => (sourceKind === "csv" ? parseCsv(rawText) : null),
@@ -699,6 +711,7 @@ export const ImportsPage = () => {
 
   const resetResults = () => {
     setPreview(null);
+    setMarkdownDraft(null);
     setCommit(null);
     setConfirmCommit(false);
   };
@@ -720,7 +733,13 @@ export const ImportsPage = () => {
       setColumnOverrides({});
       setFileName(file.name);
       setFormatOverride(
-        /\.csv$/i.test(file.name) ? "csv" : /\.json$/i.test(file.name) ? "json" : null,
+        /\.csv$/i.test(file.name)
+          ? "csv"
+          : /\.json$/i.test(file.name)
+            ? "json"
+            : /\.md$/i.test(file.name)
+              ? "markdown"
+              : null,
       );
     } catch {
       setParseError(`Could not read ${file.name}. Choose the file again or paste its contents.`);
@@ -730,6 +749,22 @@ export const ImportsPage = () => {
   };
 
   const toDocuments = (): MappedImport | { error: string } => {
+    if (sourceKind === "markdown") {
+      const conversion = convertMarkdownToProgramDraft(rawText);
+      setMarkdownDraft(conversion);
+      const errors = conversion.issues.filter((issue) => issue.level === "error");
+      if (errors.length) {
+        return {
+          documents: [],
+          rowIssues: errors.map((issue) => ({
+            row: 1,
+            level: "error",
+            message: `${issue.field}: ${issue.message}`,
+          })),
+        };
+      }
+      return { documents: [conversion.document], rowIssues: [] };
+    }
     if (sourceKind === "json") {
       let document: ImportDocumentV1;
       try {
@@ -890,7 +925,7 @@ export const ImportsPage = () => {
               type="file"
               hidden
               disabled={busy}
-              accept=".json,.csv,application/json,text/csv"
+              accept=".json,.csv,.md,.markdown,text/markdown,application/json,text/csv"
               onChange={(event) => {
                 const file = event.currentTarget.files?.[0];
                 event.currentTarget.value = "";
@@ -957,6 +992,11 @@ export const ImportsPage = () => {
               CSV supports daily check-ins and workout results. Put column names on the first row
               and use YYYY-MM-DD dates. For workout results, use one row per workout component.
             </Text>
+            <Text color="fg.muted">
+              Markdown supports assisted program drafts. Use an H1 title, H2 block headings, H3 week
+              headings, and H4 or bulleted session names. The draft is never committed until
+              previewed and explicitly confirmed.
+            </Text>
           </Stack>
         </Disclosure>
 
@@ -975,6 +1015,7 @@ export const ImportsPage = () => {
                 >
                   <option value="json">JSON</option>
                   <option value="csv">CSV</option>
+                  <option value="markdown">Markdown</option>
                 </NativeSelect.Field>
                 <NativeSelect.Indicator />
               </NativeSelect.Root>
@@ -1048,6 +1089,117 @@ export const ImportsPage = () => {
           <Heading as="h2" size="md" ref={previewHeading} tabIndex={-1}>
             Review changes
           </Heading>
+          {markdownDraft && (
+            <Stack gap="3" borderBottomWidth="1px" pb="4">
+              <Heading as="h3" size="sm">
+                Markdown program draft
+              </Heading>
+              {markdownDraft.issues.length > 0 && (
+                <Stack gap="2">
+                  {markdownDraft.issues.map((issue, index) => (
+                    <Notice
+                      key={`${issue.field}:${index}`}
+                      role={issue.level === "error" ? "alert" : "status"}
+                    >
+                      {issue.level === "error" ? "Missing" : "Inferred"} · {issue.field}:{" "}
+                      {issue.message}
+                    </Notice>
+                  ))}
+                </Stack>
+              )}
+              <Table.Root size="sm" variant="outline" aria-label="Markdown draft hierarchy">
+                <Table.Header>
+                  <Table.Row>
+                    <Table.ColumnHeader>Level</Table.ColumnHeader>
+                    <Table.ColumnHeader>Name / position</Table.ColumnHeader>
+                    <Table.ColumnHeader>Source</Table.ColumnHeader>
+                  </Table.Row>
+                </Table.Header>
+                <Table.Body>
+                  <Table.Row>
+                    <Table.Cell>Program</Table.Cell>
+                    <Table.Cell>
+                      {String(
+                        (markdownDraft.document.data as { program?: { name?: string } }).program
+                          ?.name || "Unsupplied",
+                      )}
+                    </Table.Cell>
+                    <Table.Cell>Markdown H1 / extracted or missing</Table.Cell>
+                  </Table.Row>
+                  {(
+                    markdownDraft.document.data as {
+                      blocks: {
+                        position: number;
+                        name: string;
+                        durationWeeks: number;
+                        slots: { label: string }[];
+                        weeks: { position: number; label: string }[];
+                      }[];
+                    }
+                  ).blocks.map((block, blockIndex) => (
+                    <Fragment key={`level-${blockIndex}`}>
+                      <Table.Row key={`block-${blockIndex}`}>
+                        <Table.Cell>Block {block.position ?? blockIndex + 1}</Table.Cell>
+                        <Table.Cell>
+                          {block.name} · {block.durationWeeks} weeks
+                        </Table.Cell>
+                        <Table.Cell>
+                          {markdownDraft.provenance.find(
+                            (item) => item.field === `blocks[${blockIndex}].name`,
+                          )?.state ?? "inferred"}
+                        </Table.Cell>
+                      </Table.Row>
+                      {block.weeks.map((week) => (
+                        <Table.Row key={`week-${blockIndex}-${week.position}`}>
+                          <Table.Cell>Week {week.position}</Table.Cell>
+                          <Table.Cell>{week.label || "Label unsupplied"}</Table.Cell>
+                          <Table.Cell>
+                            {markdownDraft.provenance.find(
+                              (item) =>
+                                item.field ===
+                                `blocks[${blockIndex}].weeks[${week.position - 1}].label`,
+                            )?.state ?? "inferred"}
+                          </Table.Cell>
+                        </Table.Row>
+                      ))}
+                      {block.slots.map((slot, slotIndex) => (
+                        <Table.Row key={`slot-${blockIndex}-${slotIndex}`}>
+                          <Table.Cell>Session / component slot</Table.Cell>
+                          <Table.Cell>{slot.label}</Table.Cell>
+                          <Table.Cell>extracted from Markdown</Table.Cell>
+                        </Table.Row>
+                      ))}
+                    </Fragment>
+                  ))}
+                </Table.Body>
+              </Table.Root>
+              <Disclosure label="View draft JSON and provenance">
+                <Textarea
+                  rows={12}
+                  readOnly
+                  fontFamily="mono"
+                  value={JSON.stringify(
+                    { document: markdownDraft.document, provenance: markdownDraft.provenance },
+                    null,
+                    2,
+                  )}
+                />
+              </Disclosure>
+              <Button
+                variant="outline"
+                colorPalette="red"
+                alignSelf="start"
+                disabled={busy}
+                onClick={() => {
+                  setMarkdownDraft(null);
+                  setPreview(null);
+                  setConfirmCommit(false);
+                }}
+              >
+                Reject draft · no writes
+              </Button>
+            </Stack>
+          )}
           {preview.previewItems.length > 0 && (
             <Flex gap="2" wrap="wrap">
               {Object.entries(previewLabels).map(([status, label]) => (
