@@ -211,7 +211,7 @@ const component = (value, index) => {
     label,
   );
   return {
-    key: externalId(fields.key ?? `component-${index + 1}`, `${label} key`),
+    ...(fields.key == null ? {} : { key: externalId(fields.key, `${label} key`) }),
     name: text(fields.name, `${label} name`, 200, true),
     instructions: text(fields.instructions ?? "", `${label} instructions`, 10000),
     durationMin: whole(fields.durationMin, `${label} duration`, 0, Number.MAX_SAFE_INTEGER, true),
@@ -240,7 +240,11 @@ const prescription = (value, index) => {
     limits.components,
     `${label} components`,
   ).map(component);
-  unique(normalizedComponents, (item) => item.key, `${label} component keys`);
+  unique(
+    normalizedComponents.map((item, index) => item.key ?? `component-${index + 1}`),
+    (key) => key,
+    `${label} component keys`,
+  );
   return {
     title: text(fields.title, `${label} title`, 200, true),
     sessionType: choice(

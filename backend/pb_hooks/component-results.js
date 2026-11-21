@@ -50,7 +50,7 @@ const parseResults = (values, snapshot) => {
     ]),
   );
   const seen = new Set();
-  return values.map((value, index) => {
+  const results = values.map((value, index) => {
     const label = `Component result ${index + 1}`;
     if (!value || typeof value !== "object" || Array.isArray(value)) {
       throw new BadRequestError(`Enter a valid ${label.toLowerCase()}.`);
@@ -89,18 +89,25 @@ const parseResults = (values, snapshot) => {
       notes: notes.trim(),
     };
   });
+  return results.sort(
+    (left, right) =>
+      components.get(left.componentKey).position - components.get(right.componentKey).position,
+  );
 };
 
-const resultData = (record) => ({
-  componentKey: record.getString("component_key"),
-  load: JSON.parse(record.getString("actual_load") || "null"),
-  sets: JSON.parse(record.getString("sets_completed") || "null"),
-  reps: record.getString("reps_completed") || null,
-  rpe: JSON.parse(record.getString("rpe") || "null"),
-  durationMin: JSON.parse(record.getString("actual_duration_min") || "null"),
-  rounds: JSON.parse(record.getString("rounds") || "null"),
-  notes: record.getString("notes"),
-});
+const resultData = (record) => {
+  const load = JSON.parse(record.getString("actual_load") || "null");
+  return {
+    componentKey: record.getString("component_key"),
+    load: load === null ? null : { value: load.value, unit: load.unit },
+    sets: JSON.parse(record.getString("sets_completed") || "null"),
+    reps: record.getString("reps_completed") || null,
+    rpe: JSON.parse(record.getString("rpe") || "null"),
+    durationMin: JSON.parse(record.getString("actual_duration_min") || "null"),
+    rounds: JSON.parse(record.getString("rounds") || "null"),
+    notes: record.getString("notes"),
+  };
+};
 
 // oxlint-disable-next-line import/no-commonjs
 module.exports = { parseResults, resultData };

@@ -68,9 +68,11 @@ A `program` import has:
 
 Program status is `draft`, `active`, `completed`, or `archived`. Workout session type, intensity,
 component, target, duration, and RPE constraints match the existing program and workout editors.
-Components are limited to 100 per workout. Optional component `key` values must be unique within
-the prescription and become the stable keys used by later workout-result imports. Omitting a key
-uses `component-N`, where `N` is the one-based component position.
+Components are limited to 100 per workout. Component `key` values are unique within a
+prescription and are used by later workout-result imports. Every component in an existing
+prescription needs an explicit key. Use each retained component's current key when inserting,
+removing, or reordering components. For a new prescription, an omitted key defaults to
+`component-N`, where `N` is the one-based component position.
 
 See [the program sample](examples/import-v1-program.json).
 

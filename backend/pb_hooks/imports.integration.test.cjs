@@ -51,7 +51,7 @@ const waitForHealth = async (baseUrl, timeoutMs, processRef) => {
   throw new Error(`Timed out waiting for PocketBase healthcheck. ${String(lastError ?? "")}`);
 };
 
-const pocketbaseCreateOrUpdateSuperuser = (dataDir, hooksDir, email, password) => {
+const pocketbaseCreateOrUpdateSuperuser = (dataDir, hooksDir, email, password, migrations) => {
   const result = spawnSync(
     "pocketbase",
     [
@@ -60,7 +60,7 @@ const pocketbaseCreateOrUpdateSuperuser = (dataDir, hooksDir, email, password) =
       email,
       password,
       `--dir=${dataDir}`,
-      `--migrationsDir=${migrationsDir}`,
+      `--migrationsDir=${migrations}`,
       `--hooksDir=${hooksDir}`,
     ],
     { cwd: repoRoot, encoding: "utf8" },
@@ -110,7 +110,13 @@ const makeProgramDocument = () => ({
                   plannedDurationMin: 60,
                   plannedIntensity: "moderate",
                   components: [
-                    { name: "Warm-up", instructions: "", durationMin: 10, targets: null },
+                    {
+                      key: "warm-up",
+                      name: "Warm-up",
+                      instructions: "",
+                      durationMin: 10,
+                      targets: null,
+                    },
                   ],
                 },
               },
@@ -145,7 +151,13 @@ const makeProgramDocument = () => ({
                   plannedDurationMin: 45,
                   plannedIntensity: "hard",
                   components: [
-                    { name: "Main set", instructions: "", durationMin: 20, targets: null },
+                    {
+                      key: "main-set",
+                      name: "Main set",
+                      instructions: "",
+                      durationMin: 20,
+                      targets: null,
+                    },
                   ],
                 },
               },
@@ -206,15 +218,22 @@ const createAuthedUser = async (admin, baseUrl, suffix) => {
   return { client, userId: client.authStore.record.id };
 };
 
-test("PocketBase-backed hierarchy imports are transactional and schedule-safe", async () => {
-  const fixtureSample = JSON.parse(fs.readFileSync(sampleProgramPath, "utf8"));
-  assert.equal(fixtureSample.kind, "program");
-
+const withPocketBase = async (run, { beforeComponentMigration = false } = {}) => {
   const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "paideuo-imports-it-"));
   const dataDir = path.join(tempRoot, "pb_data");
   const hooksDir = path.join(tempRoot, "pb_hooks");
   fs.mkdirSync(dataDir, { recursive: true });
   fs.cpSync(baseHooksDir, hooksDir, { recursive: true });
+  const componentMigration = "1760000021_component_workout_results.js";
+  const migrations = beforeComponentMigration
+    ? path.join(tempRoot, "pb_migrations")
+    : migrationsDir;
+  if (beforeComponentMigration) {
+    fs.cpSync(migrationsDir, migrations, {
+      recursive: true,
+      filter: (source) => path.basename(source) !== componentMigration,
+    });
+  }
   fs.writeFileSync(
     path.join(hooksDir, injectedFailureHookName),
     `onRecordValidate((event) => {
@@ -229,13 +248,25 @@ onRecordValidate((event) => {
   }
   event.next();
 }, "paideuo_daily_recovery");
+onRecordValidate((event) => {
+  if (event.record.getString("notes") === "${injectedFailureMarker}") {
+    throw new BadRequestError("Injected component result write failure.");
+  }
+  event.next();
+}, "paideuo_workout_component_results");
 `,
     "utf8",
   );
 
   const superuserEmail = "imports-it-superuser@example.com";
   const superuserPassword = "Password123!";
-  pocketbaseCreateOrUpdateSuperuser(dataDir, hooksDir, superuserEmail, superuserPassword);
+  pocketbaseCreateOrUpdateSuperuser(
+    dataDir,
+    hooksDir,
+    superuserEmail,
+    superuserPassword,
+    migrations,
+  );
 
   const port = await freePort();
   const baseUrl = `http://127.0.0.1:${port}`;
@@ -246,7 +277,7 @@ onRecordValidate((event) => {
         "serve",
         `--http=127.0.0.1:${port}`,
         `--dir=${dataDir}`,
-        `--migrationsDir=${migrationsDir}`,
+        `--migrationsDir=${migrations}`,
         `--hooksDir=${hooksDir}`,
         "--hooksWatch=false",
       ],
@@ -270,11 +301,39 @@ onRecordValidate((event) => {
     const admin = new PocketBase(baseUrl);
     await admin.collection("_superusers").authWithPassword(superuserEmail, superuserPassword);
 
+    const restart = async () => {
+      await stopServer(server);
+      server = startServer();
+      await waitForHealth(baseUrl, 20000, server);
+    };
+    const upgrade = async () => {
+      fs.copyFileSync(
+        path.join(migrationsDir, componentMigration),
+        path.join(migrations, componentMigration),
+      );
+      await restart();
+    };
+    await run({ admin, baseUrl, restart, upgrade });
+  } finally {
+    if (server.exitCode === null) await stopServer(server);
+    fs.rmSync(tempRoot, { recursive: true, force: true });
+  }
+};
+
+test("PocketBase-backed hierarchy imports are transactional and schedule-safe", async () => {
+  const fixtureSample = JSON.parse(fs.readFileSync(sampleProgramPath, "utf8"));
+  assert.equal(fixtureSample.kind, "program");
+
+  await withPocketBase(async ({ admin, baseUrl, restart }) => {
     const owner = await createAuthedUser(admin, baseUrl, "owner");
     const intruder = await createAuthedUser(admin, baseUrl, "intruder");
 
     const initialDocument = makeProgramDocument();
-    const domainProgramBody = { ...initialDocument.data, operationId: "domain-program" };
+    const domainProgramBody = {
+      ...structuredClone(initialDocument.data),
+      operationId: "domain-program",
+    };
+    delete domainProgramBody.blocks[0].weeks[0].prescriptions[0].workout.components[0].key;
     const domainProgram = await domainRequest(intruder.client, "programs", domainProgramBody);
     assert.equal(domainProgram.created, 1);
     assert.equal(domainProgram.rows[0].status, "created");
@@ -283,6 +342,15 @@ onRecordValidate((event) => {
       .getOne(domainProgram.rows[0].programId);
     assert.equal(domainProgramRecord.owner, intruder.userId);
     assert.equal(domainProgramRecord.external_id, initialDocument.data.program.externalId);
+
+    const defaultKeyComponent = await admin
+      .collection("paideuo_training_components")
+      .getFirstListItem(
+        admin.filter('prescription.program_week.block.program = {:program} && name = "Warm-up"', {
+          program: domainProgramRecord.id,
+        }),
+      );
+    assert.equal(defaultKeyComponent.external_key, "component-1");
 
     const conflictingProgram = structuredClone(initialDocument.data);
     conflictingProgram.program.description = "Must roll back";
@@ -323,9 +391,7 @@ onRecordValidate((event) => {
     assert.equal(initialCommit.audit.summary.programs, 1);
     assert.ok(initialCommit.audit.summary.created > 0);
 
-    await stopServer(server);
-    server = startServer();
-    await waitForHealth(baseUrl, 20000, server);
+    await restart();
     assert.deepEqual(
       await domainRequest(intruder.client, "programs", domainProgramBody),
       domainProgram,
@@ -410,6 +476,86 @@ onRecordValidate((event) => {
     const updatedProgram = await admin.collection("paideuo_programs").getOne(createdProgram.id);
     assert.equal(updatedProgram.description, "Updated description");
 
+    const identityDocument = structuredClone(updatedDocument);
+    const workout = identityDocument.data.blocks[0].weeks[0].prescriptions[0].workout;
+    const prescriptionId = updatePreview.items.find(
+      (item) => item.type === "prescription" && item.status === "update",
+    ).id;
+    const trainingComponents = () =>
+      admin.collection("paideuo_training_components").getFullList({
+        filter: admin.filter("prescription = {:id}", { id: prescriptionId }),
+        sort: "position",
+      });
+    const [warmup] = await trainingComponents();
+    const mainSet = { key: "climb drill", name: "Climb", targets: null };
+    workout.components = [mainSet, ...workout.components];
+    const importIdentityDocument = async () => {
+      const preview = await previewImport(owner.client, identityDocument);
+      return commitImport(owner.client, identityDocument, preview.previewToken);
+    };
+    await importIdentityDocument();
+    const [climb, movedWarmup] = await trainingComponents();
+    assert.equal(movedWarmup.id, warmup.id);
+    assert.equal(movedWarmup.position, 2);
+    assert.equal(climb.external_key, mainSet.key);
+
+    workout.components.reverse();
+    await importIdentityDocument();
+    assert.deepEqual(
+      (await trainingComponents()).map((row) => row.id),
+      [warmup.id, climb.id],
+    );
+
+    delete workout.components[1].key;
+    const keyless = await previewImport(owner.client, identityDocument);
+    assert.equal(keyless.conflicting, 1);
+    assert.match(
+      keyless.items.find((item) => item.status === "conflict").error,
+      /explicit component keys/,
+    );
+    await assert.rejects(
+      () => commitImport(owner.client, identityDocument, keyless.previewToken),
+      (error) => error.status === 409,
+    );
+    assert.deepEqual(
+      (await trainingComponents()).map((row) => row.id),
+      [warmup.id, climb.id],
+    );
+
+    workout.components.pop();
+    await importIdentityDocument();
+    assert.deepEqual(
+      (await trainingComponents()).map((row) => row.id),
+      [warmup.id],
+    );
+
+    const prescription = await admin
+      .collection("paideuo_session_prescriptions")
+      .getOne(prescriptionId);
+    const week = await admin.collection("paideuo_program_weeks").getOne(prescription.program_week);
+    const cellPath = `/api/paideuo/programs/${createdProgram.id}/blocks/${week.block}/weeks/${week.id}/cells/${prescription.slot}`;
+    const cell = await owner.client.send(cellPath);
+    const editCell = (current, components) =>
+      owner.client.send(cellPath, {
+        method: "PATCH",
+        body: { ...current.prescription, revision: current.revision, components },
+      });
+    await editCell(cell, [mainSet, ...cell.prescription.components]);
+    const [editorClimb, editorWarmup] = await trainingComponents();
+    assert.equal(editorWarmup.id, warmup.id);
+    const editedCell = await owner.client.send(cellPath);
+    await editCell(editedCell, [...editedCell.prescription.components].reverse());
+    assert.deepEqual(
+      (await trainingComponents()).map((row) => row.id),
+      [warmup.id, editorClimb.id],
+    );
+    const reorderedCell = await owner.client.send(cellPath);
+    await editCell(reorderedCell, reorderedCell.prescription.components.slice(0, 1));
+    assert.deepEqual(
+      (await trainingComponents()).map((row) => row.id),
+      [warmup.id],
+    );
+
     const swappedDocument = structuredClone(updatedDocument);
     swappedDocument.data.blocks[0].position = 2;
     swappedDocument.data.blocks[1].position = 1;
@@ -440,10 +586,6 @@ onRecordValidate((event) => {
     assert.equal(blockAfterSwap.get("integration-base").position, 2);
     assert.equal(blockAfterSwap.get("integration-build").position, 1);
 
-    const prescriptions = (
-      await admin.collection("paideuo_session_prescriptions").getFullList()
-    ).filter((row) => weekIds.has(row.program_week));
-    assert.ok(prescriptions.length > 0);
     const schedule = await admin.collection("paideuo_program_schedules").create({
       program: createdProgram.id,
       start_date: "2026-11-01",
@@ -453,12 +595,15 @@ onRecordValidate((event) => {
     });
     const scheduledSession = await admin.collection("paideuo_scheduled_sessions").create({
       schedule: schedule.id,
-      source_prescription_id: prescriptions[0].id,
+      source_prescription_id: prescriptionId,
       scheduled_date: "2026-11-21",
       original_date: "2026-11-21",
       program_date: "2026-11-21",
       slot_position: 1,
-      prescription_snapshot: { title: "Snapshot" },
+      prescription_snapshot: {
+        title: "Snapshot",
+        components: [{ key: warmup.external_key, name: warmup.name }],
+      },
       status: "planned",
       manually_moved: false,
       source_removal_acknowledged: false,
@@ -492,7 +637,15 @@ onRecordValidate((event) => {
         actualDurationMin: 58,
         sessionRpe: 7,
         notes: "Completed",
-        components: [],
+        components: [
+          {
+            key: warmup.external_key,
+            plannedPosition: 1,
+            name: warmup.name,
+            completed: true,
+            rpe: 6,
+          },
+        ],
       },
     };
     const workoutPath = "workouts/results/batch";
@@ -525,6 +678,22 @@ onRecordValidate((event) => {
       { operationId: "integration-workout-001" },
     );
     assert.equal(workoutCommit.audit.summary.committed, 1);
+
+    const calendarSession = async () => {
+      const sessions = await owner.client.send(
+        "/api/paideuo/calendar?start=2026-11-21&end=2026-11-21",
+      );
+      return sessions.find((session) => session.id === scheduledSession.id);
+    };
+    const historicalSession = await calendarSession();
+    assert.equal(historicalSession.status, "completed");
+    assert.equal(historicalSession.componentResults[0].rpe, 6);
+    const beforeHistoricalEdit = await owner.client.send(cellPath);
+    await editCell(beforeHistoricalEdit, [
+      mainSet,
+      { ...beforeHistoricalEdit.prescription.components[0], name: "Revised warm-up" },
+    ]);
+    assert.deepEqual(await calendarSession(), historicalSession);
 
     const replacementDocument = structuredClone(workoutDocument);
     replacementDocument.data.notes = "Replacement";
@@ -861,9 +1030,7 @@ onRecordValidate((event) => {
     assert.equal(failedReceipts.length, 0);
 
     // Start the MCP scenarios with a fresh request-rate window for the same owner.
-    await stopServer(server);
-    server = startServer();
-    await waitForHealth(baseUrl, 20000, server);
+    await restart();
 
     const issueMcpCredential = async (scopes, allowHistoryRewrite = false) =>
       (
@@ -1097,8 +1264,169 @@ onRecordValidate((event) => {
       (await admin.collection("paideuo_session_completions").getOne(rewrittenCompletion.id)).notes,
       workoutArgs.data.notes,
     );
-  } finally {
-    if (server.exitCode === null) await stopServer(server);
-    fs.rmSync(tempRoot, { recursive: true, force: true });
-  }
+  });
+});
+
+test("PocketBase upgrades historical component results and rolls back failed completion edits", async () => {
+  await withPocketBase(
+    async ({ admin, baseUrl, upgrade }) => {
+      const { client, userId } = await createAuthedUser(admin, baseUrl, "legacy-results");
+      const date = "2026-01-05";
+      const createSession = (components, operationId) =>
+        admin.collection("paideuo_scheduled_sessions").create({
+          owner: userId,
+          timezone: "UTC",
+          operation_id: operationId,
+          scheduled_date: date,
+          original_date: date,
+          slot_position: 1,
+          prescription_snapshot: { title: "Strength", components },
+          status: "completed",
+        });
+      const session = await createSession(
+        [{ name: "Squat" }, { name: "Press" }, { name: "Row" }, { name: "Carry", key: "carry" }],
+        "legacy-component-session",
+      );
+      const sessionOnly = await createSession([{ name: "Cooldown" }], "legacy-session-only");
+      const completions = admin.collection("paideuo_session_completions");
+      const results = admin.collection("paideuo_workout_component_results");
+      const completion = await completions.create({
+        session: session.id,
+        completed_date: date,
+        actual_duration_min: 50,
+        session_rpe: 7,
+        notes: "Legacy completion",
+        external_id: "legacy-import",
+      });
+      await completions.create({
+        session: sessionOnly.id,
+        completed_date: date,
+        notes: "Legacy session without component results",
+      });
+      const squat = await results.create({
+        session: session.id,
+        component_key: "imported-squat",
+        planned_position: 1,
+        name: "Squat",
+        completed: true,
+        sets_completed: 3,
+        reps_completed: "5",
+        actual_load: { value: 60, unit: "kg" },
+        rpe: 6,
+      });
+      const press = await results.create({
+        session: session.id,
+        component_key: "imported-press",
+        planned_position: 2,
+        name: "Press",
+        completed: true,
+      });
+      const calendar = () => client.send(`/api/paideuo/calendar?start=${date}&end=${date}`);
+      const readSession = async () => (await calendar()).find(({ id }) => id === session.id);
+      const save = (current, body) =>
+        client.send(`/api/paideuo/calendar/sessions/${session.id}/execution`, {
+          method: "PATCH",
+          body: {
+            action: "edit-completion",
+            revision: current.revision,
+            completion: current.completion,
+            ...body,
+          },
+        });
+      const beforeUpgrade = await readSession();
+      await upgrade();
+
+      const migrated = await readSession();
+      assert.equal(migrated.status, "completed");
+      assert.deepEqual(migrated.completion, beforeUpgrade.completion);
+      assert.notEqual(migrated.revision, beforeUpgrade.revision);
+      const [squatKey, pressKey, rowKey, carryKey] = migrated.prescription.components.map(
+        ({ key }) => key,
+      );
+      assert.equal(squatKey, squat.component_key);
+      assert.equal(pressKey, press.component_key);
+      assert.match(rowKey, /^snapshot:[a-f0-9]{64}$/);
+      assert.equal(carryKey, "carry");
+      assert.deepEqual(migrated.componentResults, [
+        {
+          componentKey: squatKey,
+          load: { value: 60, unit: "kg" },
+          sets: 3,
+          reps: "5",
+          rpe: 6,
+          durationMin: null,
+          rounds: null,
+          notes: "",
+        },
+        {
+          componentKey: pressKey,
+          load: null,
+          sets: null,
+          reps: null,
+          rpe: null,
+          durationMin: null,
+          rounds: null,
+          notes: "",
+        },
+      ]);
+      const sessionOnlyState = (await calendar()).find(({ id }) => id === sessionOnly.id);
+      assert.equal(sessionOnlyState.status, "completed");
+      assert.equal(sessionOnlyState.completion.notes, "Legacy session without component results");
+      assert.deepEqual(sessionOnlyState.componentResults, []);
+      const editedSquat = { ...migrated.componentResults[0], rpe: 8 };
+      const emptyRow = { ...migrated.componentResults[1], componentKey: rowKey };
+
+      await assert.rejects(
+        () => save(beforeUpgrade, { componentResults: [editedSquat] }),
+        (error) => error.status === 409,
+      );
+      for (const componentResults of [[editedSquat, editedSquat], [{ componentKey: "unknown" }]]) {
+        await assert.rejects(
+          () => save(migrated, { componentResults }),
+          (error) => error.status === 400,
+        );
+      }
+
+      await assert.rejects(
+        () =>
+          save(migrated, {
+            completion: { ...migrated.completion, notes: "Should roll back" },
+            componentResults: [
+              editedSquat,
+              emptyRow,
+              { componentKey: carryKey, notes: injectedFailureMarker },
+            ],
+          }),
+        (error) =>
+          error.status === 400 &&
+          /Injected component result write failure/.test(error.response.message),
+      );
+      assert.deepEqual(await readSession(), migrated);
+      assert.equal((await results.getOne(squat.id)).rpe, 6);
+      assert.equal((await results.getOne(press.id)).component_key, pressKey);
+      assert.equal((await completions.getOne(completion.id)).notes, "Legacy completion");
+
+      const edited = await save(migrated, { componentResults: [emptyRow, editedSquat] });
+      assert.deepEqual(edited.componentResults, [editedSquat, emptyRow]);
+      assert.equal(edited.completion.sessionRpe, 7);
+      assert.equal((await results.getOne(squat.id)).rpe, 8);
+      await assert.rejects(
+        () => results.getOne(press.id),
+        (error) => error.status === 404,
+      );
+      const refreshed = await readSession();
+      assert.equal(refreshed.revision, edited.revision);
+      assert.deepEqual(refreshed.componentResults, edited.componentResults);
+      await assert.rejects(
+        () => save(migrated, { componentResults: migrated.componentResults }),
+        (error) => error.status === 409,
+      );
+      const legacyClient = await save(refreshed, {
+        completion: { ...refreshed.completion, notes: "Saved without a component payload" },
+      });
+      assert.deepEqual(legacyClient.componentResults, edited.componentResults);
+      assert.deepEqual((await readSession()).componentResults, edited.componentResults);
+    },
+    { beforeComponentMigration: true },
+  );
 });

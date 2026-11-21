@@ -359,6 +359,7 @@ test("reconcileTrainingComponents preserves unchanged ids and updates in place",
       {},
       {
         id: "component-a",
+        external_key: "warm-up",
         prescription: "prescription-1",
         position: 1,
         name: "Warm-up",
@@ -372,6 +373,7 @@ test("reconcileTrainingComponents preserves unchanged ids and updates in place",
       {},
       {
         id: "component-b",
+        external_key: "main-set",
         prescription: "prescription-1",
         position: 2,
         name: "Main set",
@@ -410,19 +412,26 @@ test("reconcileTrainingComponents preserves unchanged ids and updates in place",
 
   __test.reconcileTrainingComponents(db, "prescription-1", [
     {
+      key: "warm-up",
+      position: 1,
       name: "Warm-up",
       instructions: "Easy movement",
-      durationMin: 10,
+      duration_min: 10,
+      duration_specified: true,
       targets: { intensity: { value: 3, scale: "RPE" } },
     },
     {
+      key: "main-set",
+      position: 2,
       name: "Main set",
       instructions: "Project tries",
-      durationMin: 25,
+      duration_min: 25,
+      duration_specified: true,
       targets: { intensity: { value: 7, scale: "RPE" } },
     },
   ]);
 
+  assert.equal(db.state.saves, 1);
   assert.equal(db.state.deletes, 0);
   assert.equal(db.state.components[0].id, "component-a");
   assert.equal(db.state.components[1].id, "component-b");

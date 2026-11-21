@@ -25,10 +25,11 @@ module.exports = (components) => {
     if (duration != null && !whole(duration)) {
       throw new BadRequestError(`Enter a nonnegative whole duration for component ${position}.`);
     }
-    const key = component.key ?? $security.randomString(24);
-    if (typeof key !== "string" || !/^[A-Za-z0-9:_-]{1,200}$/.test(key) || keys.has(key)) {
+    const suppliedKey = component.key ?? $security.randomString(24);
+    if (!nonempty(suppliedKey, 200) || keys.has(suppliedKey.trim())) {
       throw new BadRequestError(`Enter valid unique identifiers for the workout components.`);
     }
+    const key = suppliedKey.trim();
     keys.add(key);
     return {
       key,

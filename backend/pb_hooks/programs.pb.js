@@ -137,8 +137,12 @@ const handlePrograms = (event) => {
   const prescriptionComponents = (db, id) =>
     children(db, "paideuo_training_components", "prescription", id, "position,id");
 
+  const { componentKey, reconcileTrainingComponents } = require(
+    __hooks + "/training-components.cjs",
+  );
+
   const componentFields = (component) => ({
-    key: component.getString("external_key") || component.id,
+    key: componentKey(component),
     ...copyFields(component, [
       "position",
       "name",
@@ -727,15 +731,7 @@ const handlePrograms = (event) => {
                 slot: cellSlot,
               });
             }
-            if (components) {
-              for (const component of prescriptionComponents(tx, record.id)) tx.delete(component);
-              for (const component of components) {
-                save(tx, "paideuo_training_components", {
-                  ...storedComponent(component),
-                  prescription: record.id,
-                });
-              }
-            }
+            if (components) reconcileTrainingComponents(tx, record.id, components);
           });
           return event.json(200, { weekId, slotId: cellSlot });
         }
