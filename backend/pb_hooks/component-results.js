@@ -1,3 +1,5 @@
+const { observationData } = require(__hooks + "/movement-observations.cjs");
+
 const nullableWhole = (value, label) => {
   if (value == null) return null;
   if (!Number.isSafeInteger(value) || value < 0) {
@@ -41,7 +43,7 @@ const resultObservation = (value) => {
     !value.category.trim() ||
     value.category.trim().length > 64
   ) {
-    throw new BadRequestError("Component observation category must be 64 characters or fewer.");
+    throw new BadRequestError("Enter a component observation category from 1 to 64 characters.");
   }
   if (!["none", "mild", "pronounced", "not_assessed"].includes(value.severity)) {
     throw new BadRequestError("Choose a valid component observation severity.");
@@ -150,6 +152,7 @@ const parseResults = (values, snapshot) => {
 
 const resultData = (record) => {
   const load = JSON.parse(record.getString("actual_load") || "null");
+  const observation = JSON.parse(record.getString("observation") || "null");
   return {
     componentKey: record.getString("component_key"),
     load: load === null ? null : { value: load.value, unit: load.unit },
@@ -163,7 +166,7 @@ const resultData = (record) => {
     continuousBoutMin: JSON.parse(record.getString("continuous_bout_min") || "null"),
     aerobicModality: record.getString("aerobic_modality") || null,
     notes: record.getString("notes"),
-    observation: JSON.parse(record.getString("observation") || "null"),
+    observation: observationData(observation),
   };
 };
 

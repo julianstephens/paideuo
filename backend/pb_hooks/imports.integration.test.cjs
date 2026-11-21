@@ -1358,6 +1358,7 @@ test("PocketBase upgrades historical component results and rolls back failed com
           continuousBoutMin: null,
           aerobicModality: null,
           notes: "",
+          observation: null,
         },
         {
           componentKey: pressKey,
@@ -1372,6 +1373,7 @@ test("PocketBase upgrades historical component results and rolls back failed com
           continuousBoutMin: null,
           aerobicModality: null,
           notes: "",
+          observation: null,
         },
       ]);
       const sessionOnlyState = (await calendar()).find(({ id }) => id === sessionOnly.id);
@@ -1858,4 +1860,194 @@ test("duration presence migration preserves existing positive maxima and scalar 
     },
     { pendingMigration: "1760000024_prescription_max_duration_presence.js" },
   );
+});
+
+test("movement observations survive completion edits, import reconciliation and weekly review", async () => {
+  await withPocketBase(async ({ admin, baseUrl }) => {
+    const { client } = await createAuthedUser(admin, baseUrl, "movement-observations");
+    const request = (path, method = "GET", body) => client.send(path, { method, body });
+    const document = makeProgramDocument();
+    const [block] = document.data.blocks;
+    document.data.blocks = [block];
+    block.slots = [
+      { externalId: "manual", weekday: 1, position: 1, label: "Manual result" },
+      { externalId: "imported", weekday: 1, position: 2, label: "Imported result" },
+    ];
+    block.weeks[0].prescriptions = block.slots.map((slot) => ({
+      slotExternalId: slot.externalId,
+      workout: {
+        title: slot.label,
+        sessionType: "strength",
+        components: [{ key: "front-squat", name: "Front squat", classification: "strength" }],
+      },
+    }));
+    const plan = await previewImport(client, document);
+    const {
+      rows: { programId },
+    } = await commitImport(client, document, plan.previewToken);
+    const date = "2026-01-05";
+    const root = `/api/paideuo/programs/${programId}`;
+    const schedule = { startDate: date, timezone: "UTC" };
+    const { revision } = await request(root + "/schedule/preview", "POST", schedule);
+    await request(root + "/schedule", "POST", { ...schedule, revision });
+    const calendar = () => request(`/api/paideuo/calendar?start=${date}&end=${date}`);
+    const sessions = await calendar();
+    const manual = sessions.find(({ prescription }) => prescription.title === "Manual result");
+    const imported = sessions.find(({ prescription }) => prescription.title === "Imported result");
+    const source = await admin.collection("paideuo_scheduled_sessions").getOne(manual.id);
+    const review = async () =>
+      (await request(`${root}/weekly-reviews/${source.source_attribution.weekId}`))
+        .movementObservations;
+    const completion = { completedDate: date, actualDurationMin: 30, sessionRpe: 6, notes: "" };
+    const execution = (state, action, result) =>
+      request(`/api/paideuo/calendar/sessions/${manual.id}/execution`, "PATCH", {
+        action,
+        revision: state.revision,
+        completion,
+        componentResults: [result],
+      });
+    const result = { componentKey: "front-squat", sets: 3, notes: "Original component notes" };
+    const observation = {
+      category: "knee_tracking",
+      severity: "not_assessed",
+      context: "",
+      notes: "",
+    };
+    for (const invalid of [
+      { ...observation, category: " " },
+      { ...observation, severity: "invalid" },
+    ]) {
+      await assert.rejects(
+        () => execution(manual, "complete", { ...result, observation: invalid }),
+        (error) => error.status === 400,
+      );
+    }
+    assert.deepEqual(await calendar(), sessions);
+    const initial = await execution(manual, "complete", result);
+    assert.equal(initial.componentResults[0].observation, null);
+    assert.deepEqual(await review(), []);
+
+    const recorded = await execution(initial, "edit-completion", {
+      ...initial.componentResults[0],
+      observation,
+    });
+    const identify = (session, value) => ({
+      sessionId: session.id,
+      sessionDate: date,
+      componentKey: "front-squat",
+      componentName: "Front squat",
+      ...value,
+    });
+    assert.deepEqual(await review(), [identify(manual, observation)]);
+    const assessed = { ...observation, severity: "none", context: "Working sets" };
+    const assessedState = await execution(recorded, "edit-completion", {
+      ...recorded.componentResults[0],
+      observation: assessed,
+    });
+    assert.deepEqual((await review())[0].severity, "none");
+    const edited = await execution(assessedState, "edit-completion", {
+      ...assessedState.componentResults[0],
+      notes: "Updated component notes",
+    });
+    assert.deepEqual(edited.componentResults[0].observation, assessed);
+
+    const importedObservation = {
+      category: "trunk_position",
+      severity: "mild",
+      notes: "Final set",
+    };
+    const workoutDocument = {
+      schema: "paideuo",
+      version: 1,
+      kind: "workout-component-results",
+      data: {
+        ...completion,
+        sourceSessionId: imported.id,
+        sourceWorkoutKey: "movement-import",
+        components: [
+          {
+            key: "front-squat",
+            plannedPosition: 1,
+            name: "Front squat",
+            completed: true,
+            setsCompleted: 3,
+            notes: "Imported component notes",
+            observation: importedObservation,
+          },
+        ],
+      },
+    };
+    const importPreview = await previewImport(client, workoutDocument);
+    await commitImport(client, workoutDocument, importPreview.previewToken);
+    const retry = await previewImport(client, workoutDocument);
+    assert.equal(retry.items[0].status, "skip");
+    const repeated = await commitImport(client, workoutDocument, retry.previewToken);
+    assert.deepEqual(repeated.rows, [{ key: "movement-import", status: "skipped" }]);
+
+    const getObserved = async () =>
+      new Map((await review()).map((entry) => [entry.sessionId, entry]));
+    const observed = await getObserved();
+    assert.deepEqual(observed.get(manual.id), identify(manual, assessed));
+    assert.deepEqual(
+      observed.get(imported.id),
+      identify(imported, { ...importedObservation, context: "" }),
+    );
+    const { sessionCalendarUrl, selectedCalendarSession } =
+      await import("../../src/features/calendar/session-links.ts");
+    const refreshed = await calendar();
+    for (const entry of observed.values()) {
+      const { searchParams } = new URL(
+        sessionCalendarUrl(entry.sessionDate, entry.sessionId),
+        baseUrl,
+      );
+      assert.equal(selectedCalendarSession(refreshed, searchParams).id, entry.sessionId);
+    }
+
+    const cleared = await execution(edited, "edit-completion", {
+      ...edited.componentResults[0],
+      observation: null,
+    });
+    assert.deepEqual(cleared.componentResults[0], {
+      ...edited.componentResults[0],
+      observation: null,
+    });
+    assert.equal((await getObserved()).has(manual.id), false);
+
+    const credential = await request("/api/paideuo/v1/service-credentials/issue", "POST", {
+      label: "observation-replacement",
+      scopes: ["imports:commit", "workouts:write"],
+      allowHistoryRewrite: true,
+    });
+    const { plaintextToken } = credential;
+    const replacement = structuredClone(workoutDocument);
+    replacement.data.replaceExistingCompletion = true;
+    const updatedObservation = {
+      ...importedObservation,
+      severity: "pronounced",
+      context: "Last rep",
+    };
+    replacement.data.components[0].observation = updatedObservation;
+    assert.equal((await previewImport(client, replacement)).items[0].status, "conflict");
+    const replace = async (payload) => {
+      const preview = await servicePreviewImport(baseUrl, plaintextToken, payload);
+      assert.equal(preview.items[0].status, "update");
+      return serviceCommitImport(baseUrl, plaintextToken, payload, preview.previewToken);
+    };
+    await replace(replacement);
+    assert.deepEqual(
+      (await getObserved()).get(imported.id),
+      identify(imported, updatedObservation),
+    );
+
+    delete replacement.data.components[0].observation;
+    await replace(replacement);
+    assert.deepEqual(await review(), []);
+    delete replacement.data.replaceExistingCompletion;
+    const noObservationRetry = await previewImport(client, replacement);
+    assert.equal(noObservationRetry.items[0].status, "skip");
+    const after = (await calendar()).find(({ id }) => id === imported.id).componentResults[0];
+    assert.equal(after.observation, null);
+    assert.equal(after.sets, 3);
+    assert.equal(after.notes, "Imported component notes");
+  });
 });

@@ -1,3 +1,4 @@
+import type { ComponentObservation } from "../calendar/scheduling";
 import { apiRequest } from "../../lib/api/request";
 import type { MetricsPeriod, MetricsTotal } from "../compliance/metrics";
 
@@ -27,14 +28,11 @@ export type WeeklyReview = ReviewSummary & {
   days: MetricsPeriod[];
 };
 
-export type MovementObservation = {
+export type MovementObservation = ComponentObservation & {
+  sessionId: string;
   sessionDate: string;
   componentKey: string;
   componentName: string;
-  category: string;
-  severity: "none" | "mild" | "pronounced" | "not_assessed";
-  context: string;
-  notes: string;
 };
 
 export const reviewKey = (ownerId: string, programId: string) =>

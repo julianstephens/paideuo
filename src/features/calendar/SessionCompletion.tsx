@@ -3,6 +3,11 @@ import { Box, Button, Flex, Grid, Heading, Input, Stack, Text, Textarea } from "
 import { useState } from "react";
 import { Disclosure, FormField, Notice } from "../../components/ui";
 import { fullDate, todayInTimezone } from "./dates";
+import {
+  observationCategory,
+  observationSeverity,
+  observationSeverities,
+} from "./movement-observations";
 import type { CalendarSession, ComponentResult, SessionCompletion } from "./scheduling";
 import type { ComponentObservation } from "./scheduling";
 
@@ -321,35 +326,49 @@ export const CompletionForm = ({
                                   }
                                 />
                               </FormField>
-                              {(component.name
-                                .toLowerCase()
-                                .replace(/[-_]/g, " ")
-                                .includes("front squat") ||
+                              {(result.observation ||
+                                component.name
+                                  .toLowerCase()
+                                  .replace(/[-_]/g, " ")
+                                  .includes("front squat") ||
                                 result.componentKey.toLowerCase().includes("front-squat")) && (
                                 <>
                                   <FormField>
-                                    Knee tracking observation
+                                    {observationCategory(
+                                      result.observation?.category ?? "knee_tracking",
+                                    )}{" "}
+                                    observation
                                     <select
-                                      aria-label="Knee tracking observation"
                                       disabled={pending}
-                                      value={result.observation?.severity ?? "not_assessed"}
-                                      onChange={(event) =>
+                                      value={result.observation?.severity ?? ""}
+                                      onChange={(event) => {
+                                        const severity = observationSeverities.find(
+                                          (value) => value === event.target.value,
+                                        );
                                         updateResult(result.componentKey, {
-                                          observation: {
-                                            category: "knee_tracking",
-                                            severity: event.target
-                                              .value as ComponentObservation["severity"],
-                                            context: result.observation?.context ?? "",
-                                            notes: result.observation?.notes ?? "",
-                                          },
-                                        })
-                                      }
+                                          observation:
+                                            severity === undefined
+                                              ? null
+                                              : {
+                                                  category:
+                                                    result.observation?.category ?? "knee_tracking",
+                                                  severity,
+                                                  context: result.observation?.context ?? "",
+                                                  notes: result.observation?.notes ?? "",
+                                                },
+                                        });
+                                      }}
                                       style={{ width: "100%", minHeight: "40px" }}
                                     >
-                                      <option value="none">No collapse</option>
-                                      <option value="mild">Mild</option>
-                                      <option value="pronounced">Pronounced</option>
-                                      <option value="not_assessed">Not assessed</option>
+                                      <option value="">No observation recorded</option>
+                                      {observationSeverities.map((severity) => (
+                                        <option key={severity} value={severity}>
+                                          {observationSeverity(
+                                            result.observation?.category ?? "knee_tracking",
+                                            severity,
+                                          )}
+                                        </option>
+                                      ))}
                                     </select>
                                   </FormField>
                                   {result.observation && (
@@ -526,15 +545,12 @@ export const CompletionResults = ({
                     {result.notes && <Text whiteSpace="pre-wrap">{result.notes}</Text>}
                     {result.observation && (
                       <Text fontSize="sm">
-                        Knee tracking:{" "}
-                        {
-                          {
-                            none: "No collapse",
-                            mild: "Mild",
-                            pronounced: "Pronounced",
-                            not_assessed: "Not assessed",
-                          }[result.observation.severity]
-                        }
+                        {observationCategory(result.observation.category)}
+                        {": "}
+                        {observationSeverity(
+                          result.observation.category,
+                          result.observation.severity,
+                        )}
                         {result.observation.context && ` · ${result.observation.context}`}
                         {result.observation.notes && ` · ${result.observation.notes}`}
                       </Text>

@@ -654,7 +654,7 @@ const normalizeWorkoutResults = (value, context) => {
                 return {
                   category: text(observation.category, `${label} observation category`, 64, true),
                   severity: observation.severity,
-                  context: optionalText(observation.context, `${label} observation context`, 200),
+                  context: text(observation.context ?? "", `${label} observation context`, 200),
                   notes: text(observation.notes ?? "", `${label} observation notes`, 10000),
                 };
               })(),

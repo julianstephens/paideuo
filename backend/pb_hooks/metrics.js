@@ -178,6 +178,7 @@ const readSessions = (tx, sessionFilter, params, bySchedule) => {
     const completion = bySession.get(row.id);
     const today = bySchedule.get(row.getString("schedule"));
     return {
+      id: row.id,
       scheduledDate: row.getString("scheduled_date"),
       today,
       status: statusFor(row, today),

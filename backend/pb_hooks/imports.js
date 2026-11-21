@@ -1,3 +1,4 @@
+const { observationData } = require(__hooks + "/movement-observations.cjs");
 const { reconcileTrainingComponents } = require(__hooks + "/training-components.cjs");
 const { sessionFields, componentFields, presentComponent } = require(
   __hooks + "/prescription-fields.cjs",
@@ -551,6 +552,7 @@ const observationPlan = (db, owner, document, options = {}) => {
           "walking_min_json",
           "continuous_bout_min_json",
           "aerobic_modality",
+          "observation_json",
           "notes",
         ]),
       ),
@@ -572,6 +574,7 @@ const observationPlan = (db, owner, document, options = {}) => {
       continuousBoutMin: component.continuous_bout_min,
       aerobicModality: component.aerobic_modality || null,
       notes: component.notes,
+      observation: observationData(component.observation),
     }));
     if (
       completionPlan.item.status === "skip" &&

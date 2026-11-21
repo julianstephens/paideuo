@@ -154,6 +154,7 @@ const detail = (event) => {
       (session.componentResults ?? [])
         .filter((result) => result.observation)
         .map((result) => ({
+          sessionId: session.id,
           sessionDate: session.scheduledDate,
           componentKey: result.componentKey,
           componentName:

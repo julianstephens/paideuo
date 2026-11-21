@@ -5,6 +5,8 @@ import { Link as RouterLink, useParams } from "react-router";
 import { FormField, Notice, PageHeader, Panel } from "../../components/ui";
 import { errorMessage } from "../../lib/api/request";
 import { useSession } from "../auth/session";
+import { observationCategory, observationSeverity } from "../calendar/movement-observations";
+import { sessionCalendarUrl } from "../calendar/session-links";
 import { useMetricPreferences } from "../compliance/MetricPreferences";
 import { metricValues, windowLabel } from "../compliance/MetricsCharts";
 import { averageRpe } from "../compliance/format";
@@ -120,22 +122,13 @@ const Review = ({
                 Movement observations
               </Heading>
               <Stack gap="2">
-                {review.data.movementObservations.map((observation, index) => (
-                  <Box key={`${observation.componentKey}-${observation.sessionDate}-${index}`}>
+                {review.data.movementObservations.map((observation) => (
+                  <Box key={`${observation.sessionId}-${observation.componentKey}`}>
                     <Text fontWeight="medium">{observation.componentName}</Text>
                     <Text fontSize="sm">
-                      {observation.category === "knee_tracking"
-                        ? "Knee tracking"
-                        : observation.category}
-                      :{" "}
-                      {
-                        {
-                          none: "No collapse",
-                          mild: "Mild",
-                          pronounced: "Pronounced",
-                          not_assessed: "Not assessed",
-                        }[observation.severity]
-                      }
+                      {observationCategory(observation.category)}
+                      {": "}
+                      {observationSeverity(observation.category, observation.severity)}
                     </Text>
                     {observation.context && (
                       <Text fontSize="sm">Context: {observation.context}</Text>
@@ -145,6 +138,13 @@ const Review = ({
                         {observation.notes}
                       </Text>
                     )}
+                    <Link asChild variant="underline" fontSize="sm">
+                      <RouterLink
+                        to={sessionCalendarUrl(observation.sessionDate, observation.sessionId)}
+                      >
+                        Source session · {observation.sessionDate}
+                      </RouterLink>
+                    </Link>
                   </Box>
                 ))}
               </Stack>
