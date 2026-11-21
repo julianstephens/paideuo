@@ -150,6 +150,8 @@ const detail = (event) => {
     }
     const editorBlock = blocks.get(context.blockId);
     const entries = readCheckIns(tx, owner, context.window);
+    const weekSessions = week?.sessions ?? [];
+    const { progression } = require(__hooks + "/gpp-progression.js");
     result = {
       ...context,
       programName: program.getString("name"),
@@ -161,6 +163,17 @@ const detail = (event) => {
       total: summarize(week?.sessions ?? [], entries, context.window),
       trainingAvailable: Boolean(week),
       days: dailyBreakdown(entries, context.window),
+      progression: progression(weekSessions),
+      dataCoverage: {
+        scheduledSessions: weekSessions.length,
+        completedSessions: weekSessions.filter(({ status }) => status === "completed").length,
+        recoveryDays: weekSessions.length
+          ? entries.filter(
+              ({ date }) =>
+                context.window && date >= context.window.start && date <= context.window.end,
+            ).length
+          : 0,
+      },
     };
   });
   return event.json(200, result);

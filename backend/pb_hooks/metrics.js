@@ -142,7 +142,7 @@ const readSessions = (tx, sessionFilter, params, bySchedule) => {
   const rows = tx.findRecordsByFilter(
     "paideuo_scheduled_sessions",
     "deleted = false && (" + sessionFilter("") + ")",
-    "scheduled_date",
+    "scheduled_date,slot_position,schedule,source_prescription_id,id",
     0,
     0,
     params,
@@ -178,6 +178,7 @@ const readSessions = (tx, sessionFilter, params, bySchedule) => {
     const completion = bySession.get(row.id);
     const today = bySchedule.get(row.getString("schedule"));
     return {
+      id: row.id,
       scheduledDate: row.getString("scheduled_date"),
       today,
       status: statusFor(row, today),

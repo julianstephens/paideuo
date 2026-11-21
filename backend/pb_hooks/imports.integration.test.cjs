@@ -1859,3 +1859,214 @@ test("duration presence migration preserves existing positive maxima and scalar 
     { pendingMigration: "1760000024_prescription_max_duration_presence.js" },
   );
 });
+
+test("weekly review compares persisted aerobic plans and results and links exact source sessions", async () => {
+  await withPocketBase(async ({ admin, baseUrl }) => {
+    const { client } = await createAuthedUser(admin, baseUrl, "weekly-progression");
+    const request = (path, method = "GET", body) => client.send(path, { method, body });
+    const document = makeProgramDocument();
+    const [block] = document.data.blocks;
+    document.data.blocks = [block];
+    block.durationWeeks = 3;
+    block.slots = [
+      { externalId: "intervals", weekday: 2, position: 1, label: "Intervals" },
+      { externalId: "cycling", weekday: 2, position: 2, label: "Cycling" },
+      { externalId: "endurance", weekday: 3, position: 3, label: "Endurance" },
+      { externalId: "rowing", weekday: 4, position: 4, label: "Rowing" },
+    ];
+    const component = (key, name, fields = {}) => ({
+      key,
+      name,
+      classification: "aerobic",
+      ...fields,
+    });
+    const intervals = {
+      repetitions: 4,
+      segments: [
+        { type: "warmup", duration_seconds: 300, modality: "walking" },
+        { type: "work", duration_seconds: 180, modality: "running" },
+        { type: "recovery", duration_seconds: 120, modality: "walking" },
+        { type: "cooldown", duration_seconds: 300, modality: "walking" },
+      ],
+    };
+    const prescribedRpe = { min: 6, max: 7, scale: "RPE" };
+    const workout = (slotExternalId, title, components) => ({
+      slotExternalId,
+      workout: { title, sessionType: "conditioning", plannedDurationMin: 60, components },
+    });
+    const cycling = workout("cycling", "Bike training", [
+      component("cycle", "Steady cycling", { durationMin: 35, durationMax: 40 }),
+    ]);
+    block.weeks = [
+      [
+        workout("intervals", "Interval training", [
+          component("jog", "Jog/walk intervals", { targets: intervals }),
+          component("squat", "Front squat", {
+            classification: "strength",
+            targets: {
+              sets: 3,
+              reps: "5",
+              load: { value: 80, unit: "kg" },
+              intensity: prescribedRpe,
+            },
+          }),
+          component("circuit", "Strength circuit", {
+            classification: "other",
+            targets: { repetitions: 4 },
+          }),
+        ]),
+        cycling,
+        workout("endurance", "Endurance work", [component("walk", "Walking", { durationMin: 25 })]),
+        workout("rowing", "Row training", [component("row", "Rowing", { durationMin: 20 })]),
+      ],
+      [],
+      [cycling],
+    ].map((prescriptions, index) => ({
+      externalId: `review-week-${index + 1}`,
+      position: index + 1,
+      weekType: "normal",
+      prescriptions,
+    }));
+    const preview = await previewImport(client, document);
+    const {
+      rows: { programId },
+    } = await commitImport(client, document, preview.previewToken);
+    const root = `/api/paideuo/programs/${programId}`;
+
+    const monday = new Date();
+    monday.setUTCHours(0, 0, 0, 0);
+    monday.setUTCDate(monday.getUTCDate() - ((monday.getUTCDay() + 6) % 7) - 7);
+    const date = (offset) =>
+      new Date(monday.getTime() + offset * 86_400_000).toISOString().slice(0, 10);
+    const schedule = { startDate: date(0), timezone: "UTC" };
+    const { revision } = await request(root + "/schedule/preview", "POST", schedule);
+    await request(root + "/schedule", "POST", { ...schedule, revision });
+    const calendarPath = `/api/paideuo/calendar?start=${date(0)}&end=${date(6)}`;
+    const calendar = await request(calendarPath);
+    const [jog, cycle, missing, skipped] = calendar;
+    assert.equal(jog.scheduledDate, cycle.scheduledDate);
+    const complete = (session, componentResults) =>
+      request(`/api/paideuo/calendar/sessions/${session.id}/execution`, "PATCH", {
+        action: "complete",
+        revision: session.revision,
+        completion: { completedDate: session.scheduledDate, actualDurationMin: 50 },
+        componentResults,
+      });
+    await complete(jog, [
+      {
+        componentKey: "jog",
+        runningMin: 10,
+        walkingMin: 17,
+        continuousBoutMin: 4,
+        aerobicModality: "Run/walk",
+      },
+      { componentKey: "squat", sets: 3, reps: "5", load: { value: 75, unit: "kg" }, rpe: 7 },
+      { componentKey: "circuit", rounds: 3 },
+    ]);
+    await complete(cycle, [{ componentKey: "cycle", durationMin: 36, aerobicModality: "BIKE" }]);
+    await complete(missing, []);
+    await domainRequest(client, "check-ins/upsert", {
+      entries: [{ date: date(1), recovery: { sleepHours: 8 } }],
+    });
+
+    const scheduled = await admin.collection("paideuo_scheduled_sessions").getOne(jog.id);
+    const weekId = scheduled.source_attribution.weekId;
+    const reviewPath = `${root}/weekly-reviews`;
+    const review = await request(`${reviewPath}/${weekId}`);
+    const source = (session, status) => ({
+      id: session.id,
+      date: session.scheduledDate,
+      title: session.prescription.title,
+      status,
+    });
+    const outcome = {
+      sessionId: jog.id,
+      date: jog.scheduledDate,
+      status: "completed",
+    };
+    assert.equal(review.programName, document.data.program.name);
+    assert.equal(review.weekId, weekId);
+    assert.deepEqual(review.dataCoverage, {
+      scheduledSessions: 4,
+      completedSessions: 3,
+      recoveryDays: 1,
+    });
+    assert.equal(review.total.recovery.sleepHours.mean, 8);
+    assert.equal(review.total.compliance.plannedMinutes, 240);
+    assert.equal(review.total.compliance.actualMinutes, 150);
+    assert.deepEqual(review.progression, {
+      jogging: [{ ...outcome, title: "Jog/walk intervals", plannedBoutMin: 3, actualBoutMin: 4 }],
+      frontSquat: [
+        {
+          ...outcome,
+          title: "Front squat",
+          plannedLoad: { value: 80, unit: "kg" },
+          plannedSets: 3,
+          plannedReps: "5",
+          plannedRpe: prescribedRpe,
+          actualLoad: { value: 75, unit: "kg" },
+          actualSets: 3,
+          actualReps: "5",
+          actualRpe: 7,
+        },
+      ],
+      circuits: [{ ...outcome, title: "Strength circuit", plannedRounds: 4, actualRounds: 3 }],
+      aerobicByModality: { running: 10, walking: 17, cycling: 36 },
+      plannedAerobicByModality: { running: 12, walking: 43, cycling: 35, rowing: 20 },
+      plannedAerobicMaxByModality: { running: 12, walking: 43, cycling: 40, rowing: 20 },
+      aerobicCoverage: { planned: 4, measured: 2, specified: 3 },
+      sourceSessions: [
+        source(jog, "completed"),
+        source(cycle, "completed"),
+        source(missing, "completed"),
+        source(skipped, "skipped"),
+      ],
+    });
+    const metrics = (
+      await request(`/api/paideuo/metrics?view=weekly&program=${programId}&start=${date(1)}`)
+    ).total.compliance;
+    assert.equal(metrics.plannedAerobicMinutes, 110);
+    assert.equal(metrics.aerobicMinutes, 63);
+    assert.equal(
+      Object.values(review.progression.plannedAerobicByModality).reduce(
+        (sum, value) => sum + value,
+        0,
+      ),
+      metrics.plannedAerobicMinutes,
+    );
+    assert.deepEqual(review.total.compliance, metrics);
+
+    const { sessionCalendarUrl, selectedCalendarSession } =
+      await import("../../src/features/calendar/session-links.ts");
+    for (const session of review.progression.sourceSessions.slice(0, 2)) {
+      const url = new URL(sessionCalendarUrl(session.date, session.id), baseUrl);
+      assert.equal(url.searchParams.get("date"), jog.scheduledDate);
+      assert.equal(selectedCalendarSession(calendar, url.searchParams).id, session.id);
+    }
+    const { formatPlannedRpe } = await import("../../src/features/prescriptions/format.ts");
+    const { min, max } = review.progression.frontSquat[0].plannedRpe;
+    assert.equal(formatPlannedRpe(min, max), "6–7 RPE");
+
+    const weekRows = await admin.collection("paideuo_program_weeks").getFullList({
+      filter: admin.filter("block.program = {:programId}", { programId }),
+      sort: "position",
+    });
+    const future = await request(`${reviewPath}/${weekRows[2].id}`);
+    assert.deepEqual(future.progression.aerobicCoverage, { planned: 1, measured: 0, specified: 0 });
+    assert.deepEqual(future.progression.aerobicByModality, {});
+    assert.equal(future.progression.sourceSessions[0].status, "planned");
+
+    const original = await admin
+      .collection("paideuo_session_prescriptions")
+      .getOne(scheduled.source_prescription_id);
+    const cellPath = `${root}/blocks/${weekRows[0].block}/weeks/${weekId}/cells/${original.slot}`;
+    const cell = await request(cellPath);
+    await request(cellPath, "PATCH", {
+      ...cell.prescription,
+      title: "Changed plan",
+      components: [],
+      revision: cell.revision,
+    });
+    assert.deepEqual(await request(`${reviewPath}/${weekId}`), review);
+  });
+});

@@ -41,6 +41,7 @@ import {
   parseDate,
   todayInTimezone,
 } from "./dates";
+import { selectedCalendarSession } from "./session-links";
 import { calendarKey, schedulingApi } from "./scheduling";
 import type {
   CalendarReport,
@@ -78,7 +79,12 @@ export const CalendarPage = () => {
 
 const Calendar = ({ ownerId }: { ownerId: string }) => {
   const [params, setParams] = useSearchParams();
-  const [selectedSession, selectSession] = useState<string>();
+  const selectSession = (id?: string) => {
+    const next = new URLSearchParams(params);
+    if (id) next.set("session", id);
+    else next.delete("session");
+    setParams(next, { replace: true });
+  };
   const [checkInDate, setCheckInDate] = useState<string>();
   const [workoutDate, setWorkoutDate] = useState<string>();
   const workoutTrigger = useRef<HTMLButtonElement>(null);
@@ -140,9 +146,8 @@ const Calendar = ({ ownerId }: { ownerId: string }) => {
     if (!byDay.has(session.scheduledDate)) byDay.set(session.scheduledDate, []);
     byDay.get(session.scheduledDate)?.push(session);
   }
-  const selected = query.data?.sessions.find(({ id }) => id === selectedSession);
+  const selected = selectedCalendarSession(query.data?.sessions, params);
   const navigate = (nextDate: Date, nextView: View) => {
-    selectSession(undefined);
     setCheckInDate(undefined);
     setWorkoutDate(undefined);
     setParams({ date: dateKey(nextDate), view: nextView });
@@ -202,6 +207,14 @@ const Calendar = ({ ownerId }: { ownerId: string }) => {
           </Notice>
           <Button size="sm" onClick={() => void query.refetch()}>
             Retry
+          </Button>
+        </Flex>
+      )}
+      {query.isSuccess && params.has("session") && !selected && (
+        <Flex align="center" gap="2" wrap="wrap">
+          <Notice>The selected session is unavailable in this calendar period.</Notice>
+          <Button size="sm" onClick={() => selectSession()}>
+            Dismiss
           </Button>
         </Flex>
       )}
