@@ -327,6 +327,13 @@ const handlePrograms = (event) => {
       status: "planned",
     });
 
+  const unscheduleProgram = (tx) => {
+    const schedule = scheduleFor(tx, id);
+    if (!schedule) throw new BadRequestError("This program has no scheduled workouts.");
+    for (const row of scheduledRows(tx, schedule, true)) tx.delete(row);
+    tx.delete(schedule);
+  };
+
   const weekDates = (db, schedule) => {
     const dates = require(__hooks + "/calendar-dates.js");
     const start = dates.parse(schedule.getString("start_date"));
@@ -1400,10 +1407,23 @@ const handlePrograms = (event) => {
   }
 
   if (action === "archive") {
+    const unscheduleWorkouts = body.unscheduleWorkouts;
+    if (unscheduleWorkouts !== undefined && typeof unscheduleWorkouts !== "boolean") {
+      throw new BadRequestError("Choose whether to unschedule workouts.");
+    }
     app.runInTransaction((tx) => {
       const program = ownProgram(tx, id);
+      if (unscheduleWorkouts) unscheduleProgram(tx);
       program.set("status", "archived");
       tx.save(program);
+    });
+    return event.json(200, { id });
+  }
+
+  if (action === "unschedule") {
+    app.runInTransaction((tx) => {
+      ownProgram(tx, id);
+      unscheduleProgram(tx);
     });
     return event.json(200, { id });
   }

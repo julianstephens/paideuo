@@ -1,3 +1,8 @@
+## v0.4.1
+
+- Prompt whether to unschedule workouts when archiving a scheduled program
+- Add an explicit action to unschedule workouts for scheduled programs
+
 ## v0.4.0
 
 - Add ability to batch import training components

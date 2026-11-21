@@ -150,7 +150,9 @@ export const programsApi = {
   update: (id: string, fields: ProgramFields) =>
     send<{ id: string }>(programPath(id), "PATCH", fields),
   complete: (id: string) => send<{ id: string }>(`${programPath(id)}/complete`, "POST"),
-  archive: (id: string) => send<{ id: string }>(`${programPath(id)}/archive`, "POST"),
+  archive: (id: string, unscheduleWorkouts = false) =>
+    send<{ id: string }>(`${programPath(id)}/archive`, "POST", { unscheduleWorkouts }),
+  unschedule: (id: string) => send<{ id: string }>(`${programPath(id)}/unschedule`, "POST"),
   duplicate: (id: string, operationId: string) =>
     send<{ id: string }>(`${programPath(id)}/duplicate`, "POST", { operationId }),
   blockSources: (signal: AbortSignal) =>
