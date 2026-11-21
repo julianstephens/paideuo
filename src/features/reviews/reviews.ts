@@ -57,7 +57,8 @@ export type WeeklyReview = ReviewSummary & {
     }[];
     aerobicByModality: Record<string, number>;
     plannedAerobicByModality: Record<string, number>;
-    aerobicCoverage: { measured: number; specified: number };
+    plannedAerobicMaxByModality: Record<string, number>;
+    aerobicCoverage: { planned: number; measured: number; specified: number };
     sourceSessions: { id: string; date: string; title: string; status: string }[];
   };
   dataCoverage: {

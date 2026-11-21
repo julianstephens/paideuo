@@ -5,6 +5,8 @@ const Module = require("node:module");
 const path = require("node:path");
 const test = require("node:test");
 
+global.__hooks = __dirname;
+
 const compile = (filename) => {
   const result = new Module(filename);
   result.filename = filename;

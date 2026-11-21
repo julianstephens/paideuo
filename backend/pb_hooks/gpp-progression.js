@@ -1,3 +1,5 @@
+const { add, plannedAerobic, measuredAerobic } = require(__hooks + "/aerobic.cjs");
+
 const normalized = (value) =>
   String(value ?? "")
     .toLowerCase()
@@ -6,14 +8,35 @@ const normalized = (value) =>
 
 const valueOrNull = (value) => (value == null ? null : value);
 
-const plannedBout = (targets) => {
-  if (!targets) return null;
-  if (targets.work_seconds != null) return targets.work_seconds / 60;
-  if (!Array.isArray(targets.segments)) return null;
-  const work = targets.segments
-    .filter((segment) => segment.type === "work")
-    .map((segment) => segment.duration_seconds / 60);
-  return work.length ? Math.max(...work) : null;
+const activityPatterns = [
+  [/\b(?:run(?:ning)?|jog(?:ging)?) walk(?:ing)?\b/, "run/walk"],
+  [/\b(?:run|running|jog|jogging)\b/, "running"],
+  [/\b(?:walk|walking)\b/, "walking"],
+  [/\b(?:bike|biking|cycle|cycling|bicycle)\b/, "cycling"],
+  [/\b(?:row|rowing|rower)\b/, "rowing"],
+  [/\b(?:swim|swimming)\b/, "swimming"],
+];
+
+const modalityFor = (label, fallback = "unspecified") => {
+  const name = normalized(label);
+  return activityPatterns.find(([pattern]) => pattern.test(name))?.[1] ?? (name || fallback);
+};
+
+const prescribedModality = (component, name) =>
+  component.modality
+    ? modalityFor(component.modality)
+    : (activityPatterns.find(([pattern]) => pattern.test(name))?.[1] ?? "unspecified");
+
+const addByModality = (totals, minutes, { running, walking }, modality) => {
+  if (running == null && walking == null) {
+    if (minutes != null) totals[modality] = add(totals[modality], minutes);
+    return;
+  }
+
+  if (running != null) totals.running = add(totals.running, running);
+  if (walking != null) totals.walking = add(totals.walking, walking);
+  const unallocated = (minutes ?? 0) - (running ?? 0) - (walking ?? 0);
+  if (unallocated > 0) totals.unspecified = add(totals.unspecified, unallocated);
 };
 
 const formatLoad = (load) => (load ? { value: load.value, unit: load.unit } : null);
@@ -24,13 +47,14 @@ const progression = (sessions) => {
   const circuits = [];
   const aerobicByModality = Object.create(null);
   const plannedAerobicByModality = Object.create(null);
+  const plannedAerobicMaxByModality = Object.create(null);
   let aerobicMeasured = 0;
   let aerobicSpecified = 0;
+  let aerobicPlanned = 0;
   const sourceSessions = [];
 
   for (const session of sessions) {
     const status = session.status;
-    const completion = session.completion;
     const prescription = session.prescription ?? {};
     const results = new Map(
       (session.componentResults ?? []).map((result) => [result.componentKey, result]),
@@ -45,21 +69,23 @@ const progression = (sessions) => {
     for (const component of prescription.components ?? []) {
       const name = normalized(component.name);
       const target = component.targets ?? {};
-      const result = results.get(component.key);
+      const result = status === "completed" ? results.get(component.key) : null;
+      const isAerobic = component.classification === "aerobic";
+      const isJogging = name.includes("jog") || name.includes("running");
+      const planned = isAerobic || isJogging ? plannedAerobic(component) : null;
 
-      if (name.includes("jog") || name.includes("running")) {
-        const plannedBoutMin = plannedBout(target);
+      if (isJogging || planned?.running != null) {
         jogging.push({
           sessionId: session.id,
           date: session.scheduledDate,
           title: component.name,
           status,
-          plannedBoutMin: valueOrNull(plannedBoutMin),
+          plannedBoutMin: planned.bout,
           actualBoutMin: valueOrNull(result?.continuousBoutMin),
         });
       }
 
-      if (name.includes("front squat") || name.includes("front-squat")) {
+      if (name.includes("front squat")) {
         frontSquat.push({
           sessionId: session.id,
           date: session.scheduledDate,
@@ -88,42 +114,28 @@ const progression = (sessions) => {
         });
       }
 
-      if (component.classification === "aerobic") {
-        aerobicSpecified++;
-        const modality =
-          component.modality ??
-          (Array.isArray(target.segments)
-            ? [...new Set(target.segments.map((segment) => segment.modality).filter(Boolean))].join(
-                "/",
-              )
-            : "unspecified");
-        const plannedMinutes = target.segments
-          ? target.segments.reduce((sum, segment) => sum + segment.duration_seconds / 60, 0) *
-            (target.repetitions ?? 1)
-          : target.durationMin;
-        if (plannedMinutes != null) {
-          const key = String(modality).toLowerCase().trim() || "unspecified";
-          plannedAerobicByModality[key] = (plannedAerobicByModality[key] ?? 0) + plannedMinutes;
-        }
-        if (status !== "completed") continue;
-        const actualMinutes =
-          result?.durationMin ??
-          (result?.runningMin == null && result?.walkingMin == null
-            ? null
-            : (result.runningMin ?? 0) + (result.walkingMin ?? 0));
-        if (actualMinutes != null) {
-          aerobicMeasured++;
-          const modality = (
-            result?.aerobicModality ??
-            result?.modality ??
-            component.modality ??
-            "unspecified"
-          )
-            .toLowerCase()
-            .trim();
-          aerobicByModality[modality] = (aerobicByModality[modality] ?? 0) + actualMinutes;
-        }
-      }
+      if (!isAerobic) continue;
+      aerobicPlanned++;
+      const modality = prescribedModality(component, name);
+      addByModality(plannedAerobicByModality, planned.minutes, planned, modality);
+      addByModality(
+        plannedAerobicMaxByModality,
+        planned.maxMinutes ?? planned.minutes,
+        planned,
+        modality,
+      );
+      if (status !== "completed") continue;
+
+      aerobicSpecified++;
+      const actual = measuredAerobic(component, result);
+      if (actual.minutes == null) continue;
+      aerobicMeasured++;
+      addByModality(
+        aerobicByModality,
+        actual.minutes,
+        actual,
+        modalityFor(actual.modality, modality),
+      );
     }
   }
 
@@ -133,7 +145,12 @@ const progression = (sessions) => {
     circuits,
     aerobicByModality: { ...aerobicByModality },
     plannedAerobicByModality: { ...plannedAerobicByModality },
-    aerobicCoverage: { measured: aerobicMeasured, specified: aerobicSpecified },
+    plannedAerobicMaxByModality: { ...plannedAerobicMaxByModality },
+    aerobicCoverage: {
+      planned: aerobicPlanned,
+      measured: aerobicMeasured,
+      specified: aerobicSpecified,
+    },
     sourceSessions,
   };
 };

@@ -5,10 +5,12 @@ import { Link as RouterLink, useParams } from "react-router";
 import { FormField, Notice, PageHeader, Panel } from "../../components/ui";
 import { errorMessage } from "../../lib/api/request";
 import { useSession } from "../auth/session";
+import { sessionCalendarUrl } from "../calendar/session-links";
 import { useMetricPreferences } from "../compliance/MetricPreferences";
 import { metricValues, windowLabel } from "../compliance/MetricsCharts";
 import { averageRpe } from "../compliance/format";
 import { metricLabels } from "../compliance/metrics";
+import { formatPlannedRpe } from "../prescriptions/format";
 import type { DurationUnit } from "../recovery/recovery";
 import { reviewKey, reviewsApi } from "./reviews";
 import type { ReviewNotes, WeeklyReview } from "./reviews";
@@ -164,24 +166,27 @@ const missing = "Missing";
 
 const GppProgression = ({ review, unit }: { review: WeeklyReview; unit: DurationUnit }) => {
   const { progression, dataCoverage, total } = review;
+  const number = new Intl.NumberFormat(undefined, { maximumFractionDigits: 2 });
+  const durationValue = (minutes: number) =>
+    unit === "hours" ? number.format(minutes / 60) : number.format(minutes);
+  const unitLabel = unit === "hours" ? "hr" : "min";
   const duration = (minutes: number | null) =>
-    minutes === null
-      ? missing
-      : unit === "hours"
-        ? `${(minutes / 60).toFixed(1)} hr`
-        : `${minutes} min`;
+    minutes === null ? missing : `${durationValue(minutes)} ${unitLabel}`;
+  const plannedDuration = (modality: string) => {
+    const min = progression.plannedAerobicByModality[modality] ?? null;
+    const max = progression.plannedAerobicMaxByModality[modality] ?? null;
+    if (max == null || min === max) return duration(min);
+    return min == null ? `≤${duration(max)}` : `${durationValue(min)}–${duration(max)}`;
+  };
   const modalities = new Set([
     ...Object.keys(progression.plannedAerobicByModality),
+    ...Object.keys(progression.plannedAerobicMaxByModality),
     ...Object.keys(progression.aerobicByModality),
   ]);
   const rpe = (value: WeeklyReview["progression"]["frontSquat"][number]["plannedRpe"]) =>
-    value == null
-      ? missing
-      : typeof value === "number"
-        ? `${value} RPE`
-        : value.max != null
-          ? `${value.min}–${value.max} RPE`
-          : `${value.min} RPE`;
+    (typeof value === "number"
+      ? formatPlannedRpe(value)
+      : formatPlannedRpe(value?.min, value?.max)) ?? missing;
 
   return (
     <Stack as="section" aria-label="GPP planned outcomes and recorded outcomes" gap="3">
@@ -220,30 +225,33 @@ const GppProgression = ({ review, unit }: { review: WeeklyReview; unit: Duration
                     <Text fontSize="sm" textTransform="capitalize">
                       {modality} planned
                     </Text>
-                    <Text fontWeight="semibold">
-                      {duration(progression.plannedAerobicByModality[modality] ?? null)}
-                    </Text>
+                    <Text fontWeight="semibold">{plannedDuration(modality)}</Text>
                   </Stack>
                   <Stack gap="1">
                     <Text fontSize="sm" textTransform="capitalize">
                       {modality} actual
                     </Text>
                     <Text fontWeight="semibold">
-                      {duration(progression.aerobicByModality[modality] ?? null)}
+                      {progression.aerobicCoverage.specified > 0
+                        ? duration(progression.aerobicByModality[modality] ?? null)
+                        : "No completed outcomes"}
                     </Text>
                   </Stack>
                 </Grid>
               ))}
-              <Text fontSize="xs" color="fg.muted">
-                {progression.aerobicCoverage.measured}/{progression.aerobicCoverage.specified}{" "}
-                aerobic components measured
-              </Text>
             </Stack>
           ) : (
             <Text mt="3" color="fg.muted">
               {missing}
             </Text>
           )}
+          <Text mt="2" fontSize="xs" color="fg.muted">
+            {progression.aerobicCoverage.planned} planned aerobic components
+            {" · "}
+            {progression.aerobicCoverage.specified > 0
+              ? `${progression.aerobicCoverage.measured}/${progression.aerobicCoverage.specified} measured in completed sessions`
+              : "No completed aerobic components"}
+          </Text>
         </Panel>
         <Panel as="article">
           <Heading as="h3" size="sm">
@@ -355,7 +363,7 @@ const GppProgression = ({ review, unit }: { review: WeeklyReview; unit: Duration
           <Flex wrap="wrap" gap="3">
             {progression.sourceSessions.map((item) => (
               <Link key={item.id} asChild variant="underline" fontSize="sm">
-                <RouterLink to={`/?view=week&date=${encodeURIComponent(item.date)}`}>
+                <RouterLink to={sessionCalendarUrl(item.date, item.id)}>
                   {item.title} · {item.date} · {item.status}
                 </RouterLink>
               </Link>

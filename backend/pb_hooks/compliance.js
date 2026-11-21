@@ -1,32 +1,6 @@
 const intensityLevels = ["easy", "moderate", "hard", "maximal", "unspecified"];
 
-const add = (total, value) => (value == null ? total : (total ?? 0) + value);
-const longest = (total, value) => (value == null ? total : Math.max(total ?? 0, value));
-
-const plannedAerobic = ({ durationMin, targets }) => {
-  const { segments, repetitions = 1, work_seconds, rest_seconds = 0 } = targets ?? {};
-  const intervals =
-    segments ??
-    (work_seconds == null
-      ? []
-      : [
-          { type: "work", duration_seconds: work_seconds },
-          { type: "recovery", duration_seconds: rest_seconds },
-        ]);
-  let minutes = null;
-  let running = null;
-  let walking = null;
-  let bout = null;
-  for (const segment of intervals) {
-    const repeats = ["work", "recovery"].includes(segment.type) ? repetitions : 1;
-    const segmentMinutes = segment.duration_seconds / 60;
-    minutes = add(minutes, segmentMinutes * repeats);
-    if (segment.modality === "running") running = add(running, segmentMinutes * repeats);
-    if (segment.modality === "walking") walking = add(walking, segmentMinutes * repeats);
-    if (repeats > 0 && segment.type === "work") bout = longest(bout, segmentMinutes);
-  }
-  return { minutes: durationMin ?? minutes, running, walking, bout };
-};
+const { add, longest, plannedAerobic, measuredAerobic } = require(__hooks + "/aerobic.cjs");
 
 const calculate = (sessions, today) => {
   const counts = { completed: 0, skipped: 0, pending: 0, unresolved: 0, shortened: 0 };
@@ -94,20 +68,16 @@ const calculate = (sessions, today) => {
       if (status !== "completed") continue;
 
       aerobicCoverageSpecified++;
-      const result = results.get(component.key);
-      if (!result) continue;
-      actualRunningMinutes = add(actualRunningMinutes, result.runningMin);
-      actualWalkingMinutes = add(actualWalkingMinutes, result.walkingMin);
-      actualContinuousBoutMinutes = longest(actualContinuousBoutMinutes, result.continuousBoutMin);
-      const minutes = result.durationMin ?? add(result.runningMin, result.walkingMin) ?? null;
-      if (minutes == null) continue;
+      const outcome = measuredAerobic(component, results.get(component.key));
+      actualRunningMinutes = add(actualRunningMinutes, outcome.running);
+      actualWalkingMinutes = add(actualWalkingMinutes, outcome.walking);
+      actualContinuousBoutMinutes = longest(actualContinuousBoutMinutes, outcome.bout);
+      if (outcome.minutes == null) continue;
       aerobicCoverageMeasured++;
-      sessionAerobic = add(sessionAerobic, minutes);
-      const modality = (result.aerobicModality ?? result.modality ?? component.modality ?? "")
-        .toLowerCase()
-        .trim();
+      sessionAerobic = add(sessionAerobic, outcome.minutes);
+      const modality = (outcome.modality ?? "").toLowerCase().trim();
       const key = modality || "unspecified";
-      aerobicByModality[key] = add(aerobicByModality[key], minutes);
+      aerobicByModality[key] = add(aerobicByModality[key], outcome.minutes);
     }
     if (status === "completed") {
       aerobicMinutes = add(aerobicMinutes, directAerobicMinutes ?? sessionAerobic);
