@@ -64,6 +64,10 @@ export const checkInSections = [
   },
 ] as const;
 
+export const checkInFieldKeys = checkInSections.flatMap(({ fields }) =>
+  fields.map(({ key }) => key),
+);
+
 type NumericMetric = (typeof recoveryMetrics)[number]["key"] | typeof protein.key;
 type ChoiceFields = {
   [Field in (typeof nutritionChoices)[number] as Field["key"]]:
@@ -85,8 +89,12 @@ export type Preferences = {
   hiddenSummary: string[];
   durationUnit: DurationUnit;
 };
+type VisibilityUpdate = {
+  group: "disabled" | "hiddenCharts" | "hiddenSummary";
+  enabled: boolean;
+} & ({ key: string } | { keys: readonly string[] });
 export type PreferenceUpdate =
-  | { group: "disabled" | "hiddenCharts" | "hiddenSummary"; key: string; enabled: boolean }
+  | VisibilityUpdate
   | { group: "durationUnit"; durationUnit: DurationUnit };
 
 export const checkInKey = (ownerId: string) => ["check-ins", ownerId] as const;
@@ -108,8 +116,6 @@ export const checkInApi = {
     apiRequest<Preferences>(preferencesPath, "GET", undefined, signal),
   updatePreferences: (change: PreferenceUpdate) =>
     apiRequest<Preferences>(preferencesPath, "PUT", change),
-  setEnabled: (key: CheckInField, enabled: boolean) =>
-    apiRequest<Preferences>(preferencesPath, "PUT", { key, enabled }),
 };
 
 export const summarize = (entries: CheckInEntry[], key: NumericMetric) => {

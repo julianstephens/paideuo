@@ -135,9 +135,23 @@ const CredentialSettings = ({ ownerId }: { ownerId: string }) => {
           </FormField>
         </Grid>
         <Stack gap="2">
-          <Text fontSize="sm" color="fg.muted">
-            Scopes
-          </Text>
+          <Flex align="center" gap="2" wrap="wrap">
+            <Text fontSize="sm" color="fg.muted">
+              Scopes
+            </Text>
+            <Button
+              type="button"
+              size="sm"
+              variant="outline"
+              aria-label="Select all credential scopes"
+              disabled={
+                credentialsBusy || availableScopes.every((scope) => issueScopes.includes(scope))
+              }
+              onClick={() => setIssueScopes([...availableScopes])}
+            >
+              Select all
+            </Button>
+          </Flex>
           <Grid templateColumns={columnLayout} gap="2">
             {availableScopes.map((scope) => (
               <Checkbox.Root
