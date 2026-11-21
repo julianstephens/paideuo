@@ -172,7 +172,7 @@ routerAdd(
       const resultRecords = tx.findRecordsByFilter(
         componentResultCollection,
         "session = {:id}",
-        "",
+        "planned_position,id",
         0,
         0,
         { id },
@@ -180,12 +180,8 @@ routerAdd(
       const { resultData } = require(__hooks + "/component-results.js");
       const today = todayIn(sessionSchedule(tx, row).getString("timezone"));
       if (
-        state(
-          row,
-          completionData(completion),
-          statusFor(row, today),
-          resultRecords.map(resultData),
-        ).revision !== revision
+        state(row, completionData(completion), statusFor(row, today), resultRecords.map(resultData))
+          .revision !== revision
       ) {
         throw new ApiError(409, "This session changed. Review it before deleting.");
       }
@@ -299,7 +295,7 @@ routerAdd(
       const resultRecords = tx.findRecordsByFilter(
         componentResultCollection,
         "session = {:id}",
-        "",
+        "planned_position,id",
         0,
         0,
         { id },
@@ -386,7 +382,9 @@ routerAdd(
                 session: id,
                 component_key: values.componentKey,
               });
-            const snapshotComponents = JSON.parse(row.getString("prescription_snapshot")).components;
+            const snapshotComponents = JSON.parse(
+              row.getString("prescription_snapshot"),
+            ).components;
             const position = snapshotComponents.findIndex(
               (item) => item.key === values.componentKey,
             );

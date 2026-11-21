@@ -76,11 +76,12 @@ See [the program sample](examples/import-v1-program.json).
 
 The result data contains a stable `sourceWorkoutKey`, a valid completion `date` in `YYYY-MM-DD`
 format, optional duration and session RPE, notes, and up to 100 components. Each component has a
-unique external `key` and unique one-based `plannedPosition`.
+unique `key` and unique one-based `plannedPosition`. The key, position, and name must match the
+scheduled prescription snapshot; results cannot reference live program components.
 
 `sourceSessionId`, when supplied, is an authorized `scheduled-session` reference. Actual durations,
-sets, and positions are non-negative whole numbers (positions are at least one); RPE is from 1
-through 10. Load is an object containing a non-negative `value` and a non-empty `unit`.
+sets, rounds, and positions are non-negative whole numbers (positions are at least one); RPE is
+from 1 through 10. Load is an object containing a non-negative `value` and a non-empty `unit`.
 Program imports derive prescription workout keys as
 `<program>/<block>/<week>/<slot>` using the four external IDs, providing a unique owner-scoped
 observation key. If that readable form would exceed the 200-character key limit, Paideuo substitutes

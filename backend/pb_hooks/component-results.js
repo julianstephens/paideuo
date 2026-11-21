@@ -69,7 +69,9 @@ const parseResults = (values, snapshot) => {
       throw new BadRequestError(`${label} contains an unknown field.`);
     }
     if (!components.has(value.componentKey) || seen.has(value.componentKey)) {
-      throw new BadRequestError("Component results must identify unique components in this workout.");
+      throw new BadRequestError(
+        "Component results must identify unique components in this workout.",
+      );
     }
     seen.add(value.componentKey);
     const notes = value.notes ?? "";

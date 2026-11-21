@@ -26,11 +26,7 @@ module.exports = (components) => {
       throw new BadRequestError(`Enter a nonnegative whole duration for component ${position}.`);
     }
     const key = component.key ?? $security.randomString(24);
-    if (
-      typeof key !== "string" ||
-      !/^[A-Za-z0-9:_-]{1,200}$/.test(key) ||
-      keys.has(key)
-    ) {
+    if (typeof key !== "string" || !/^[A-Za-z0-9:_-]{1,200}$/.test(key) || keys.has(key)) {
       throw new BadRequestError(`Enter valid unique identifiers for the workout components.`);
     }
     keys.add(key);

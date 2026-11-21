@@ -40,12 +40,7 @@ const statusFor = (row, today) => {
   return status === "planned" && row.getString("scheduled_date") < today ? "skipped" : status;
 };
 
-const state = (
-  row,
-  completion,
-  status = row.getString("status"),
-  componentResults = [],
-) => ({
+const state = (row, completion, status = row.getString("status"), componentResults = []) => ({
   sessionLoad: require(__hooks + "/training-load.js").sessionLoad(completion),
   status,
   completion,

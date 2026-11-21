@@ -443,7 +443,9 @@ test("workout result preview conflicts even when replacement is requested", () =
       deleted: false,
       manually_moved: false,
       manually_edited: false,
-      prescription_snapshot: null,
+      prescription_snapshot: {
+        components: [{ key: "warm-up", name: "Warm-up" }],
+      },
     },
   );
   const completion = new FakeRecord(

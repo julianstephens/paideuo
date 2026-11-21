@@ -475,11 +475,7 @@ const observationPlan = (db, owner, document, options = {}) => {
     const snapshotComponents = snapshot.components ?? [];
     const componentIntegrityError = data.components.find((component) => {
       const planned = snapshotComponents[component.plannedPosition - 1];
-      return (
-        !planned ||
-        planned.key !== component.key ||
-        planned.name !== component.name
-      );
+      return !planned || planned.key !== component.key || planned.name !== component.name;
     });
     if (componentIntegrityError) {
       return {

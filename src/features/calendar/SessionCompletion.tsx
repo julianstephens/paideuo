@@ -1,15 +1,5 @@
 import { loadPoints } from "../compliance/format";
-import {
-  Box,
-  Button,
-  Flex,
-  Grid,
-  Heading,
-  Input,
-  Stack,
-  Text,
-  Textarea,
-} from "@chakra-ui/react";
+import { Box, Button, Flex, Grid, Heading, Input, Stack, Text, Textarea } from "@chakra-ui/react";
 import { useState } from "react";
 import { Disclosure, FormField, Notice } from "../../components/ui";
 import { fullDate, todayInTimezone } from "./dates";
@@ -28,10 +18,7 @@ type ComponentResultDraft = {
   notes: string;
 };
 
-const resultDraft = (
-  componentKey: string,
-  result?: ComponentResult,
-): ComponentResultDraft => ({
+const resultDraft = (componentKey: string, result?: ComponentResult): ComponentResultDraft => ({
   componentKey,
   active: Boolean(result),
   load: result?.load ? String(result.load.value) : "",
@@ -56,9 +43,7 @@ export const CompletionForm = ({
   session: CalendarSession;
   pending: boolean;
   canSave: boolean;
-  save: (
-    values: SessionCompletion & { componentResults: ComponentResult[] },
-  ) => void;
+  save: (values: SessionCompletion & { componentResults: ComponentResult[] }) => void;
   cancel: () => void;
 }) => {
   const today = todayInTimezone(session.timezone);
@@ -131,7 +116,9 @@ export const CompletionForm = ({
             />
           </FormField>
           {session.prescription.components.length > 0 && (
-            <Disclosure label={`Component results (${componentResults.filter(({ active }) => active).length})`}>
+            <Disclosure
+              label={`Component results (${componentResults.filter(({ active }) => active).length})`}
+            >
               <Stack gap="3">
                 {session.prescription.components.map((component) => {
                   const result = component.key
@@ -250,7 +237,9 @@ export const CompletionForm = ({
                                   value={result.rounds}
                                   disabled={pending}
                                   onChange={(event) =>
-                                    updateResult(result.componentKey, { rounds: event.target.value })
+                                    updateResult(result.componentKey, {
+                                      rounds: event.target.value,
+                                    })
                                   }
                                 />
                               </FormField>
