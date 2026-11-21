@@ -416,6 +416,7 @@ const normalizeWorkoutResults = (value, context) => {
           "repsCompleted",
           "actualLoad",
           "rpe",
+          "rounds",
           "notes",
         ],
         ["key", "plannedPosition", "name", "completed"],
@@ -455,6 +456,7 @@ const normalizeWorkoutResults = (value, context) => {
             }
           : null,
         rpe: finite(item.rpe, `${label} RPE`, 1, 10, true),
+        rounds: whole(item.rounds, `${label} rounds`, 0, Number.MAX_SAFE_INTEGER, true),
         notes: text(item.notes ?? "", `${label} notes`, 10000),
       };
     },

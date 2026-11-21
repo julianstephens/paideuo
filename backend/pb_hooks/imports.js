@@ -471,6 +471,30 @@ const observationPlan = (db, owner, document, options = {}) => {
     const completion = first(db, "paideuo_session_completions", "session = {:id}", {
       id: session.id,
     });
+    const snapshot = JSON.parse(session.getString("prescription_snapshot") || "{}");
+    const snapshotComponents = snapshot.components ?? [];
+    const componentIntegrityError = data.components.find((component) => {
+      const planned = snapshotComponents[component.plannedPosition - 1];
+      return (
+        !planned ||
+        planned.key !== component.key ||
+        planned.name !== component.name
+      );
+    });
+    if (componentIntegrityError) {
+      return {
+        items: [
+          {
+            type: "workout-component-results",
+            key: data.sourceWorkoutKey,
+            id: session.id,
+            status: "conflict",
+            error: "Component results must match the scheduled workout snapshot.",
+          },
+        ],
+        state: [{ type: "snapshot-integrity-conflict", sessionId: session.id }],
+      };
+    }
     const desiredCompletion = {
       completed_date: data.completedDate,
       actual_duration_min_json: data.actualDurationMin,
@@ -516,6 +540,7 @@ const observationPlan = (db, owner, document, options = {}) => {
           "reps_completed",
           "actual_load_json",
           "rpe_json",
+          "rounds_json",
           "notes",
         ]),
       ),
@@ -531,6 +556,7 @@ const observationPlan = (db, owner, document, options = {}) => {
       repsCompleted: component.reps_completed || null,
       actualLoad: component.actual_load,
       rpe: component.rpe,
+      rounds: component.rounds,
       notes: component.notes,
     }));
     if (
@@ -1061,6 +1087,7 @@ const commitWorkout = (db, owner, data, plan, options = {}) => {
       reps_completed: component.repsCompleted ?? "",
       actual_load: component.actualLoad,
       rpe: component.rpe,
+      rounds: component.rounds,
       notes: component.notes,
     });
   }

@@ -138,6 +138,7 @@ const handlePrograms = (event) => {
     children(db, "paideuo_training_components", "prescription", id, "position,id");
 
   const componentFields = (component) => ({
+    key: component.id,
     ...copyFields(component, [
       "position",
       "name",
@@ -149,6 +150,7 @@ const handlePrograms = (event) => {
   });
 
   const presentComponent = (component) => ({
+    ...(component.key ? { key: component.key } : {}),
     name: component.name,
     instructions: component.instructions,
     durationMin:

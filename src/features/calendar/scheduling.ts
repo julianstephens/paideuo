@@ -29,13 +29,28 @@ export type SessionCompletion = {
   sessionRpe: number | null;
   notes: string;
 };
+export type ComponentResult = {
+  componentKey: string;
+  load: { value: number; unit: string } | null;
+  sets: number | null;
+  reps: string | null;
+  rpe: number | null;
+  durationMin: number | null;
+  rounds: number | null;
+  notes: string;
+};
 export type SessionExecution =
-  | { action: "complete" | "edit-completion"; completion: SessionCompletion }
+  | {
+      action: "complete" | "edit-completion";
+      completion: SessionCompletion;
+      componentResults: ComponentResult[];
+    }
   | { action: "skip" | "restore" };
 export type SessionExecutionState = {
   revision: string;
   status: "planned" | "completed" | "skipped";
   completion: SessionCompletion | null;
+  componentResults: ComponentResult[];
   sessionLoad: number | null;
 };
 export type CalendarSession = DatedPrescription &

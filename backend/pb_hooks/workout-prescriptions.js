@@ -42,6 +42,7 @@ const parsePrescription = (prescription) => {
     plannedDurationMin,
     plannedIntensity,
     components: componentValues(components).map((component) => ({
+      key: component.key,
       name: component.name,
       instructions: component.instructions,
       durationMin: component.duration_specified ? component.duration_min : null,

@@ -1,4 +1,5 @@
 const completionCollection = "paideuo_session_completions";
+const componentResultCollection = "paideuo_workout_component_results";
 
 const ownerFilter = (prefix = "") =>
   `((${prefix}schedule = '' && ${prefix}owner = {:owner}) || ${prefix}schedule.program.owner = {:owner})`;
@@ -39,10 +40,16 @@ const statusFor = (row, today) => {
   return status === "planned" && row.getString("scheduled_date") < today ? "skipped" : status;
 };
 
-const state = (row, completion, status = row.getString("status")) => ({
+const state = (
+  row,
+  completion,
+  status = row.getString("status"),
+  componentResults = [],
+) => ({
   sessionLoad: require(__hooks + "/training-load.js").sessionLoad(completion),
   status,
   completion,
+  componentResults,
   revision: $security.sha256(
     JSON.stringify([
       row.getString("scheduled_date"),
@@ -51,6 +58,7 @@ const state = (row, completion, status = row.getString("status")) => ({
       status,
       row.getString("prescription_snapshot"),
       completion,
+      componentResults,
     ]),
   ),
 });
@@ -58,6 +66,7 @@ const state = (row, completion, status = row.getString("status")) => ({
 // oxlint-disable-next-line import/no-commonjs
 module.exports = {
   completionCollection,
+  componentResultCollection,
   completionData,
   ownerFilter,
   ownSession,
