@@ -137,18 +137,25 @@ const handlePrograms = (event) => {
   const prescriptionComponents = (db, id) =>
     children(db, "paideuo_training_components", "prescription", id, "position,id");
 
+  const { componentKey, reconcileTrainingComponents } = require(
+    __hooks + "/training-components.cjs",
+  );
+
   const componentFields = (component) => ({
+    key: componentKey(component),
     ...copyFields(component, [
       "position",
       "name",
       "instructions",
       "duration_min",
       "duration_specified",
+      "external_key",
     ]),
     targets: JSON.parse(component.getString("targets") || "null"),
   });
 
   const presentComponent = (component) => ({
+    ...(component.key ? { key: component.key } : {}),
     name: component.name,
     instructions: component.instructions,
     durationMin:
@@ -157,6 +164,10 @@ const handlePrograms = (event) => {
   });
 
   const componentValues = require(__hooks + "/prescription-components.js");
+  const storedComponent = ({ key, ...component }) => ({
+    ...component,
+    ...(key ? { external_key: key } : {}),
+  });
 
   const copyPrescription = (db, fields, components, weekId, slotId) => {
     const prescription = save(db, "paideuo_session_prescriptions", {
@@ -165,7 +176,10 @@ const handlePrograms = (event) => {
       slot: slotId,
     });
     for (const component of components) {
-      save(db, "paideuo_training_components", { ...component, prescription: prescription.id });
+      save(db, "paideuo_training_components", {
+        ...storedComponent(component),
+        prescription: prescription.id,
+      });
     }
   };
 
@@ -717,12 +731,7 @@ const handlePrograms = (event) => {
                 slot: cellSlot,
               });
             }
-            if (components) {
-              for (const component of prescriptionComponents(tx, record.id)) tx.delete(component);
-              for (const component of components) {
-                save(tx, "paideuo_training_components", { ...component, prescription: record.id });
-              }
-            }
+            if (components) reconcileTrainingComponents(tx, record.id, components);
           });
           return event.json(200, { weekId, slotId: cellSlot });
         }

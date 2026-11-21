@@ -1,3 +1,4 @@
+const { reconcileTrainingComponents } = require(__hooks + "/training-components.cjs");
 const schema = require(__hooks + "/import-schemas.js");
 const credentials = require(__hooks + "/service-credentials.cjs");
 
@@ -350,6 +351,9 @@ const programPlan = (db, owner, data) => {
                 "position",
               ).map((component) =>
                 recordSnapshot(component, [
+                  "id",
+                  "position",
+                  "external_key",
                   "name",
                   "instructions",
                   "duration_min",
@@ -358,10 +362,11 @@ const programPlan = (db, owner, data) => {
                 ]),
               )
             : [],
-          desired: workout.components,
+          desired: workout.components.map(withComponentKey),
         });
         const componentState = state[state.length - 1];
         const currentComponents = componentState.current.map((component) => ({
+          key: component.external_key || component.id,
           name: component.name,
           instructions: component.instructions,
           durationMin: component.duration_specified ? component.duration_min : null,
@@ -369,10 +374,14 @@ const programPlan = (db, owner, data) => {
         }));
         const item = items[items.length - 1];
         if (
-          item?.status === "skip" &&
-          JSON.stringify(currentComponents) !== JSON.stringify(workout.components)
+          item.status === "skip" &&
+          JSON.stringify(currentComponents) !== JSON.stringify(componentState.desired)
         ) {
           item.status = "update";
+        }
+        if (prescriptionChoice.record && workout.components.some((component) => !component.key)) {
+          item.status = "conflict";
+          item.error = "Supply explicit component keys when importing an existing prescription.";
         }
       }
     }
@@ -471,6 +480,26 @@ const observationPlan = (db, owner, document, options = {}) => {
     const completion = first(db, "paideuo_session_completions", "session = {:id}", {
       id: session.id,
     });
+    const snapshot = JSON.parse(session.getString("prescription_snapshot") || "{}");
+    const snapshotComponents = snapshot.components ?? [];
+    const componentIntegrityError = data.components.find((component) => {
+      const planned = snapshotComponents[component.plannedPosition - 1];
+      return !planned || planned.key !== component.key || planned.name !== component.name;
+    });
+    if (componentIntegrityError) {
+      return {
+        items: [
+          {
+            type: "workout-component-results",
+            key: data.sourceWorkoutKey,
+            id: session.id,
+            status: "conflict",
+            error: "Component results must match the scheduled workout snapshot.",
+          },
+        ],
+        state: [{ type: "snapshot-integrity-conflict", sessionId: session.id }],
+      };
+    }
     const desiredCompletion = {
       completed_date: data.completedDate,
       actual_duration_min_json: data.actualDurationMin,
@@ -516,6 +545,7 @@ const observationPlan = (db, owner, document, options = {}) => {
           "reps_completed",
           "actual_load_json",
           "rpe_json",
+          "rounds_json",
           "notes",
         ]),
       ),
@@ -531,6 +561,7 @@ const observationPlan = (db, owner, document, options = {}) => {
       repsCompleted: component.reps_completed || null,
       actualLoad: component.actual_load,
       rpe: component.rpe,
+      rounds: component.rounds,
       notes: component.notes,
     }));
     if (
@@ -766,47 +797,20 @@ const update = (db, record, values) => {
   return record;
 };
 
-const trainingComponentValues = (component, position) => ({
-  position,
+const withComponentKey = (component, index) => ({
+  key: component.key ?? `component-${index + 1}`,
+  ...component,
+});
+
+const trainingComponentValues = (component, index) => ({
+  position: index + 1,
+  key: component.key,
   name: component.name,
   instructions: component.instructions,
   duration_min: component.durationMin ?? 0,
   duration_specified: component.durationMin !== null,
   targets: component.targets,
 });
-
-const sameTrainingComponent = (record, values) =>
-  record.getInt("position") === values.position &&
-  record.getString("name") === values.name &&
-  record.getString("instructions") === values.instructions &&
-  record.getInt("duration_min") === values.duration_min &&
-  record.getBool("duration_specified") === values.duration_specified &&
-  JSON.stringify(record.get("targets")) === JSON.stringify(values.targets);
-
-const reconcileTrainingComponents = (db, prescriptionId, components) => {
-  const existing = find(
-    db,
-    "paideuo_training_components",
-    "prescription = {:id}",
-    { id: prescriptionId },
-    "position,id",
-  );
-  const max = Math.max(existing.length, components.length);
-  for (let index = 0; index < max; index += 1) {
-    const current = existing[index] ?? null;
-    const desired = components[index] ?? null;
-    if (!desired) {
-      if (current) db.delete(current);
-      continue;
-    }
-    const values = trainingComponentValues(desired, index + 1);
-    if (!current) {
-      save(db, "paideuo_training_components", { prescription: prescriptionId, ...values });
-      continue;
-    }
-    if (!sameTrainingComponent(current, values)) update(db, current, values);
-  }
-};
 
 const commitProgram = (db, owner, document, plan) => {
   const data = document.data;
@@ -980,7 +984,11 @@ const commitProgram = (db, owner, document, plan) => {
             ? prescription
             : update(db, prescription, fields);
         if (status !== "skip") {
-          reconcileTrainingComponents(db, prescription.id, item.workout.components);
+          reconcileTrainingComponents(
+            db,
+            prescription.id,
+            item.workout.components.map(withComponentKey).map(trainingComponentValues),
+          );
         }
       }
     }
@@ -1061,6 +1069,7 @@ const commitWorkout = (db, owner, data, plan, options = {}) => {
       reps_completed: component.repsCompleted ?? "",
       actual_load: component.actualLoad,
       rpe: component.rpe,
+      rounds: component.rounds,
       notes: component.notes,
     });
   }

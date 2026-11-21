@@ -10,6 +10,7 @@ export type ComponentTargets = {
 };
 
 export type PrescriptionComponent = {
+  key?: string;
   name: string;
   instructions: string;
   durationMin: number | null;
@@ -20,6 +21,7 @@ type TargetName = keyof ComponentTargets | "duration";
 type TargetDrafts = Partial<Record<TargetName, string[]>>;
 export type ComponentDraft = {
   key: number;
+  snapshotKey?: string;
   name: string;
   instructions: string;
   targets: TargetDrafts;
@@ -27,9 +29,16 @@ export type ComponentDraft = {
 
 export const componentDraft = (
   key: number,
-  { name, instructions, durationMin, targets }: PrescriptionComponent,
+  {
+    key: snapshotKey = crypto.randomUUID(),
+    name,
+    instructions,
+    durationMin,
+    targets,
+  }: PrescriptionComponent,
 ): ComponentDraft => ({
   key,
+  snapshotKey,
   name,
   instructions,
   targets: {
@@ -46,6 +55,7 @@ export const componentDraft = (
 });
 
 export const componentPayload = ({
+  snapshotKey,
   name,
   instructions,
   targets,
@@ -62,6 +72,7 @@ export const componentPayload = ({
     rest_seconds,
   } = targets;
   return {
+    ...(snapshotKey ? { key: snapshotKey } : {}),
     name,
     instructions,
     durationMin: duration ? Number(duration[0]) : null,

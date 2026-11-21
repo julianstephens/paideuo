@@ -44,6 +44,7 @@
                   "plannedIntensity": "moderate",
                   "components": [
                     {
+                      "key": "warm-up",
                       "name": "Warm-up",
                       "instructions": "",
                       "durationMin": 10,

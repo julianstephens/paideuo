@@ -39,6 +39,7 @@ routerAdd(
     const {
       completionCollection,
       completionData,
+      componentResultCollection,
       ownerFilter,
       state,
       statusFor,
@@ -76,6 +77,22 @@ routerAdd(
         params,
       );
       const bySession = new Map(completions.map((record) => [record.getString("session"), record]));
+      const componentResultRecords = tx.findRecordsByFilter(
+        componentResultCollection,
+        ownerFilter("session.") +
+          " && session.scheduled_date >= {:start} && session.scheduled_date <= {:end}",
+        "session,planned_position,id",
+        0,
+        0,
+        params,
+      );
+      const { resultData } = require(__hooks + "/component-results.js");
+      const resultsBySession = new Map();
+      for (const record of componentResultRecords) {
+        const sessionId = record.getString("session");
+        if (!resultsBySession.has(sessionId)) resultsBySession.set(sessionId, []);
+        resultsBySession.get(sessionId).push(resultData(record));
+      }
       tx.expandRecords(rows, ["schedule.program"], null);
       const now = new DateTime();
       const todayByTimezone = new Map();
@@ -98,6 +115,7 @@ routerAdd(
             row,
             completionData(bySession.get(row.id)),
             statusFor(row, todayByTimezone.get(timezone)),
+            resultsBySession.get(row.id) ?? [],
           ),
           prescription: JSON.parse(row.getString("prescription_snapshot")),
         };
@@ -130,6 +148,7 @@ routerAdd(
     const {
       completionCollection,
       completionData,
+      componentResultCollection,
       ownSession,
       sessionSchedule,
       state,
@@ -150,11 +169,26 @@ routerAdd(
           id,
         },
       );
+      const resultRecords = tx.findRecordsByFilter(
+        componentResultCollection,
+        "session = {:id}",
+        "planned_position,id",
+        0,
+        0,
+        { id },
+      );
+      const { resultData } = require(__hooks + "/component-results.js");
       const today = todayIn(sessionSchedule(tx, row).getString("timezone"));
-      if (state(row, completionData(completion), statusFor(row, today)).revision !== revision) {
+      if (
+        state(row, completionData(completion), statusFor(row, today), resultRecords.map(resultData))
+          .revision !== revision
+      ) {
         throw new ApiError(409, "This session changed. Review it before deleting.");
       }
       if (completion) tx.delete(completion);
+      for (const result of resultRecords) {
+        tx.delete(result);
+      }
       row.set("deleted", true);
       tx.save(row);
     });
@@ -229,13 +263,14 @@ routerAdd(
     const {
       completionCollection,
       completionData,
+      componentResultCollection,
       ownSession,
       sessionSchedule,
       state,
       statusFor,
       todayIn,
     } = require(__hooks + "/calendar-sessions.js");
-    const { action, revision, completion } = event.requestInfo().body;
+    const { action, revision, completion, componentResults } = event.requestInfo().body;
     const transitions = {
       complete: ["planned", "completed"],
       "edit-completion": ["completed", "completed"],
@@ -257,9 +292,20 @@ routerAdd(
       const [record] = tx.findRecordsByFilter(completionCollection, "session = {:id}", "", 1, 0, {
         id,
       });
+      const resultRecords = tx.findRecordsByFilter(
+        componentResultCollection,
+        "session = {:id}",
+        "planned_position,id",
+        0,
+        0,
+        { id },
+      );
+      const { parseResults, resultData } = require(__hooks + "/component-results.js");
+      const currentResults = resultRecords.map(resultData);
       const today = todayIn(sessionSchedule(tx, row).getString("timezone"));
-      const current = state(row, completionData(record), statusFor(row, today));
+      const current = state(row, completionData(record), statusFor(row, today), currentResults);
       let details = null;
+      let savedResults = currentResults;
       if (to === "completed") {
         const {
           completedDate,
@@ -290,11 +336,17 @@ routerAdd(
           throw new BadRequestError("Completion notes must be 10,000 characters or fewer.");
         }
         details = { completedDate, actualDurationMin, sessionRpe, notes: notes.trim() };
+        const parsed = parseResults(
+          componentResults,
+          JSON.parse(row.getString("prescription_snapshot")),
+        );
+        if (parsed !== undefined) savedResults = parsed;
       }
       if (
         current.status === to &&
         (current.status === from || current.revision !== revision) &&
-        JSON.stringify(current.completion) === JSON.stringify(details)
+        JSON.stringify(current.completion) === JSON.stringify(details) &&
+        JSON.stringify(current.componentResults) === JSON.stringify(savedResults)
       ) {
         result = current;
         return;
@@ -315,10 +367,44 @@ routerAdd(
         saved.set("session_rpe", details.sessionRpe);
         saved.set("notes", details.notes);
         tx.save(saved);
+        if (componentResults !== undefined) {
+          const desired = new Map(savedResults.map((result) => [result.componentKey, result]));
+          const existing = new Map(
+            resultRecords.map((result) => [result.getString("component_key"), result]),
+          );
+          for (const [key, result] of existing) {
+            if (!desired.has(key)) tx.delete(result);
+          }
+          for (const values of savedResults) {
+            const result =
+              existing.get(values.componentKey) ??
+              new Record(tx.findCollectionByNameOrId(componentResultCollection), {
+                session: id,
+                component_key: values.componentKey,
+              });
+            const snapshotComponents = JSON.parse(
+              row.getString("prescription_snapshot"),
+            ).components;
+            const position = snapshotComponents.findIndex(
+              (item) => item.key === values.componentKey,
+            );
+            result.set("planned_position", position + 1);
+            result.set("name", snapshotComponents[position].name);
+            result.set("completed", true);
+            result.set("actual_duration_min", values.durationMin);
+            result.set("sets_completed", values.sets);
+            result.set("reps_completed", values.reps ?? "");
+            result.set("actual_load", values.load);
+            result.set("rpe", values.rpe);
+            result.set("rounds", values.rounds);
+            result.set("notes", values.notes);
+            tx.save(result);
+          }
+        }
       }
       row.set("status", to);
       tx.save(row);
-      result = state(row, details);
+      result = state(row, details, to, savedResults);
     });
     return event.json(200, result);
   },

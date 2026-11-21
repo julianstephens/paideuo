@@ -730,20 +730,24 @@ const SessionDetail = ({
                           title="Latest saved completion"
                           completion={session.completion}
                           sessionLoad={session.sessionLoad}
+                          componentResults={session.componentResults}
+                          prescription={prescription}
                         />
                       </Box>
                     )}
                     <CompletionForm
+                      key={completionRevision}
                       session={session}
                       pending={busy}
                       canSave={!executionConflict}
-                      save={(completion) => {
+                      save={({ componentResults, ...completion }) => {
                         reloadSession.reset();
                         execute.mutate({
                           revision: completionRevision,
                           execution: {
                             action: session.status === "completed" ? "edit-completion" : "complete",
                             completion,
+                            componentResults,
                           },
                         });
                       }}
@@ -762,6 +766,8 @@ const SessionDetail = ({
                         <CompletionResults
                           completion={session.completion}
                           sessionLoad={session.sessionLoad}
+                          componentResults={session.componentResults}
+                          prescription={prescription}
                         />
                       </Box>
                     )}

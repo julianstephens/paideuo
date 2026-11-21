@@ -5,6 +5,7 @@ module.exports = (components) => {
   const whole = (value) => Number.isSafeInteger(value) && value >= 0;
   const nonempty = (value, max) =>
     typeof value === "string" && !!value.trim() && value.trim().length <= max;
+  const keys = new Set();
 
   return components.map((component, index) => {
     const position = index + 1;
@@ -24,7 +25,14 @@ module.exports = (components) => {
     if (duration != null && !whole(duration)) {
       throw new BadRequestError(`Enter a nonnegative whole duration for component ${position}.`);
     }
+    const suppliedKey = component.key ?? $security.randomString(24);
+    if (!nonempty(suppliedKey, 200) || keys.has(suppliedKey.trim())) {
+      throw new BadRequestError(`Enter valid unique identifiers for the workout components.`);
+    }
+    const key = suppliedKey.trim();
+    keys.add(key);
     return {
+      key,
       position,
       name: component.name.trim(),
       instructions: instructions.trim(),

@@ -68,7 +68,11 @@ A `program` import has:
 
 Program status is `draft`, `active`, `completed`, or `archived`. Workout session type, intensity,
 component, target, duration, and RPE constraints match the existing program and workout editors.
-Components are limited to 100 per workout.
+Components are limited to 100 per workout. Component `key` values are unique within a
+prescription and are used by later workout-result imports. Every component in an existing
+prescription needs an explicit key. Use each retained component's current key when inserting,
+removing, or reordering components. For a new prescription, an omitted key defaults to
+`component-N`, where `N` is the one-based component position.
 
 See [the program sample](examples/import-v1-program.json).
 
@@ -76,11 +80,12 @@ See [the program sample](examples/import-v1-program.json).
 
 The result data contains a stable `sourceWorkoutKey`, a valid completion `date` in `YYYY-MM-DD`
 format, optional duration and session RPE, notes, and up to 100 components. Each component has a
-unique external `key` and unique one-based `plannedPosition`.
+unique `key` and unique one-based `plannedPosition`. The key, position, and name must match the
+scheduled prescription snapshot; results cannot reference live program components.
 
 `sourceSessionId`, when supplied, is an authorized `scheduled-session` reference. Actual durations,
-sets, and positions are non-negative whole numbers (positions are at least one); RPE is from 1
-through 10. Load is an object containing a non-negative `value` and a non-empty `unit`.
+sets, rounds, and positions are non-negative whole numbers (positions are at least one); RPE is
+from 1 through 10. Load is an object containing a non-negative `value` and a non-empty `unit`.
 Program imports derive prescription workout keys as
 `<program>/<block>/<week>/<slot>` using the four external IDs, providing a unique owner-scoped
 observation key. If that readable form would exceed the 200-character key limit, Paideuo substitutes

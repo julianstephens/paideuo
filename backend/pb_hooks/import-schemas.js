@@ -204,8 +204,14 @@ const targets = (value, label) => {
 
 const component = (value, index) => {
   const label = `component ${index + 1}`;
-  const fields = object(value, ["name", "instructions", "durationMin", "targets"], ["name"], label);
+  const fields = object(
+    value,
+    ["key", "name", "instructions", "durationMin", "targets"],
+    ["name"],
+    label,
+  );
   return {
+    ...(fields.key == null ? {} : { key: externalId(fields.key, `${label} key`) }),
     name: text(fields.name, `${label} name`, 200, true),
     instructions: text(fields.instructions ?? "", `${label} instructions`, 10000),
     durationMin: whole(fields.durationMin, `${label} duration`, 0, Number.MAX_SAFE_INTEGER, true),
@@ -229,6 +235,16 @@ const prescription = (value, index) => {
     ["title", "sessionType"],
     label,
   );
+  const normalizedComponents = list(
+    fields.components ?? [],
+    limits.components,
+    `${label} components`,
+  ).map(component);
+  unique(
+    normalizedComponents.map((item, index) => item.key ?? `component-${index + 1}`),
+    (key) => key,
+    `${label} component keys`,
+  );
   return {
     title: text(fields.title, `${label} title`, 200, true),
     sessionType: choice(
@@ -251,9 +267,7 @@ const prescription = (value, index) => {
       "planned intensity",
       true,
     ),
-    components: list(fields.components ?? [], limits.components, `${label} components`).map(
-      component,
-    ),
+    components: normalizedComponents,
   };
 };
 
@@ -416,6 +430,7 @@ const normalizeWorkoutResults = (value, context) => {
           "repsCompleted",
           "actualLoad",
           "rpe",
+          "rounds",
           "notes",
         ],
         ["key", "plannedPosition", "name", "completed"],
@@ -455,6 +470,7 @@ const normalizeWorkoutResults = (value, context) => {
             }
           : null,
         rpe: finite(item.rpe, `${label} RPE`, 1, 10, true),
+        rounds: whole(item.rounds, `${label} rounds`, 0, Number.MAX_SAFE_INTEGER, true),
         notes: text(item.notes ?? "", `${label} notes`, 10000),
       };
     },
