@@ -13,6 +13,7 @@ const compile = (filename) => {
   return result.exports;
 };
 const { calculate } = compile(path.join(__dirname, "compliance.js"));
+const { progression } = compile(path.join(__dirname, "gpp-progression.js"));
 
 test("aerobic totals exclude missing component outcomes and aggregate by modality", () => {
   const sessions = [
@@ -62,4 +63,75 @@ test("a later missing aerobic result does not add minutes or measured coverage",
   assert.equal(total.actualWalkingMinutes, null);
   assert.deepEqual(total.aerobicCoverage, { measured: 1, specified: 2 });
   assert.equal(calculate([session]).aerobicMinutes, null);
+});
+
+test("GPP progression exposes generic planned and recorded outcomes", () => {
+  const review = progression([
+    {
+      id: "session-1",
+      scheduledDate: "2026-01-06",
+      status: "completed",
+      prescription: {
+        title: "General preparation",
+        components: [
+          {
+            key: "jog",
+            name: "Jogging intervals",
+            classification: "aerobic",
+            targets: { work_seconds: 300, repetitions: 2 },
+          },
+          {
+            key: "squat",
+            name: "Front squat",
+            classification: "strength",
+            targets: {
+              load: { value: 80, unit: "kg" },
+              sets: 3,
+              reps: "5",
+              intensity: { value: 7, scale: "RPE" },
+            },
+          },
+          {
+            key: "circuit",
+            name: "Conditioning circuit",
+            classification: "other",
+            targets: { repetitions: 4 },
+          },
+        ],
+      },
+      componentResults: [
+        {
+          componentKey: "jog",
+          durationMin: 12,
+          continuousBoutMin: 6,
+          aerobicModality: "running",
+        },
+        {
+          componentKey: "squat",
+          load: { value: 75, unit: "kg" },
+          sets: 3,
+          reps: "5",
+          rpe: 7,
+        },
+        { componentKey: "circuit", rounds: 3 },
+      ],
+    },
+  ]);
+
+  assert.equal(review.jogging[0].plannedBoutMin, 5);
+  assert.equal(review.jogging[0].actualBoutMin, 6);
+  assert.equal(review.frontSquat[0].plannedLoad.value, 80);
+  assert.equal(review.frontSquat[0].actualLoad.value, 75);
+  assert.equal(review.circuits[0].plannedRounds, 4);
+  assert.equal(review.circuits[0].actualRounds, 3);
+  assert.equal(review.aerobicByModality.running, 12);
+  assert.equal(review.aerobicCoverage.measured, 1);
+  assert.deepEqual(review.sourceSessions, [
+    {
+      id: "session-1",
+      date: "2026-01-06",
+      title: "General preparation",
+      status: "completed",
+    },
+  ]);
 });
