@@ -1,10 +1,11 @@
-import { Button, Flex, Grid, Heading, Link, Stack, Text, Textarea } from "@chakra-ui/react";
+import { Box, Button, Flex, Grid, Heading, Link, Stack, Text, Textarea } from "@chakra-ui/react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useState } from "react";
 import { Link as RouterLink, useParams } from "react-router";
 import { FormField, Notice, PageHeader, Panel } from "../../components/ui";
 import { errorMessage } from "../../lib/api/request";
 import { useSession } from "../auth/session";
+import { observationCategory, observationSeverity } from "../calendar/movement-observations";
 import { sessionCalendarUrl } from "../calendar/session-links";
 import { useMetricPreferences } from "../compliance/MetricPreferences";
 import { metricValues, windowLabel } from "../compliance/MetricsCharts";
@@ -12,8 +13,8 @@ import { averageRpe } from "../compliance/format";
 import { metricLabels } from "../compliance/metrics";
 import { formatPlannedRpe } from "../prescriptions/format";
 import type { DurationUnit } from "../recovery/recovery";
-import { reviewKey, reviewsApi } from "./reviews";
 import type { ReviewNotes, WeeklyReview } from "./reviews";
+import { reviewKey, reviewsApi } from "./reviews";
 
 const noteLabels = {
   worked: "What worked",
@@ -115,6 +116,40 @@ const Review = ({
             </Stack>
           ) : (
             <Notice role="status">Loading metric preferences…</Notice>
+          )}
+          {review.data.movementObservations.length > 0 && (
+            <Panel as="section">
+              <Heading as="h2" size="md">
+                Movement observations
+              </Heading>
+              <Stack gap="2">
+                {review.data.movementObservations.map((observation) => (
+                  <Box key={`${observation.sessionId}-${observation.componentKey}`}>
+                    <Text fontWeight="medium">{observation.componentName}</Text>
+                    <Text fontSize="sm">
+                      {observationCategory(observation.category)}
+                      {": "}
+                      {observationSeverity(observation.category, observation.severity)}
+                    </Text>
+                    {observation.context && (
+                      <Text fontSize="sm">Context: {observation.context}</Text>
+                    )}
+                    {observation.notes && (
+                      <Text whiteSpace="pre-wrap" fontSize="sm">
+                        {observation.notes}
+                      </Text>
+                    )}
+                    <Link asChild variant="underline" fontSize="sm">
+                      <RouterLink
+                        to={sessionCalendarUrl(observation.sessionDate, observation.sessionId)}
+                      >
+                        Source session · {observation.sessionDate}
+                      </RouterLink>
+                    </Link>
+                  </Box>
+                ))}
+              </Stack>
+            </Panel>
           )}
           <GppProgression review={data} unit={preferences.data?.durationUnit ?? "hours"} />
           <Panel as="section">

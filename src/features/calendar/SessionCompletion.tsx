@@ -3,7 +3,13 @@ import { Box, Button, Flex, Grid, Heading, Input, Stack, Text, Textarea } from "
 import { useState } from "react";
 import { Disclosure, FormField, Notice } from "../../components/ui";
 import { fullDate, todayInTimezone } from "./dates";
+import {
+  observationCategory,
+  observationSeverity,
+  observationSeverities,
+} from "./movement-observations";
 import type { CalendarSession, ComponentResult, SessionCompletion } from "./scheduling";
+import type { ComponentObservation } from "./scheduling";
 
 type ComponentResultDraft = {
   componentKey: string;
@@ -20,6 +26,7 @@ type ComponentResultDraft = {
   continuousBoutMin: string;
   aerobicModality: string;
   notes: string;
+  observation: ComponentObservation | null;
 };
 
 const resultDraft = (componentKey: string, result?: ComponentResult): ComponentResultDraft => ({
@@ -37,6 +44,7 @@ const resultDraft = (componentKey: string, result?: ComponentResult): ComponentR
   continuousBoutMin: result?.continuousBoutMin == null ? "" : String(result.continuousBoutMin),
   aerobicModality: result?.aerobicModality ?? "",
   notes: result?.notes ?? "",
+  observation: result?.observation ?? null,
 });
 
 const nullableNumber = (value: string) => (value === "" ? null : Number(value));
@@ -110,6 +118,7 @@ export const CompletionForm = ({
                     continuousBoutMin: nullableNumber(result.continuousBoutMin),
                     aerobicModality: result.aerobicModality.trim() || null,
                     notes: result.notes,
+                    observation: result.observation,
                   },
                 ]
               : [],
@@ -317,6 +326,89 @@ export const CompletionForm = ({
                                   }
                                 />
                               </FormField>
+                              {(result.observation ||
+                                component.name
+                                  .toLowerCase()
+                                  .replace(/[-_]/g, " ")
+                                  .includes("front squat") ||
+                                result.componentKey.toLowerCase().includes("front-squat")) && (
+                                <>
+                                  <FormField>
+                                    {observationCategory(
+                                      result.observation?.category ?? "knee_tracking",
+                                    )}{" "}
+                                    observation
+                                    <select
+                                      disabled={pending}
+                                      value={result.observation?.severity ?? ""}
+                                      onChange={(event) => {
+                                        const severity = observationSeverities.find(
+                                          (value) => value === event.target.value,
+                                        );
+                                        updateResult(result.componentKey, {
+                                          observation:
+                                            severity === undefined
+                                              ? null
+                                              : {
+                                                  category:
+                                                    result.observation?.category ?? "knee_tracking",
+                                                  severity,
+                                                  context: result.observation?.context ?? "",
+                                                  notes: result.observation?.notes ?? "",
+                                                },
+                                        });
+                                      }}
+                                      style={{ width: "100%", minHeight: "40px" }}
+                                    >
+                                      <option value="">No observation recorded</option>
+                                      {observationSeverities.map((severity) => (
+                                        <option key={severity} value={severity}>
+                                          {observationSeverity(
+                                            result.observation?.category ?? "knee_tracking",
+                                            severity,
+                                          )}
+                                        </option>
+                                      ))}
+                                    </select>
+                                  </FormField>
+                                  {result.observation && (
+                                    <>
+                                      <FormField>
+                                        Conditions / context
+                                        <Input
+                                          maxLength={200}
+                                          value={result.observation.context}
+                                          disabled={pending}
+                                          onChange={(event) =>
+                                            updateResult(result.componentKey, {
+                                              observation: {
+                                                ...result.observation!,
+                                                context: event.target.value,
+                                              },
+                                            })
+                                          }
+                                        />
+                                      </FormField>
+                                      <FormField>
+                                        Observation notes
+                                        <Textarea
+                                          maxLength={10000}
+                                          value={result.observation.notes}
+                                          disabled={pending}
+                                          onChange={(event) =>
+                                            updateResult(result.componentKey, {
+                                              observation: {
+                                                ...result.observation!,
+                                                notes: event.target.value,
+                                              },
+                                            })
+                                          }
+                                        />
+                                      </FormField>
+                                    </>
+                                  )}
+                                </>
+                              )}
                             </Grid>
                             <FormField>
                               Component notes
@@ -451,6 +543,18 @@ export const CompletionResults = ({
                     <Text fontWeight="medium">{name}</Text>
                     {summary && <Text fontSize="sm">{summary}</Text>}
                     {result.notes && <Text whiteSpace="pre-wrap">{result.notes}</Text>}
+                    {result.observation && (
+                      <Text fontSize="sm">
+                        {observationCategory(result.observation.category)}
+                        {": "}
+                        {observationSeverity(
+                          result.observation.category,
+                          result.observation.severity,
+                        )}
+                        {result.observation.context && ` · ${result.observation.context}`}
+                        {result.observation.notes && ` · ${result.observation.notes}`}
+                      </Text>
+                    )}
                   </Box>
                 );
               })}

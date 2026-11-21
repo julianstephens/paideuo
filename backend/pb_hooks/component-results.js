@@ -1,3 +1,5 @@
+const { observationData } = require(__hooks + "/movement-observations.cjs");
+
 const nullableWhole = (value, label) => {
   if (value == null) return null;
   if (!Number.isSafeInteger(value) || value < 0) {
@@ -25,6 +27,39 @@ const nullableText = (value, max, label) => {
 const nullableModality = (value) => {
   if (value == null || value === "") return null;
   return nullableText(value, 64, "Aerobic modality");
+};
+
+const resultObservation = (value) => {
+  if (value == null) return null;
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    throw new BadRequestError("Enter a valid component observation or clear it.");
+  }
+  const allowed = ["category", "severity", "context", "notes"];
+  if (Object.keys(value).some((key) => !allowed.includes(key))) {
+    throw new BadRequestError("Component observation contains an unknown field.");
+  }
+  if (
+    typeof value.category !== "string" ||
+    !value.category.trim() ||
+    value.category.trim().length > 64
+  ) {
+    throw new BadRequestError("Enter a component observation category from 1 to 64 characters.");
+  }
+  if (!["none", "mild", "pronounced", "not_assessed"].includes(value.severity)) {
+    throw new BadRequestError("Choose a valid component observation severity.");
+  }
+  if (value.context != null && (typeof value.context !== "string" || value.context.length > 200)) {
+    throw new BadRequestError("Observation context must be 200 characters or fewer.");
+  }
+  if (value.notes != null && (typeof value.notes !== "string" || value.notes.length > 10000)) {
+    throw new BadRequestError("Observation notes must be 10,000 characters or fewer.");
+  }
+  return {
+    category: value.category.trim(),
+    severity: value.severity,
+    context: typeof value.context === "string" ? value.context.trim() : "",
+    notes: typeof value.notes === "string" ? value.notes.trim() : "",
+  };
 };
 
 const resultLoad = (load) => {
@@ -75,6 +110,7 @@ const parseResults = (values, snapshot) => {
       "aerobicModality",
       "modality",
       "notes",
+      "observation",
     ];
     if (Object.keys(value).some((key) => !allowed.includes(key))) {
       throw new BadRequestError(`${label} contains an unknown field.`);
@@ -102,6 +138,7 @@ const parseResults = (values, snapshot) => {
       continuousBoutMin: nullableWhole(value.continuousBoutMin, "continuous-bout minutes"),
       aerobicModality: nullableModality(value.aerobicModality ?? value.modality),
       notes: notes.trim(),
+      observation: resultObservation(value.observation),
     };
     const error = aerobicDurationError(result);
     if (error) throw new BadRequestError(`${label}. ${error}`);
@@ -115,6 +152,7 @@ const parseResults = (values, snapshot) => {
 
 const resultData = (record) => {
   const load = JSON.parse(record.getString("actual_load") || "null");
+  const observation = JSON.parse(record.getString("observation") || "null");
   return {
     componentKey: record.getString("component_key"),
     load: load === null ? null : { value: load.value, unit: load.unit },
@@ -128,6 +166,7 @@ const resultData = (record) => {
     continuousBoutMin: JSON.parse(record.getString("continuous_bout_min") || "null"),
     aerobicModality: record.getString("aerobic_modality") || null,
     notes: record.getString("notes"),
+    observation: observationData(observation),
   };
 };
 

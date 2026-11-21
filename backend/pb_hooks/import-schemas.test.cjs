@@ -174,6 +174,12 @@ test("normalizes workout component results and validates dates", () => {
         completed: true,
         setsCompleted: 5,
         actualLoad: { value: 10, unit: "kg" },
+        observation: {
+          category: "knee_tracking",
+          severity: "pronounced",
+          context: "Heavy sets",
+          notes: "Knee valgus",
+        },
       },
     ],
   });
@@ -182,6 +188,12 @@ test("normalizes workout component results and validates dates", () => {
   });
   assert.equal(normalized.data.notes, "Strong finish");
   assert.equal(normalized.data.components[0].repsCompleted, null);
+  assert.deepEqual(normalized.data.components[0].observation, {
+    category: "knee_tracking",
+    severity: "pronounced",
+    context: "Heavy sets",
+    notes: "Knee valgus",
+  });
   assert.equal(normalized.data.replaceExistingCompletion, false);
 
   valid.data.replaceExistingCompletion = true;

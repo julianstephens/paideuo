@@ -150,6 +150,20 @@ const detail = (event) => {
     }
     const editorBlock = blocks.get(context.blockId);
     const entries = readCheckIns(tx, owner, context.window);
+    const movementObservations = (week?.sessions ?? []).flatMap((session) =>
+      (session.componentResults ?? [])
+        .filter((result) => result.observation)
+        .map((result) => ({
+          sessionId: session.id,
+          sessionDate: session.scheduledDate,
+          componentKey: result.componentKey,
+          componentName:
+            session.prescription?.components?.find(
+              (component) => component.key === result.componentKey,
+            )?.name ?? "Workout component",
+          ...result.observation,
+        })),
+    );
     const weekSessions = week?.sessions ?? [];
     const { progression } = require(__hooks + "/gpp-progression.js");
     result = {
@@ -163,6 +177,7 @@ const detail = (event) => {
       total: summarize(week?.sessions ?? [], entries, context.window),
       trainingAvailable: Boolean(week),
       days: dailyBreakdown(entries, context.window),
+      movementObservations,
       progression: progression(weekSessions),
       dataCoverage: {
         scheduledSessions: weekSessions.length,

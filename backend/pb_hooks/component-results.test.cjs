@@ -49,6 +49,12 @@ test("component results preserve optional values independently", () => {
           reps: "5",
           rpe: 6,
           notes: "Solid",
+          observation: {
+            category: "knee_tracking",
+            severity: "mild",
+            context: "At the bottom",
+            notes: "Left knee",
+          },
         },
       ],
       snapshot,
@@ -67,6 +73,12 @@ test("component results preserve optional values independently", () => {
         continuousBoutMin: null,
         aerobicModality: null,
         notes: "Solid",
+        observation: {
+          category: "knee_tracking",
+          severity: "mild",
+          context: "At the bottom",
+          notes: "Left knee",
+        },
       },
     ],
   );
@@ -93,6 +105,19 @@ test("component result validation rejects invalid or partial values", () => {
     () => parseResults([{ componentKey: "front-squat", rpe: 11 }], snapshot),
     /RPE from 1 to 10/,
   );
+  assert.throws(
+    () =>
+      parseResults(
+        [
+          {
+            componentKey: "front-squat",
+            observation: { category: "knee_tracking", severity: "severe" },
+          },
+        ],
+        snapshot,
+      ),
+    /valid component observation severity/,
+  );
 });
 
 test("result records expose missing values as null", () => {
@@ -111,6 +136,7 @@ test("result records expose missing values as null", () => {
         continuous_bout_min: "null",
         aerobic_modality: "",
         notes: "",
+        observation: "null",
       })[field] ?? "",
   };
   assert.deepEqual(resultData(record), {
@@ -126,6 +152,7 @@ test("result records expose missing values as null", () => {
     continuousBoutMin: null,
     aerobicModality: null,
     notes: "",
+    observation: null,
   });
 });
 
