@@ -150,6 +150,19 @@ const detail = (event) => {
     }
     const editorBlock = blocks.get(context.blockId);
     const entries = readCheckIns(tx, owner, context.window);
+    const movementObservations = (week?.sessions ?? []).flatMap((session) =>
+      (session.componentResults ?? [])
+        .filter((result) => result.observation)
+        .map((result) => ({
+          sessionDate: session.scheduledDate,
+          componentKey: result.componentKey,
+          componentName:
+            session.prescription?.components?.find(
+              (component) => component.key === result.componentKey,
+            )?.name ?? "Workout component",
+          ...result.observation,
+        })),
+    );
     result = {
       ...context,
       programName: program.getString("name"),
@@ -161,6 +174,7 @@ const detail = (event) => {
       total: summarize(week?.sessions ?? [], entries, context.window),
       trainingAvailable: Boolean(week),
       days: dailyBreakdown(entries, context.window),
+      movementObservations,
     };
   });
   return event.json(200, result);

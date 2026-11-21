@@ -1,4 +1,4 @@
-import { Button, Flex, Grid, Heading, Link, Stack, Text, Textarea } from "@chakra-ui/react";
+import { Box, Button, Flex, Grid, Heading, Link, Stack, Text, Textarea } from "@chakra-ui/react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useState } from "react";
 import { Link as RouterLink, useParams } from "react-router";
@@ -113,6 +113,42 @@ const Review = ({
             </Stack>
           ) : (
             <Notice role="status">Loading metric preferences…</Notice>
+          )}
+          {review.data.movementObservations.length > 0 && (
+            <Panel as="section">
+              <Heading as="h2" size="md">
+                Movement observations
+              </Heading>
+              <Stack gap="2">
+                {review.data.movementObservations.map((observation, index) => (
+                  <Box key={`${observation.componentKey}-${observation.sessionDate}-${index}`}>
+                    <Text fontWeight="medium">{observation.componentName}</Text>
+                    <Text fontSize="sm">
+                      {observation.category === "knee_tracking"
+                        ? "Knee tracking"
+                        : observation.category}
+                      :{" "}
+                      {
+                        {
+                          none: "No collapse",
+                          mild: "Mild",
+                          pronounced: "Pronounced",
+                          not_assessed: "Not assessed",
+                        }[observation.severity]
+                      }
+                    </Text>
+                    {observation.context && (
+                      <Text fontSize="sm">Context: {observation.context}</Text>
+                    )}
+                    {observation.notes && (
+                      <Text whiteSpace="pre-wrap" fontSize="sm">
+                        {observation.notes}
+                      </Text>
+                    )}
+                  </Box>
+                ))}
+              </Stack>
+            </Panel>
           )}
           <Panel as="section">
             <Heading as="h2" size="md">

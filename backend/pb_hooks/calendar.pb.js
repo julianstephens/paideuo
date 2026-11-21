@@ -404,6 +404,7 @@ routerAdd(
             result.set("continuous_bout_min", values.continuousBoutMin);
             result.set("aerobic_modality", values.aerobicModality ?? "");
             result.set("notes", values.notes);
+            result.set("observation", values.observation);
             tx.save(result);
           }
         }

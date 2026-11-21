@@ -1068,6 +1068,7 @@ const commitWorkout = (db, owner, data, plan, options = {}) => {
       continuous_bout_min: component.continuousBoutMin,
       aerobic_modality: component.aerobicModality ?? "",
       notes: component.notes,
+      observation: component.observation,
     });
   }
   const session = db.findRecordById("paideuo_scheduled_sessions", state.sessionId);

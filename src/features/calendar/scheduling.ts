@@ -42,6 +42,13 @@ export type ComponentResult = {
   continuousBoutMin: number | null;
   aerobicModality: string | null;
   notes: string;
+  observation: ComponentObservation | null;
+};
+export type ComponentObservation = {
+  category: string;
+  severity: "none" | "mild" | "pronounced" | "not_assessed";
+  context: string;
+  notes: string;
 };
 export type SessionExecution =
   | {

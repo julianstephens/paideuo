@@ -573,6 +573,7 @@ const normalizeWorkoutResults = (value, context) => {
           "continuousBoutMin",
           "aerobicModality",
           "notes",
+          "observation",
         ],
         ["key", "plannedPosition", "name", "completed"],
         label,
@@ -635,6 +636,28 @@ const normalizeWorkoutResults = (value, context) => {
         ),
         aerobicModality: optionalText(item.aerobicModality, `${label} aerobic modality`, 64),
         notes: text(item.notes ?? "", `${label} notes`, 10000),
+        observation:
+          item.observation == null
+            ? null
+            : (() => {
+                const observation = object(
+                  item.observation,
+                  ["category", "severity", "context", "notes"],
+                  ["category", "severity"],
+                  `${label} observation`,
+                );
+                if (
+                  !["none", "mild", "pronounced", "not_assessed"].includes(observation.severity)
+                ) {
+                  fail(`${label} observation severity is invalid.`);
+                }
+                return {
+                  category: text(observation.category, `${label} observation category`, 64, true),
+                  severity: observation.severity,
+                  context: optionalText(observation.context, `${label} observation context`, 200),
+                  notes: text(observation.notes ?? "", `${label} observation notes`, 10000),
+                };
+              })(),
       };
       const error = aerobicDurationError({ ...result, durationMin: result.actualDurationMin });
       if (error) fail(`${label}. ${error}`);

@@ -4,6 +4,7 @@ import { useState } from "react";
 import { Disclosure, FormField, Notice } from "../../components/ui";
 import { fullDate, todayInTimezone } from "./dates";
 import type { CalendarSession, ComponentResult, SessionCompletion } from "./scheduling";
+import type { ComponentObservation } from "./scheduling";
 
 type ComponentResultDraft = {
   componentKey: string;
@@ -20,6 +21,7 @@ type ComponentResultDraft = {
   continuousBoutMin: string;
   aerobicModality: string;
   notes: string;
+  observation: ComponentObservation | null;
 };
 
 const resultDraft = (componentKey: string, result?: ComponentResult): ComponentResultDraft => ({
@@ -37,6 +39,7 @@ const resultDraft = (componentKey: string, result?: ComponentResult): ComponentR
   continuousBoutMin: result?.continuousBoutMin == null ? "" : String(result.continuousBoutMin),
   aerobicModality: result?.aerobicModality ?? "",
   notes: result?.notes ?? "",
+  observation: result?.observation ?? null,
 });
 
 const nullableNumber = (value: string) => (value === "" ? null : Number(value));
@@ -110,6 +113,7 @@ export const CompletionForm = ({
                     continuousBoutMin: nullableNumber(result.continuousBoutMin),
                     aerobicModality: result.aerobicModality.trim() || null,
                     notes: result.notes,
+                    observation: result.observation,
                   },
                 ]
               : [],
@@ -317,6 +321,75 @@ export const CompletionForm = ({
                                   }
                                 />
                               </FormField>
+                              {(component.name
+                                .toLowerCase()
+                                .replace(/[-_]/g, " ")
+                                .includes("front squat") ||
+                                result.componentKey.toLowerCase().includes("front-squat")) && (
+                                <>
+                                  <FormField>
+                                    Knee tracking observation
+                                    <select
+                                      aria-label="Knee tracking observation"
+                                      disabled={pending}
+                                      value={result.observation?.severity ?? "not_assessed"}
+                                      onChange={(event) =>
+                                        updateResult(result.componentKey, {
+                                          observation: {
+                                            category: "knee_tracking",
+                                            severity: event.target
+                                              .value as ComponentObservation["severity"],
+                                            context: result.observation?.context ?? "",
+                                            notes: result.observation?.notes ?? "",
+                                          },
+                                        })
+                                      }
+                                      style={{ width: "100%", minHeight: "40px" }}
+                                    >
+                                      <option value="none">No collapse</option>
+                                      <option value="mild">Mild</option>
+                                      <option value="pronounced">Pronounced</option>
+                                      <option value="not_assessed">Not assessed</option>
+                                    </select>
+                                  </FormField>
+                                  {result.observation && (
+                                    <>
+                                      <FormField>
+                                        Conditions / context
+                                        <Input
+                                          maxLength={200}
+                                          value={result.observation.context}
+                                          disabled={pending}
+                                          onChange={(event) =>
+                                            updateResult(result.componentKey, {
+                                              observation: {
+                                                ...result.observation!,
+                                                context: event.target.value,
+                                              },
+                                            })
+                                          }
+                                        />
+                                      </FormField>
+                                      <FormField>
+                                        Observation notes
+                                        <Textarea
+                                          maxLength={10000}
+                                          value={result.observation.notes}
+                                          disabled={pending}
+                                          onChange={(event) =>
+                                            updateResult(result.componentKey, {
+                                              observation: {
+                                                ...result.observation!,
+                                                notes: event.target.value,
+                                              },
+                                            })
+                                          }
+                                        />
+                                      </FormField>
+                                    </>
+                                  )}
+                                </>
+                              )}
                             </Grid>
                             <FormField>
                               Component notes
@@ -451,6 +524,21 @@ export const CompletionResults = ({
                     <Text fontWeight="medium">{name}</Text>
                     {summary && <Text fontSize="sm">{summary}</Text>}
                     {result.notes && <Text whiteSpace="pre-wrap">{result.notes}</Text>}
+                    {result.observation && (
+                      <Text fontSize="sm">
+                        Knee tracking:{" "}
+                        {
+                          {
+                            none: "No collapse",
+                            mild: "Mild",
+                            pronounced: "Pronounced",
+                            not_assessed: "Not assessed",
+                          }[result.observation.severity]
+                        }
+                        {result.observation.context && ` · ${result.observation.context}`}
+                        {result.observation.notes && ` · ${result.observation.notes}`}
+                      </Text>
+                    )}
                   </Box>
                 );
               })}

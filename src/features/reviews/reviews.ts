@@ -21,9 +21,20 @@ export type WeeklyReview = ReviewSummary & {
   programName: string;
   editorAvailable: boolean;
   trainingAvailable: boolean;
+  movementObservations: MovementObservation[];
   notes: ReviewNotes;
   total: MetricsTotal;
   days: MetricsPeriod[];
+};
+
+export type MovementObservation = {
+  sessionDate: string;
+  componentKey: string;
+  componentName: string;
+  category: string;
+  severity: "none" | "mild" | "pronounced" | "not_assessed";
+  context: string;
+  notes: string;
 };
 
 export const reviewKey = (ownerId: string, programId: string) =>
