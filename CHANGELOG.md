@@ -1,3 +1,7 @@
+## v0.5.0
+
+- Add additional workout session types and aerobic outcome tracking
+
 ## v0.4.1
 
 - Prompt whether to unschedule workouts when archiving a scheduled program
