@@ -194,14 +194,31 @@ const targets = (value, label) => {
   if (has(fields, "intensity")) {
     const intensity = object(
       fields.intensity,
-      ["value", "scale"],
-      ["value", "scale"],
+      ["value", "min", "max", "scale"],
+      ["scale"],
       `${label} intensity`,
     );
-    normalized.intensity = {
-      value: finite(intensity.value, `${label} intensity value`, 1, 10),
-      scale: choice(intensity.scale, ["RPE"], `${label} intensity scale`),
-    };
+    const scale = choice(intensity.scale, ["RPE"], `${label} intensity scale`);
+    if (has(intensity, "value")) {
+      normalized.intensity = {
+        value: finite(intensity.value, `${label} intensity value`, 1, 10),
+        scale,
+      };
+    } else {
+      const min = has(intensity, "min")
+        ? finite(intensity.min, `${label} minimum intensity`, 1, 10)
+        : null;
+      const max = has(intensity, "max")
+        ? finite(intensity.max, `${label} maximum intensity`, 1, 10)
+        : null;
+      if (min !== null && max !== null && max < min)
+        fail(`${label} intensity range must be in ascending order.`);
+      normalized.intensity = {
+        ...(min !== null ? { min } : {}),
+        ...(max !== null ? { max } : {}),
+        scale,
+      };
+    }
   }
   if (has(fields, "grade")) {
     const grade = object(fields.grade, ["min", "max"], [], `${label} grade`);
@@ -262,15 +279,32 @@ const component = (value, index) => {
   const label = `component ${index + 1}`;
   const fields = object(
     value,
-    ["key", "name", "instructions", "durationMin", "classification", "targets"],
+    ["key", "name", "instructions", "durationMin", "durationMax", "classification", "targets"],
     ["name"],
     label,
   );
+  const durationMin = whole(
+    fields.durationMin,
+    `${label} duration`,
+    0,
+    Number.MAX_SAFE_INTEGER,
+    true,
+  );
+  const durationMax = whole(
+    fields.durationMax,
+    `${label} maximum duration`,
+    0,
+    Number.MAX_SAFE_INTEGER,
+    true,
+  );
+  if (durationMin != null && durationMax != null && durationMax < durationMin)
+    fail(`${label} duration range must be in ascending order.`);
   return {
     ...(fields.key == null ? {} : { key: externalId(fields.key, `${label} key`) }),
     name: text(fields.name, `${label} name`, 200, true),
     instructions: text(fields.instructions ?? "", `${label} instructions`, 10000),
-    durationMin: whole(fields.durationMin, `${label} duration`, 0, Number.MAX_SAFE_INTEGER, true),
+    durationMin,
+    ...(durationMax != null ? { durationMax } : {}),
     classification:
       fields.classification == null
         ? null
@@ -291,6 +325,10 @@ const prescription = (value, index) => {
       "description",
       "notes",
       "plannedDurationMin",
+      "plannedDurationMax",
+      "plannedRpeMin",
+      "plannedRpeMax",
+      "plannedRpe",
       "plannedIntensity",
       "components",
     ],
@@ -307,6 +345,46 @@ const prescription = (value, index) => {
     (key) => key,
     `${label} component keys`,
   );
+  const plannedDurationMin = whole(
+    fields.plannedDurationMin,
+    `${label} planned duration`,
+    0,
+    Number.MAX_SAFE_INTEGER,
+    true,
+  );
+  const plannedDurationMax = whole(
+    fields.plannedDurationMax,
+    `${label} maximum planned duration`,
+    0,
+    Number.MAX_SAFE_INTEGER,
+    true,
+  );
+  if (
+    plannedDurationMin != null &&
+    plannedDurationMax != null &&
+    plannedDurationMax < plannedDurationMin
+  )
+    fail(`${label} planned duration range must be in ascending order.`);
+  const nestedRpe =
+    fields.plannedRpe != null
+      ? object(fields.plannedRpe, ["min", "max"], [], `${label} planned RPE`)
+      : null;
+  const plannedRpeMin = finite(
+    fields.plannedRpeMin ?? nestedRpe?.min,
+    `${label} minimum planned RPE`,
+    1,
+    10,
+    true,
+  );
+  const plannedRpeMax = finite(
+    fields.plannedRpeMax ?? nestedRpe?.max,
+    `${label} maximum planned RPE`,
+    1,
+    10,
+    true,
+  );
+  if (plannedRpeMin != null && plannedRpeMax != null && plannedRpeMax < plannedRpeMin)
+    fail(`${label} planned RPE range must be in ascending order.`);
   return {
     title: text(fields.title, `${label} title`, 200, true),
     sessionType: choice(
@@ -316,13 +394,10 @@ const prescription = (value, index) => {
     ),
     description: text(fields.description ?? "", `${label} description`, 10000),
     notes: text(fields.notes ?? "", `${label} notes`, 10000),
-    plannedDurationMin: whole(
-      fields.plannedDurationMin,
-      `${label} planned duration`,
-      0,
-      Number.MAX_SAFE_INTEGER,
-      true,
-    ),
+    plannedDurationMin,
+    ...(plannedDurationMax != null ? { plannedDurationMax } : {}),
+    ...(plannedRpeMin != null ? { plannedRpeMin } : {}),
+    ...(plannedRpeMax != null ? { plannedRpeMax } : {}),
     plannedIntensity: choice(
       fields.plannedIntensity,
       ["easy", "moderate", "hard", "maximal"],

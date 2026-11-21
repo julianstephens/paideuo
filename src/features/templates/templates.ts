@@ -10,6 +10,9 @@ export type TemplateFields = {
   description: string;
   sessionType: SessionType;
   plannedDurationMin: number | null;
+  plannedDurationMax?: number | null;
+  plannedRpeMin?: number | null;
+  plannedRpeMax?: number | null;
   plannedIntensity: PlannedIntensity | null;
   components: PrescriptionComponent[];
 };

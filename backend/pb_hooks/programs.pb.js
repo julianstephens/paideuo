@@ -123,11 +123,17 @@ const handlePrograms = (event) => {
       }),
     );
 
+  const { sessionFields, presentComponent } = require(__hooks + "/prescription-fields.cjs");
+
   const prescriptionFields = (record) =>
     copyFields(record, [
       "title",
       "description",
       "planned_duration_min",
+      "planned_duration_max",
+      "duration_max_specified",
+      "planned_rpe_min",
+      "planned_rpe_max",
       "duration_specified",
       "planned_intensity",
       "notes",
@@ -149,20 +155,12 @@ const handlePrograms = (event) => {
       "instructions",
       "duration_min",
       "duration_specified",
+      "duration_max",
+      "duration_max_specified",
       "external_key",
       "classification",
     ]),
     targets: JSON.parse(component.getString("targets") || "null"),
-  });
-
-  const presentComponent = (component) => ({
-    ...(component.key ? { key: component.key } : {}),
-    name: component.name,
-    instructions: component.instructions,
-    durationMin:
-      component.duration_specified || component.duration_min > 0 ? component.duration_min : null,
-    classification: component.classification || null,
-    targets: component.targets,
   });
 
   const componentValues = require(__hooks + "/prescription-components.js");
@@ -193,6 +191,11 @@ const handlePrograms = (event) => {
       record.getBool("duration_specified") || record.getInt("planned_duration_min") > 0
         ? record.getInt("planned_duration_min")
         : null,
+    plannedDurationMax: record.getBool("duration_max_specified")
+      ? record.getInt("planned_duration_max")
+      : null,
+    plannedRpeMin: record.getFloat("planned_rpe_min") || null,
+    plannedRpeMax: record.getFloat("planned_rpe_max") || null,
     plannedIntensity: record.getString("planned_intensity") || null,
   });
 
@@ -250,7 +253,14 @@ const handlePrograms = (event) => {
             throw new BadRequestError("A prescription references a slot outside its block.");
           const day = new Date(start.getTime());
           day.setUTCDate(day.getUTCDate() + weekOffset + slot.getInt("weekday") - 1);
-          const { title, plannedDurationMin, plannedIntensity } = sessionSummary(row);
+          const {
+            title,
+            plannedDurationMin,
+            plannedDurationMax,
+            plannedRpeMin,
+            plannedRpeMax,
+            plannedIntensity,
+          } = sessionSummary(row);
           if (day.getUTCFullYear() > 9999) {
             throw new BadRequestError("This program extends beyond the supported calendar dates.");
           }
@@ -271,6 +281,9 @@ const handlePrograms = (event) => {
               description: row.getString("description"),
               notes: row.getString("notes"),
               plannedDurationMin,
+              plannedDurationMax,
+              plannedRpeMin,
+              plannedRpeMax,
               plannedIntensity,
               components: components.get(row.id) || [],
             },
@@ -670,6 +683,9 @@ const handlePrograms = (event) => {
               description: record.getString("description"),
               session_type: record.getString("session_type"),
               planned_duration_min: data.plannedDurationMin,
+              planned_duration_max: data.plannedDurationMax,
+              planned_rpe_min: data.plannedRpeMin,
+              planned_rpe_max: data.plannedRpeMax,
               planned_intensity: data.plannedIntensity ?? "",
               components: prescriptionComponents(tx, record.id)
                 .map(componentFields)
@@ -701,11 +717,30 @@ const handlePrograms = (event) => {
 
         if (method === "PATCH") {
           const duration = body.plannedDurationMin;
+          const durationMax = body.plannedDurationMax ?? null;
+          const rpeMin = body.plannedRpeMin ?? body.plannedRpe?.min ?? null;
+          const rpeMax = body.plannedRpeMax ?? body.plannedRpe?.max ?? null;
           const intensity = body.plannedIntensity;
           if (duration !== null && (!Number.isSafeInteger(duration) || duration < 0)) {
             throw new BadRequestError(
               "Enter a nonnegative whole number of minutes or clear the duration.",
             );
+          }
+          if (durationMax !== null && (!Number.isSafeInteger(durationMax) || durationMax < 0)) {
+            throw new BadRequestError("Enter a nonnegative whole maximum duration or clear it.");
+          }
+          if (duration !== null && durationMax !== null && durationMax < duration) {
+            throw new BadRequestError(
+              "Maximum duration must be greater than or equal to minimum duration.",
+            );
+          }
+          for (const rpe of [rpeMin, rpeMax]) {
+            if (rpe !== null && (!Number.isFinite(rpe) || rpe < 1 || rpe > 10)) {
+              throw new BadRequestError("Enter a session RPE from 1 to 10 or clear it.");
+            }
+          }
+          if (rpeMin !== null && rpeMax !== null && rpeMax < rpeMin) {
+            throw new BadRequestError("Maximum RPE must be greater than or equal to minimum RPE.");
           }
           if (intensity !== null && !["easy", "moderate", "hard", "maximal"].includes(intensity)) {
             throw new BadRequestError("Choose a planned intensity.");
@@ -717,15 +752,17 @@ const handlePrograms = (event) => {
           ) {
             throw new BadRequestError("Choose a session type.");
           }
-          const values = {
+          const values = sessionFields({
             title: text("title", 200, true),
             description: text("description", 10000),
             notes: text("notes", 10000),
-            session_type: body.sessionType,
-            planned_duration_min: duration ?? 0,
-            duration_specified: duration !== null,
-            planned_intensity: intensity ?? "",
-          };
+            sessionType: body.sessionType,
+            plannedDurationMin: duration,
+            plannedDurationMax: durationMax,
+            plannedRpeMin: rpeMin,
+            plannedRpeMax: rpeMax,
+            plannedIntensity: intensity,
+          });
           const components =
             body.components === undefined ? undefined : componentValues(body.components);
           app.runInTransaction((tx) => {
@@ -834,27 +871,13 @@ const handlePrograms = (event) => {
         for (const week of weeks) {
           for (const { id: slot, baseline } of slots) {
             if (existing.has(`${week.id}/${slot}`)) continue;
-            const prescription = save(tx, "paideuo_session_prescriptions", {
-              program_week: week.id,
+            copyPrescription(
+              tx,
+              sessionFields({ ...baseline, title: baseline.name }),
+              componentValues(baseline.components),
+              week.id,
               slot,
-              title: baseline.name,
-              description: baseline.description,
-              session_type: baseline.sessionType,
-              planned_duration_min: baseline.plannedDurationMin,
-              duration_specified: baseline.plannedDurationMin != null,
-              planned_intensity: baseline.plannedIntensity ?? "",
-            });
-            baseline.components.forEach((component, index) => {
-              save(tx, "paideuo_training_components", {
-                prescription: prescription.id,
-                position: index + 1,
-                name: component.name,
-                instructions: component.instructions,
-                duration_min: component.durationMin ?? 0,
-                duration_specified: component.durationMin != null,
-                targets: component.targets ?? null,
-              });
-            });
+            );
             created++;
           }
         }
@@ -1035,6 +1058,9 @@ const handlePrograms = (event) => {
             description: template.getString("description"),
             sessionType: template.getString("session_type"),
             plannedDurationMin: JSON.parse(template.getString("planned_duration_min") || "null"),
+            plannedDurationMax: JSON.parse(template.getString("planned_duration_max") || "null"),
+            plannedRpeMin: JSON.parse(template.getString("planned_rpe_min") || "null"),
+            plannedRpeMax: JSON.parse(template.getString("planned_rpe_max") || "null"),
             plannedIntensity: template.getString("planned_intensity") || null,
             components: JSON.parse(template.getString("components") || "[]"),
           };

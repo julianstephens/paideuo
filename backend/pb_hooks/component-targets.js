@@ -16,12 +16,20 @@ module.exports = (targets, position) => {
     reps: (value) => nonempty(value, 200),
     load: (value) =>
       object(value, ["value", "unit"]) && nonnegative(value.value) && nonempty(value.unit, 32),
-    intensity: (value) =>
-      object(value, ["value", "scale"]) &&
-      value.scale === "RPE" &&
-      Number.isFinite(value.value) &&
-      value.value >= 1 &&
-      value.value <= 10,
+    intensity: (value) => {
+      if (!object(value, ["value", "min", "max", "scale"]) || value.scale !== "RPE") return false;
+      const endpoints = [value.value, value.min, value.max].filter(
+        (endpoint) => endpoint !== undefined,
+      );
+      if (
+        !endpoints.every((endpoint) => Number.isFinite(endpoint) && endpoint >= 1 && endpoint <= 10)
+      )
+        return false;
+      if (value.min !== undefined && value.max !== undefined && value.max < value.min) return false;
+      if (value.value !== undefined && (value.min !== undefined || value.max !== undefined))
+        return false;
+      return endpoints.length > 0;
+    },
     grade: (value) =>
       object(value, ["min", "max"]) &&
       Object.keys(value).length > 0 &&

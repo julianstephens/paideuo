@@ -21,6 +21,7 @@ import { Link as RouterLink, useSearchParams } from "react-router";
 import { FormField, Notice, PageHeader, Panel } from "../../components/ui";
 import { errorMessage } from "../../lib/api/request";
 import { CalendarCompliance } from "../compliance/CalendarCompliance";
+import { formatPlannedDuration, formatPlannedRpe } from "../prescriptions/format";
 import { metricsKey } from "../compliance/metrics";
 import { useSession } from "../auth/session";
 import { programKeys } from "../programs/programs";
@@ -419,7 +420,8 @@ const SessionButtons = ({
   compact?: boolean;
 }) =>
   sessions.map((session) => {
-    const { title, sessionType, plannedDurationMin } = session.prescription;
+    const { title, sessionType, plannedDurationMin, plannedDurationMax } = session.prescription;
+    const planned = formatPlannedDuration(plannedDurationMin, plannedDurationMax);
     const actual = session.completion?.actualDurationMin;
     const palette = palettes[session.status];
     return (
@@ -459,12 +461,9 @@ const SessionButtons = ({
             <Text as="span" fontWeight="normal" fontSize="xs" textTransform="capitalize">
               {sessionType} · {session.status}
             </Text>
-            {(plannedDurationMin != null || actual != null) && (
+            {(planned !== null || actual != null) && (
               <Text as="span" fontWeight="normal" fontSize="xs" color="fg.muted">
-                {[
-                  plannedDurationMin != null && `${plannedDurationMin} min planned`,
-                  actual != null && `${actual} min actual`,
-                ]
+                {[planned && `${planned} planned`, actual != null && `${actual} min actual`]
                   .filter(Boolean)
                   .join(" · ")}
               </Text>
@@ -778,10 +777,14 @@ const SessionDetail = ({
                       <Text color="fg.muted" textTransform="capitalize">
                         {[
                           prescription.sessionType,
-                          prescription.plannedDurationMin === null
-                            ? undefined
-                            : `${prescription.plannedDurationMin} min`,
-                          prescription.plannedIntensity,
+                          formatPlannedDuration(
+                            prescription.plannedDurationMin,
+                            prescription.plannedDurationMax,
+                          ),
+                          formatPlannedRpe(
+                            prescription.plannedRpeMin,
+                            prescription.plannedRpeMax,
+                          ) ?? prescription.plannedIntensity,
                         ]
                           .filter(Boolean)
                           .join(" · ")}

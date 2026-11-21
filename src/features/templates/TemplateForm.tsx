@@ -23,6 +23,9 @@ export const TemplateForm = ({ template, pending, error, onSave, onCancel }: Pro
   const [description, setDescription] = useState(template?.description ?? "");
   const [sessionType, setSessionType] = useState<SessionType>(template?.sessionType ?? "climbing");
   const [plannedDurationMin, setDuration] = useState(template?.plannedDurationMin ?? null);
+  const [plannedDurationMax, setDurationMax] = useState(template?.plannedDurationMax ?? null);
+  const [plannedRpeMin, setRpeMin] = useState(template?.plannedRpeMin ?? null);
+  const [plannedRpeMax, setRpeMax] = useState(template?.plannedRpeMax ?? null);
   const [plannedIntensity, setIntensity] = useState(template?.plannedIntensity ?? null);
   const [components, setComponents] = useState(
     () => template?.components.map((component, index) => componentDraft(index, component)) ?? [],
@@ -43,6 +46,9 @@ export const TemplateForm = ({ template, pending, error, onSave, onCancel }: Pro
             description,
             sessionType,
             plannedDurationMin,
+            plannedDurationMax,
+            plannedRpeMin,
+            plannedRpeMax,
             plannedIntensity,
             components: components.map(componentPayload),
           });
@@ -85,13 +91,47 @@ export const TemplateForm = ({ template, pending, error, onSave, onCancel }: Pro
           </FormField>
           <FormField>
             Planned duration in minutes
-            <Input
-              type="number"
-              min={0}
-              step={1}
-              value={plannedDurationMin ?? ""}
-              onChange={(event) => setDuration(minutes(event.target.value))}
-            />
+            <Flex gap="2">
+              <Input
+                aria-label="Minimum planned duration"
+                type="number"
+                min={0}
+                step={1}
+                value={plannedDurationMin ?? ""}
+                onChange={(event) => setDuration(minutes(event.target.value))}
+              />
+              <Input
+                aria-label="Maximum planned duration"
+                type="number"
+                min={plannedDurationMin ?? 0}
+                step={1}
+                value={plannedDurationMax ?? ""}
+                onChange={(event) => setDurationMax(minutes(event.target.value))}
+              />
+            </Flex>
+          </FormField>
+          <FormField>
+            Planned RPE
+            <Flex gap="2">
+              <Input
+                aria-label="Minimum planned RPE"
+                type="number"
+                min={1}
+                max={10}
+                step="any"
+                value={plannedRpeMin ?? ""}
+                onChange={(event) => setRpeMin(minutes(event.target.value))}
+              />
+              <Input
+                aria-label="Maximum planned RPE"
+                type="number"
+                min={plannedRpeMin ?? 1}
+                max={10}
+                step="any"
+                value={plannedRpeMax ?? ""}
+                onChange={(event) => setRpeMax(minutes(event.target.value))}
+              />
+            </Flex>
           </FormField>
           <FormField>
             Planned intensity

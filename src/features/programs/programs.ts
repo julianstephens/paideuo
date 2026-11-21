@@ -29,11 +29,19 @@ export type PrescriptionFields = {
   description: string;
   notes: string;
   plannedDurationMin: number | null;
+  plannedDurationMax?: number | null;
+  plannedRpeMin?: number | null;
+  plannedRpeMax?: number | null;
   plannedIntensity: PlannedIntensity | null;
 };
 export type PrescriptionSummary = Pick<
   PrescriptionFields,
-  "title" | "plannedDurationMin" | "plannedIntensity"
+  | "title"
+  | "plannedDurationMin"
+  | "plannedDurationMax"
+  | "plannedRpeMin"
+  | "plannedRpeMax"
+  | "plannedIntensity"
 > & {
   weekId: string;
   slotId: string;

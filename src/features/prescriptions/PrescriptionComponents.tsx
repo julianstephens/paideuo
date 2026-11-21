@@ -10,7 +10,7 @@ import {
   Textarea,
 } from "@chakra-ui/react";
 import { FormField } from "../../components/ui";
-import { segmentError, targetDefinitions } from "./components";
+import { segmentError, targetDefinitions, targetRangeError } from "./components";
 import type { ComponentDraft } from "./components";
 
 type Props = {
@@ -121,7 +121,7 @@ const ComponentFields = ({
   disabled: boolean;
 }) => {
   const instructionsId = useId();
-  const segmentErrorId = useId();
+  const targetErrorId = useId();
   const available = targetDefinitions.filter(({ key }) => component.targets[key] === undefined);
   return (
     <>
@@ -171,7 +171,13 @@ const ComponentFields = ({
       {targetDefinitions.map(({ key, label, fields }) => {
         const values = component.targets[key];
         if (!values) return null;
-        const error = key === "segments" ? segmentError(values[0]) : "";
+        const error =
+          key === "segments"
+            ? segmentError(values[0])
+            : key === "duration" || key === "intensity"
+              ? targetRangeError(key, values)
+              : "";
+        const errorId = `${targetErrorId}-${key}`;
         return (
           <Stack key={key} borderWidth="1px" borderRadius="md" p="2" gap="2">
             {fields.map(({ label, required, ...props }, index) => (
@@ -179,9 +185,13 @@ const ComponentFields = ({
                 {label}
                 <Input
                   {...props}
-                  ref={key === "segments" ? (input) => input?.setCustomValidity(error) : undefined}
+                  ref={
+                    key === "segments" || key === "duration" || key === "intensity"
+                      ? (input) => input?.setCustomValidity(error)
+                      : undefined
+                  }
                   aria-invalid={error ? true : undefined}
-                  aria-describedby={error ? segmentErrorId : undefined}
+                  aria-describedby={error ? errorId : undefined}
                   disabled={disabled}
                   required={required ?? true}
                   value={values[index]}
@@ -198,7 +208,7 @@ const ComponentFields = ({
               </FormField>
             ))}
             {error && (
-              <Text id={segmentErrorId} fontSize="sm" color="fg.error">
+              <Text id={errorId} fontSize="sm" color="fg.error">
                 {error}
               </Text>
             )}

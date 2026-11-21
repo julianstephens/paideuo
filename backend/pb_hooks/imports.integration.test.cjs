@@ -218,20 +218,17 @@ const createAuthedUser = async (admin, baseUrl, suffix) => {
   return { client, userId: client.authStore.record.id };
 };
 
-const withPocketBase = async (run, { beforeComponentMigration = false } = {}) => {
+const withPocketBase = async (run, { pendingMigration } = {}) => {
   const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "paideuo-imports-it-"));
   const dataDir = path.join(tempRoot, "pb_data");
   const hooksDir = path.join(tempRoot, "pb_hooks");
   fs.mkdirSync(dataDir, { recursive: true });
   fs.cpSync(baseHooksDir, hooksDir, { recursive: true });
-  const componentMigration = "1760000021_component_workout_results.js";
-  const migrations = beforeComponentMigration
-    ? path.join(tempRoot, "pb_migrations")
-    : migrationsDir;
-  if (beforeComponentMigration) {
+  const migrations = pendingMigration ? path.join(tempRoot, "pb_migrations") : migrationsDir;
+  if (pendingMigration) {
     fs.cpSync(migrationsDir, migrations, {
       recursive: true,
-      filter: (source) => path.basename(source) !== componentMigration,
+      filter: (source) => path.basename(source) !== pendingMigration,
     });
   }
   fs.writeFileSync(
@@ -308,8 +305,8 @@ onRecordValidate((event) => {
     };
     const upgrade = async () => {
       fs.copyFileSync(
-        path.join(migrationsDir, componentMigration),
-        path.join(migrations, componentMigration),
+        path.join(migrationsDir, pendingMigration),
+        path.join(migrations, pendingMigration),
       );
       await restart();
     };
@@ -1435,7 +1432,7 @@ test("PocketBase upgrades historical component results and rolls back failed com
       assert.deepEqual(legacyClient.componentResults, edited.componentResults);
       assert.deepEqual((await readSession()).componentResults, edited.componentResults);
     },
-    { beforeComponentMigration: true },
+    { pendingMigration: "1760000021_component_workout_results.js" },
   );
 });
 
@@ -1606,5 +1603,259 @@ test("invalid prescription segment text cannot become a save payload", async () 
   assert.deepEqual(
     componentPayload({ ...draft, targets: { segments: [value] } }).targets.segments,
     segments,
+  );
+});
+
+test("prescription ranges survive import, editing, templates, block duplication and scheduling", async () => {
+  await withPocketBase(async ({ admin, baseUrl }) => {
+    const { client } = await createAuthedUser(admin, baseUrl, "prescription-ranges");
+    const request = (path, method = "GET", body) => client.send(path, { method, body });
+    const document = makeProgramDocument();
+    const [rangeBlock, scalarBlock] = document.data.blocks;
+    const ranges = {
+      plannedDurationMin: 35,
+      plannedDurationMax: 40,
+      plannedRpeMin: 6,
+      plannedRpeMax: 7,
+    };
+    const components = [
+      {
+        key: "cycle",
+        name: "Cycle",
+        instructions: "Steady",
+        classification: "aerobic",
+        durationMin: 35,
+        durationMax: 40,
+        targets: { intensity: { min: 6, max: 7, scale: "RPE" } },
+      },
+      { key: "zero", name: "Zero", instructions: "", durationMin: 0, durationMax: 0 },
+    ];
+    Object.assign(rangeBlock.weeks[0].prescriptions[0].workout, ranges, { components });
+    scalarBlock.weeks[0].prescriptions[0].workout.plannedDurationMin = 35;
+
+    const preview = await previewImport(client, document);
+    const imported = await commitImport(client, document, preview.previewToken);
+    const root = `/api/paideuo/programs/${imported.rows.programId}`;
+    const location = async (blockId, slotId) => {
+      const [week] = await admin.collection("paideuo_program_weeks").getFullList({
+        filter: admin.filter("block = {:block}", { block: blockId }),
+        sort: "position",
+      });
+      const slot = slotId
+        ? null
+        : await admin
+            .collection("paideuo_session_slots")
+            .getFirstListItem(admin.filter("block = {:block}", { block: blockId }));
+      return `${root}/blocks/${blockId}/weeks/${week.id}/cells/${slotId ?? slot.id}`;
+    };
+    const findBlock = (externalId) =>
+      admin.collection("paideuo_blocks").getFirstListItem(
+        admin.filter("program = {:program} && external_id = {:externalId}", {
+          program: imported.rows.programId,
+          externalId,
+        }),
+      );
+    const [block, scalar] = await Promise.all([
+      findBlock(rangeBlock.externalId),
+      findBlock(scalarBlock.externalId),
+    ]);
+    const cellPath = await location(block.id);
+    const assertRanges = (prescription, expected = ranges) => {
+      for (const [key, value] of Object.entries(expected)) assert.equal(prescription[key], value);
+      const [cycle, zero] = prescription.components;
+      assert.deepEqual(
+        Object.fromEntries(Object.keys(components[0]).map((key) => [key, cycle[key]])),
+        components[0],
+      );
+      assert.equal(zero.durationMin, 0);
+      assert.equal(zero.durationMax, 0);
+    };
+    const first = await request(cellPath);
+    assertRanges(first.prescription);
+    const repeated = await previewImport(client, document);
+    assert.deepEqual(
+      repeated.items.filter(({ status }) => status !== "skip"),
+      [],
+    );
+    assert.equal(
+      (await commitImport(client, document, repeated.previewToken)).rows.unchanged,
+      true,
+    );
+
+    const patch = (path, cell, changes) =>
+      request(path, "PATCH", { ...cell.prescription, revision: cell.revision, ...changes });
+    const scalarPath = await location(scalar.id);
+    const scalarCell = await request(scalarPath);
+    assert.equal(scalarCell.prescription.plannedDurationMin, 35);
+    assert.equal(scalarCell.prescription.plannedDurationMax, null);
+    await patch(scalarPath, scalarCell, { title: "Edited scalar" });
+    const editedScalar = (await request(scalarPath)).prescription;
+    assert.equal(editedScalar.title, "Edited scalar");
+    assert.equal(editedScalar.plannedDurationMin, 35);
+    assert.equal(editedScalar.plannedDurationMax, null);
+    assert.equal(editedScalar.plannedRpeMin, null);
+    assert.equal(editedScalar.components[0].durationMax, null);
+
+    const cycle = first.prescription.components[0];
+    for (const changes of [
+      { plannedDurationMax: 34 },
+      { plannedRpeMax: 5 },
+      { components: [{ ...cycle, durationMax: 34 }] },
+      { components: [{ ...cycle, targets: { intensity: { min: 7, max: 6, scale: "RPE" } } }] },
+    ]) {
+      await assert.rejects(
+        () => patch(cellPath, first, changes),
+        (error) => error.status === 400,
+      );
+    }
+    assert.deepEqual(await request(cellPath), first);
+    await patch(cellPath, first, { plannedDurationMin: 0, plannedDurationMax: 0 });
+    const zeroSession = await request(cellPath);
+    assertRanges(zeroSession.prescription, {
+      ...ranges,
+      plannedDurationMin: 0,
+      plannedDurationMax: 0,
+    });
+    // Clearing a stored zero changes presence even though PocketBase's numeric value stays zero.
+    await patch(cellPath, zeroSession, {
+      ...ranges,
+      components: [cycle, { ...components[1], durationMax: null }],
+    });
+    const cleared = await request(cellPath);
+    assert.equal(cleared.prescription.components[1].durationMax, null);
+    await patch(cellPath, cleared, { components });
+    const edited = await request(cellPath);
+    assertRanges(edited.prescription);
+
+    const { id: duplicateId } = await request(`${root}/blocks/${block.id}/duplicate`, "POST", {
+      destinationProgramId: imported.rows.programId,
+    });
+    assertRanges((await request(await location(duplicateId))).prescription);
+
+    const templates = "/api/paideuo/templates";
+    const readTemplate = async (id) =>
+      (await request(templates)).find((template) => template.id === id);
+    const { id: savedTemplate } = await request(cellPath + "/template", "POST", {
+      name: "Range template",
+      revision: edited.revision,
+    });
+    const fromCell = await readTemplate(savedTemplate);
+    assertRanges(fromCell);
+    const { id: templateId } = await request(templates, "POST", {
+      ...fromCell,
+      name: "Range baseline",
+    });
+    const template = await readTemplate(templateId);
+    assertRanges(template);
+    const slots = `${root}/blocks/${block.id}/slots`;
+    const { id: baselineSlot } = await request(slots, "POST", { weekday: 2, label: "Baseline" });
+    await request(`${slots}/${baselineSlot}/baseline`, "PATCH", { templateId });
+    assert.equal((await request(`${root}/blocks/${block.id}/initialize-weeks`, "POST")).created, 1);
+    assertRanges((await request(await location(block.id, baselineSlot))).prescription);
+
+    const { id: insertedSlot } = await request(slots, "POST", { weekday: 3, label: "Inserted" });
+    const insertedPath = await location(block.id, insertedSlot);
+    // Submit the same fields the week editor uses when inserting a template.
+    await patch(insertedPath, await request(insertedPath), {
+      ...template,
+      title: template.name,
+      notes: "",
+    });
+    assertRanges((await request(insertedPath)).prescription);
+
+    const schedule = { startDate: "2026-01-05", timezone: "UTC" };
+    const { revision } = await request(root + "/schedule/preview", "POST", schedule);
+    await request(root + "/schedule", "POST", { ...schedule, revision });
+    const calendar = () => request("/api/paideuo/calendar?start=2026-01-05&end=2026-01-07");
+    const before = await calendar();
+    assert.equal(before.length, 3);
+    for (const session of before) assertRanges(session.prescription);
+    await patch(cellPath, await request(cellPath), { plannedDurationMax: 45, plannedRpeMax: 8 });
+    assert.deepEqual(await calendar(), before);
+
+    const { id: oneOffId } = await request("/api/paideuo/calendar/sessions", "POST", {
+      scheduledDate: "2026-01-07",
+      timezone: "UTC",
+      operationId: crypto.randomUUID(),
+      prescription: { ...edited.prescription, plannedDurationMin: 0, plannedDurationMax: 0 },
+    });
+    const oneOff = (await calendar()).find(({ id }) => id === oneOffId);
+    assertRanges(oneOff.prescription, { ...ranges, plannedDurationMin: 0, plannedDurationMax: 0 });
+  });
+});
+
+test("component RPE requires a minimum when a maximum is provided", async () => {
+  const { componentPayload, targetRangeError } =
+    await import("../../src/features/prescriptions/components.ts");
+  const draft = { key: 0, name: "Cycle", instructions: "" };
+  const payload = (intensity) => componentPayload({ ...draft, targets: { intensity } });
+  assert.match(targetRangeError("intensity", ["", "7"]), /Enter a minimum RPE/);
+  assert.throws(() => payload(["", "7"]), /Enter a minimum RPE/);
+  assert.deepEqual(payload(["6", ""]).targets.intensity, { value: 6, scale: "RPE" });
+  assert.deepEqual(payload(["6", "7"]).targets.intensity, { min: 6, max: 7, scale: "RPE" });
+});
+
+test("duration presence migration preserves existing positive maxima and scalar prescriptions", async () => {
+  await withPocketBase(
+    async ({ admin, baseUrl, upgrade }) => {
+      const { client, userId } = await createAuthedUser(admin, baseUrl, "range-upgrade");
+      const program = await admin.collection("paideuo_programs").create({
+        owner: userId,
+        name: "Existing program",
+        status: "draft",
+      });
+      const block = await admin.collection("paideuo_blocks").create({
+        program: program.id,
+        name: "Existing block",
+        position: 1,
+        duration_weeks: 1,
+      });
+      const week = await admin.collection("paideuo_program_weeks").create({
+        block: block.id,
+        position: 1,
+        week_type: "normal",
+      });
+      const createPrescription = async (day, max) => {
+        const slot = await admin.collection("paideuo_session_slots").create({
+          block: block.id,
+          weekday: day,
+          position: 1,
+          label: "Cycle",
+        });
+        const session = await admin.collection("paideuo_session_prescriptions").create({
+          slot: slot.id,
+          program_week: week.id,
+          title: "Cycle",
+          session_type: "conditioning",
+          planned_duration_min: 35,
+          duration_specified: true,
+          planned_duration_max: max,
+        });
+        await admin.collection("paideuo_training_components").create({
+          prescription: session.id,
+          name: "Cycle",
+          position: 1,
+          duration_min: 35,
+          duration_specified: true,
+          duration_max: max,
+        });
+        return `/api/paideuo/programs/${program.id}/blocks/${block.id}/weeks/${week.id}/cells/${slot.id}`;
+      };
+      const rangedPath = await createPrescription(1, 40);
+      const scalarPath = await createPrescription(2);
+      await upgrade();
+
+      for (const [url, max] of [
+        [rangedPath, 40],
+        [scalarPath, null],
+      ]) {
+        const { prescription } = await client.send(url);
+        assert.equal(prescription.plannedDurationMin, 35);
+        assert.equal(prescription.plannedDurationMax, max);
+        assert.equal(prescription.components[0].durationMin, 35);
+        assert.equal(prescription.components[0].durationMax, max);
+      }
+    },
+    { pendingMigration: "1760000024_prescription_max_duration_presence.js" },
   );
 });
