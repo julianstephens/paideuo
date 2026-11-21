@@ -1,6 +1,7 @@
 // oxlint-disable-next-line import/no-commonjs
 module.exports = (components) => {
   if (!Array.isArray(components)) throw new BadRequestError("Enter a valid component list.");
+  const { componentFields } = require(__hooks + "/prescription-fields.cjs");
   const parseTargets = require(__hooks + "/component-targets.js");
   const whole = (value) => Number.isSafeInteger(value) && value >= 0;
   const nonempty = (value, max) =>
@@ -47,16 +48,17 @@ module.exports = (components) => {
         `Choose a valid training classification for component ${position}.`,
       );
     }
-    return {
-      key,
-      position,
-      name: component.name.trim(),
-      instructions: instructions.trim(),
-      classification,
-      duration_min: duration ?? 0,
-      duration_max: durationMax ?? 0,
-      duration_specified: duration != null,
-      targets: parseTargets(component.targets, position),
-    };
+    return componentFields(
+      {
+        key,
+        name: component.name.trim(),
+        instructions: instructions.trim(),
+        classification,
+        durationMin: duration,
+        durationMax,
+        targets: parseTargets(component.targets, position),
+      },
+      index,
+    );
   });
 };

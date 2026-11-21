@@ -48,7 +48,8 @@ const handleTemplates = (event) => {
     return value;
   };
   const parse = (previous = []) => {
-    const parseTargets = require(__hooks + "/component-targets.js");
+    const componentValues = require(__hooks + "/prescription-components.js");
+    const { presentComponent } = require(__hooks + "/prescription-fields.cjs");
     const body = event.requestInfo().body;
     if (!["climbing", "strength", "conditioning", "mobility", "other"].includes(body.sessionType)) {
       throw new BadRequestError("Choose a session type.");
@@ -73,7 +74,7 @@ const handleTemplates = (event) => {
       throw new BadRequestError("Choose a planned intensity.");
     }
     const seen = new Set();
-    const components = body.components.map((component, index) => {
+    const components = body.components.map((component) => {
       if (!component || typeof component !== "object" || Array.isArray(component)) {
         throw new BadRequestError("Enter a valid component.");
       }
@@ -84,26 +85,11 @@ const handleTemplates = (event) => {
         }
         seen.add(sourceIndex);
       }
-      const targets =
-        component.targets === undefined
-          ? previous[sourceIndex]?.targets
-          : parseTargets(component.targets, index + 1);
-      const componentDuration = duration(component.durationMin);
-      const componentDurationMax = duration(component.durationMax);
-      if (
-        componentDuration !== null &&
-        componentDurationMax !== null &&
-        componentDurationMax < componentDuration
-      )
-        throw new BadRequestError(
-          `Enter a duration range in ascending order for component ${index + 1}.`,
-        );
+      const prior = previous[sourceIndex];
       return {
-        name: text(component.name, "component name", 200, true),
-        instructions: text(component.instructions ?? "", "component instructions", 10000),
-        durationMin: componentDuration,
-        durationMax: componentDurationMax,
-        ...(targets !== undefined ? { targets } : {}),
+        ...component,
+        key: component.key ?? prior?.key,
+        targets: component.targets === undefined ? prior?.targets : component.targets,
       };
     });
     return {
@@ -115,7 +101,7 @@ const handleTemplates = (event) => {
       planned_rpe_min: rpeMin,
       planned_rpe_max: rpeMax,
       ...(intensity !== undefined ? { planned_intensity: intensity ?? "" } : {}),
-      components,
+      components: componentValues(components).map(presentComponent),
     };
   };
 

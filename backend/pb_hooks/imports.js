@@ -1,4 +1,7 @@
 const { reconcileTrainingComponents } = require(__hooks + "/training-components.cjs");
+const { sessionFields, componentFields, presentComponent } = require(
+  __hooks + "/prescription-fields.cjs",
+);
 const schema = require(__hooks + "/import-schemas.js");
 const credentials = require(__hooks + "/service-credentials.cjs");
 
@@ -329,16 +332,7 @@ const programPlan = (db, owner, data) => {
           {
             external_id: key,
             slot: slotChoice.record?.id ?? prescription.slotExternalId,
-            title: workout.title,
-            description: workout.description,
-            planned_duration_min: workout.plannedDurationMin ?? 0,
-            planned_duration_max: workout.plannedDurationMax ?? 0,
-            duration_specified: workout.plannedDurationMin !== null,
-            planned_intensity: workout.plannedIntensity ?? "",
-            planned_rpe_min: workout.plannedRpeMin ?? 0,
-            planned_rpe_max: workout.plannedRpeMax ?? 0,
-            notes: workout.notes,
-            session_type: workout.sessionType,
+            ...sessionFields(workout),
           },
           prescriptionChoice.conflict,
         );
@@ -361,6 +355,7 @@ const programPlan = (db, owner, data) => {
                   "instructions",
                   "duration_min",
                   "duration_max",
+                  "duration_max_specified",
                   "duration_specified",
                   "classification",
                   "targets_json",
@@ -370,20 +365,18 @@ const programPlan = (db, owner, data) => {
           desired: workout.components.map(withComponentKey),
         });
         const componentState = state[state.length - 1];
-        const currentComponents = componentState.current.map((component) => ({
-          key: component.external_key || component.id,
-          name: component.name,
-          instructions: component.instructions,
-          durationMin: component.duration_specified ? component.duration_min : null,
-          durationMax: component.duration_max > 0 ? component.duration_max : null,
-          classification: component.classification || null,
-          targets: component.targets,
+        const currentComponents = componentState.current.map((component) =>
+          presentComponent({ ...component, key: component.external_key || component.id }),
+        );
+        const desiredComponents = componentState.desired.map((component) => ({
+          ...component,
+          durationMax: component.durationMax ?? null,
         }));
         const { serialize } = require(__hooks + "/schedule-revisions.js");
         const item = items[items.length - 1];
         if (
           item.status === "skip" &&
-          serialize(currentComponents) !== serialize(componentState.desired)
+          serialize(currentComponents) !== serialize(desiredComponents)
         ) {
           item.status = "update";
         }
@@ -818,17 +811,6 @@ const withComponentKey = (component, index) => ({
   ...component,
 });
 
-const trainingComponentValues = (component, index) => ({
-  position: index + 1,
-  key: component.key,
-  name: component.name,
-  instructions: component.instructions,
-  duration_min: component.durationMin ?? 0,
-  duration_specified: component.durationMin !== null,
-  classification: component.classification ?? null,
-  targets: component.targets,
-});
-
 const commitProgram = (db, owner, document, plan) => {
   const data = document.data;
   const planned = new Map(plan.items.map((item) => [`${item.type}:${item.key}`, item.status]));
@@ -986,14 +968,7 @@ const commitProgram = (db, owner, document, plan) => {
           program_week: weekRecord.id,
           slot: slotRecord.id,
           external_id: key,
-          title: item.workout.title,
-          description: item.workout.description,
-          planned_duration_min: item.workout.plannedDurationMin ?? 0,
-          planned_duration_max: item.workout.plannedDurationMax ?? 0,
-          duration_specified: item.workout.plannedDurationMin !== null,
-          planned_intensity: item.workout.plannedIntensity ?? "",
-          notes: item.workout.notes,
-          session_type: item.workout.sessionType,
+          ...sessionFields(item.workout),
         };
         const status = statusFor("prescription", key);
         prescription = !prescription
@@ -1005,7 +980,7 @@ const commitProgram = (db, owner, document, plan) => {
           reconcileTrainingComponents(
             db,
             prescription.id,
-            item.workout.components.map(withComponentKey).map(trainingComponentValues),
+            item.workout.components.map(withComponentKey).map(componentFields),
           );
         }
       }

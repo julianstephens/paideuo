@@ -63,6 +63,7 @@ const parsePrescription = (prescription) => {
   ) {
     throw new BadRequestError("Choose a planned intensity.");
   }
+  const { presentComponent } = require(__hooks + "/prescription-fields.cjs");
   const componentValues = require(__hooks + "/prescription-components.js");
   return {
     title: text(title, "title", 200, true),
@@ -74,15 +75,7 @@ const parsePrescription = (prescription) => {
     plannedRpeMin: rpeMin,
     plannedRpeMax: rpeMax,
     plannedIntensity,
-    components: componentValues(components).map((component) => ({
-      key: component.key,
-      name: component.name,
-      instructions: component.instructions,
-      durationMin: component.duration_specified ? component.duration_min : null,
-      durationMax: component.duration_max > 0 ? component.duration_max : null,
-      classification: component.classification ?? null,
-      targets: component.targets,
-    })),
+    components: componentValues(components).map(presentComponent),
   };
 };
 

@@ -16,6 +16,7 @@ import { useSearchParams } from "react-router";
 import { Disclosure, FormField, Notice, Panel } from "../../components/ui";
 import { ComplianceQueryState, ComplianceSummary } from "../compliance/ComplianceSummary";
 import { useCompliance } from "../compliance/compliance";
+import { formatPlannedDuration, formatPlannedRpe } from "../prescriptions/format";
 import { plannedIntensities } from "../programs/programs";
 import type {
   BlockDetail,
@@ -96,15 +97,12 @@ const CellButton = ({
       <Stack gap="0" align="start" minW="0">
         <Text fontWeight="semibold">{session.title}</Text>
         <Text fontSize="xs" color="fg.muted" textTransform="capitalize">
-          {session.plannedDurationMin === null
-            ? "Duration missing"
-            : session.plannedDurationMax != null
-              ? `${session.plannedDurationMin}–${session.plannedDurationMax} min`
-              : `${session.plannedDurationMin} min`}
+          {formatPlannedDuration(session.plannedDurationMin, session.plannedDurationMax) ??
+            "Duration missing"}
           {" · "}
-          {session.plannedRpeMin != null || session.plannedRpeMax != null
-            ? `${session.plannedRpeMin ?? session.plannedRpeMax}–${session.plannedRpeMax ?? session.plannedRpeMin} RPE`
-            : (session.plannedIntensity ?? "Intensity unspecified")}
+          {formatPlannedRpe(session.plannedRpeMin, session.plannedRpeMax) ??
+            session.plannedIntensity ??
+            "Intensity unspecified"}
         </Text>
       </Stack>
     ) : (

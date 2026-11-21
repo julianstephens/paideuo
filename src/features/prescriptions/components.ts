@@ -126,6 +126,9 @@ export const targetRangeError = (key: TargetName, values: string[]) => {
   if (key !== "duration" && key !== "intensity") return "";
   const minText = values[0]?.trim();
   const maxText = values[1]?.trim();
+  if (key === "intensity" && maxText && !minText) {
+    return "Enter a minimum RPE or clear the maximum.";
+  }
   if (!minText || !maxText) return "";
   const min = Number(minText);
   const max = Number(maxText);
@@ -158,6 +161,8 @@ export const componentPayload = ({
   const durationMax = duration?.[1] ? Number(duration[1]) : null;
   const intensityMin = intensity?.[0] ? Number(intensity[0]) : null;
   const intensityMax = intensity?.[1] ? Number(intensity[1]) : null;
+  const intensityError = intensity ? targetRangeError("intensity", intensity) : "";
+  if (intensityError) throw new Error(intensityError);
   return {
     ...(snapshotKey ? { key: snapshotKey } : {}),
     name,
@@ -169,19 +174,14 @@ export const componentPayload = ({
       ...(sets ? { sets: Number(sets[0]) } : {}),
       ...(reps ? { reps: reps[0].trim() } : {}),
       ...(load ? { load: { value: Number(load[0]), unit: load[1].trim() } } : {}),
-      ...(intensity
-        ? intensityMax != null
-          ? {
-              intensity: {
-                min: intensityMin as number,
-                max: intensityMax,
-                scale: "RPE" as const,
-              },
-            }
-          : intensityMin != null
-            ? { intensity: { value: intensityMin, scale: "RPE" as const } }
-            : {}
-        : {}),
+      ...(intensityMin == null
+        ? {}
+        : {
+            intensity:
+              intensityMax == null
+                ? { value: intensityMin, scale: "RPE" }
+                : { min: intensityMin, max: intensityMax, scale: "RPE" },
+          }),
       ...(grade
         ? { grade: { min: grade[0].trim() || undefined, max: grade[1].trim() || undefined } }
         : {}),

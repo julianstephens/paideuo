@@ -123,11 +123,17 @@ const handlePrograms = (event) => {
       }),
     );
 
+  const { sessionFields, presentComponent } = require(__hooks + "/prescription-fields.cjs");
+
   const prescriptionFields = (record) =>
     copyFields(record, [
       "title",
       "description",
       "planned_duration_min",
+      "planned_duration_max",
+      "duration_max_specified",
+      "planned_rpe_min",
+      "planned_rpe_max",
       "duration_specified",
       "planned_intensity",
       "notes",
@@ -150,21 +156,11 @@ const handlePrograms = (event) => {
       "duration_min",
       "duration_specified",
       "duration_max",
+      "duration_max_specified",
       "external_key",
       "classification",
     ]),
     targets: JSON.parse(component.getString("targets") || "null"),
-  });
-
-  const presentComponent = (component) => ({
-    ...(component.key ? { key: component.key } : {}),
-    name: component.name,
-    instructions: component.instructions,
-    durationMin:
-      component.duration_specified || component.duration_min > 0 ? component.duration_min : null,
-    durationMax: component.duration_max > 0 ? component.duration_max : null,
-    classification: component.classification || null,
-    targets: component.targets,
   });
 
   const componentValues = require(__hooks + "/prescription-components.js");
@@ -195,8 +191,9 @@ const handlePrograms = (event) => {
       record.getBool("duration_specified") || record.getInt("planned_duration_min") > 0
         ? record.getInt("planned_duration_min")
         : null,
-    plannedDurationMax:
-      record.getInt("planned_duration_max") > 0 ? record.getInt("planned_duration_max") : null,
+    plannedDurationMax: record.getBool("duration_max_specified")
+      ? record.getInt("planned_duration_max")
+      : null,
     plannedRpeMin: record.getFloat("planned_rpe_min") || null,
     plannedRpeMax: record.getFloat("planned_rpe_max") || null,
     plannedIntensity: record.getString("planned_intensity") || null,
@@ -755,18 +752,17 @@ const handlePrograms = (event) => {
           ) {
             throw new BadRequestError("Choose a session type.");
           }
-          const values = {
+          const values = sessionFields({
             title: text("title", 200, true),
             description: text("description", 10000),
             notes: text("notes", 10000),
-            session_type: body.sessionType,
-            planned_duration_min: duration ?? 0,
-            planned_duration_max: durationMax ?? 0,
-            duration_specified: duration !== null,
-            planned_rpe_min: rpeMin ?? 0,
-            planned_rpe_max: rpeMax ?? 0,
-            planned_intensity: intensity ?? "",
-          };
+            sessionType: body.sessionType,
+            plannedDurationMin: duration,
+            plannedDurationMax: durationMax,
+            plannedRpeMin: rpeMin,
+            plannedRpeMax: rpeMax,
+            plannedIntensity: intensity,
+          });
           const components =
             body.components === undefined ? undefined : componentValues(body.components);
           app.runInTransaction((tx) => {
@@ -875,30 +871,13 @@ const handlePrograms = (event) => {
         for (const week of weeks) {
           for (const { id: slot, baseline } of slots) {
             if (existing.has(`${week.id}/${slot}`)) continue;
-            const prescription = save(tx, "paideuo_session_prescriptions", {
-              program_week: week.id,
+            copyPrescription(
+              tx,
+              sessionFields({ ...baseline, title: baseline.name }),
+              componentValues(baseline.components),
+              week.id,
               slot,
-              title: baseline.name,
-              description: baseline.description,
-              session_type: baseline.sessionType,
-              planned_duration_min: baseline.plannedDurationMin,
-              planned_duration_max: baseline.plannedDurationMax,
-              duration_specified: baseline.plannedDurationMin != null,
-              planned_intensity: baseline.plannedIntensity ?? "",
-              planned_rpe_min: baseline.plannedRpeMin ?? 0,
-              planned_rpe_max: baseline.plannedRpeMax ?? 0,
-            });
-            baseline.components.forEach((component, index) => {
-              save(tx, "paideuo_training_components", {
-                prescription: prescription.id,
-                position: index + 1,
-                name: component.name,
-                instructions: component.instructions,
-                duration_min: component.durationMin ?? 0,
-                duration_specified: component.durationMin != null,
-                targets: component.targets ?? null,
-              });
-            });
+            );
             created++;
           }
         }

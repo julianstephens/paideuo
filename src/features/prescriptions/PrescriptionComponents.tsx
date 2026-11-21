@@ -121,7 +121,7 @@ const ComponentFields = ({
   disabled: boolean;
 }) => {
   const instructionsId = useId();
-  const segmentErrorId = useId();
+  const targetErrorId = useId();
   const available = targetDefinitions.filter(({ key }) => component.targets[key] === undefined);
   return (
     <>
@@ -177,6 +177,7 @@ const ComponentFields = ({
             : key === "duration" || key === "intensity"
               ? targetRangeError(key, values)
               : "";
+        const errorId = `${targetErrorId}-${key}`;
         return (
           <Stack key={key} borderWidth="1px" borderRadius="md" p="2" gap="2">
             {fields.map(({ label, required, ...props }, index) => (
@@ -190,7 +191,7 @@ const ComponentFields = ({
                       : undefined
                   }
                   aria-invalid={error ? true : undefined}
-                  aria-describedby={error ? segmentErrorId : undefined}
+                  aria-describedby={error ? errorId : undefined}
                   disabled={disabled}
                   required={required ?? true}
                   value={values[index]}
@@ -207,7 +208,7 @@ const ComponentFields = ({
               </FormField>
             ))}
             {error && (
-              <Text id={segmentErrorId} fontSize="sm" color="fg.error">
+              <Text id={errorId} fontSize="sm" color="fg.error">
                 {error}
               </Text>
             )}

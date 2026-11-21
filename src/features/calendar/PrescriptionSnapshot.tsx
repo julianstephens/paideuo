@@ -2,6 +2,7 @@ import { Badge, Box, Button, Flex, Heading, Stack, Text } from "@chakra-ui/react
 import { useId, useState } from "react";
 import { Disclosure } from "../../components/ui";
 import { componentDraft, targetDefinitions } from "../prescriptions/components";
+import { formatPlannedDuration, formatPlannedRpe } from "../prescriptions/format";
 import type { SessionSnapshot } from "./scheduling";
 
 export const PrescriptionSnapshot = ({
@@ -17,32 +18,19 @@ export const PrescriptionSnapshot = ({
     ({ instructions, targets }) => instructions.trim() || Object.keys(targets ?? {}).length > 0,
   );
   const showDetails = !compact || detailsOpen;
-  const duration = (min: number | null, max?: number | null) =>
-    min == null && max == null
-      ? null
-      : min != null && max != null
-        ? min === max
-          ? `${min} min`
-          : `${min}–${max} min`
-        : `${min ?? max} min`;
-  const rpe = () =>
-    prescription.plannedRpeMin != null || prescription.plannedRpeMax != null
-      ? (() => {
-          const min = prescription.plannedRpeMin ?? prescription.plannedRpeMax;
-          const max = prescription.plannedRpeMax ?? prescription.plannedRpeMin;
-          return min === max ? `${min} RPE` : `${min}–${max} RPE`;
-        })()
-      : (prescription.plannedIntensity ?? "Intensity unspecified");
 
   return (
     <Stack gap="3">
       {!compact && (
         <Text textTransform="capitalize">
-          {duration(prescription.plannedDurationMin, prescription.plannedDurationMax) === null
-            ? "Duration unspecified"
-            : duration(prescription.plannedDurationMin, prescription.plannedDurationMax)}
+          {formatPlannedDuration(
+            prescription.plannedDurationMin,
+            prescription.plannedDurationMax,
+          ) ?? "Duration unspecified"}
           {" · "}
-          {rpe()}
+          {formatPlannedRpe(prescription.plannedRpeMin, prescription.plannedRpeMax) ??
+            prescription.plannedIntensity ??
+            "Intensity unspecified"}
         </Text>
       )}
       {prescription.description && <Text whiteSpace="pre-wrap">{prescription.description}</Text>}
@@ -86,17 +74,15 @@ export const PrescriptionSnapshot = ({
           </Flex>
           <Stack id={componentListId} as="ol" gap="2" ps="5">
             {prescription.components.map((component, index) => {
+              const duration = formatPlannedDuration(component.durationMin, component.durationMax);
               const targets = showDetails ? componentDraft(index, component).targets : undefined;
               return (
                 <Box as="li" key={index}>
                   <Flex gapX="2" wrap="wrap" align="baseline">
                     <Text fontWeight="medium">{component.name}</Text>
-                    {compact && component.durationMin != null && (
+                    {compact && duration && (
                       <Text fontSize="xs" color="fg.muted">
-                        {component.durationMax != null &&
-                        component.durationMax !== component.durationMin
-                          ? `${component.durationMin}–${component.durationMax} min`
-                          : `${component.durationMin} min`}
+                        {duration}
                       </Text>
                     )}
                   </Flex>
@@ -111,9 +97,7 @@ export const PrescriptionSnapshot = ({
                           <Badge key={key} whiteSpace="normal">
                             {label}{" "}
                             {key === "duration"
-                              ? targets.duration?.[1]
-                                ? `${targets.duration[0] || targets.duration[1]}–${targets.duration[1]} min`
-                                : `${targets.duration?.[0]} min`
+                              ? duration
                               : key === "intensity" && targets.intensity?.[1]
                                 ? `RPE ${targets.intensity[0] || targets.intensity[1]}–${targets.intensity[1]}`
                                 : targets[key]?.filter(Boolean).join(key === "grade" ? " – " : " ")}

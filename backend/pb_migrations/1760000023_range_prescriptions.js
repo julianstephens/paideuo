@@ -16,9 +16,9 @@ migrate(
 
     const template = app.findCollectionByNameOrId("paideuo_session_templates");
     template.fields.add(
-      new JsonField({ name: "planned_duration_max", maxSize: 64 }),
-      new JsonField({ name: "planned_rpe_min", maxSize: 64 }),
-      new JsonField({ name: "planned_rpe_max", maxSize: 64 }),
+      new JSONField({ name: "planned_duration_max", maxSize: 64 }),
+      new JSONField({ name: "planned_rpe_min", maxSize: 64 }),
+      new JSONField({ name: "planned_rpe_max", maxSize: 64 }),
     );
     app.save(template);
   },

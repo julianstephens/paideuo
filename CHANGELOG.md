@@ -1,6 +1,7 @@
 ## v0.5.0
 
 - Add additional workout session types and aerobic outcome tracking
+- Add support for range values in planned duration and intensity
 
 ## v0.4.1
 
