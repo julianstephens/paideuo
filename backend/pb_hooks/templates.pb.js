@@ -14,6 +14,9 @@ const handleTemplates = (event) => {
     description: record.getString("description"),
     session_type: record.getString("session_type"),
     planned_duration_min: readJSON(record, "planned_duration_min", "null"),
+    planned_duration_max: readJSON(record, "planned_duration_max", "null"),
+    planned_rpe_min: readJSON(record, "planned_rpe_min", "null"),
+    planned_rpe_max: readJSON(record, "planned_rpe_max", "null"),
     components: readJSON(record, "components", "[]"),
     planned_intensity: record.getString("planned_intensity"),
   });
@@ -52,6 +55,20 @@ const handleTemplates = (event) => {
     }
     if (!Array.isArray(body.components)) throw new BadRequestError("Enter a valid component list.");
     const intensity = body.plannedIntensity;
+    const durationMax = duration(body.plannedDurationMax);
+    const rpeMin = body.plannedRpeMin ?? body.plannedRpe?.min ?? null;
+    const rpeMax = body.plannedRpeMax ?? body.plannedRpe?.max ?? null;
+    const parsedDuration = duration(body.plannedDurationMin);
+    if (parsedDuration !== null && durationMax !== null && durationMax < parsedDuration)
+      throw new BadRequestError(
+        "Maximum duration must be greater than or equal to minimum duration.",
+      );
+    for (const rpe of [rpeMin, rpeMax]) {
+      if (rpe !== null && (!Number.isFinite(rpe) || rpe < 1 || rpe > 10))
+        throw new BadRequestError("Enter a session RPE from 1 to 10 or clear it.");
+    }
+    if (rpeMin !== null && rpeMax !== null && rpeMax < rpeMin)
+      throw new BadRequestError("Maximum RPE must be greater than or equal to minimum RPE.");
     if (intensity != null && !["easy", "moderate", "hard", "maximal"].includes(intensity)) {
       throw new BadRequestError("Choose a planned intensity.");
     }
@@ -71,10 +88,21 @@ const handleTemplates = (event) => {
         component.targets === undefined
           ? previous[sourceIndex]?.targets
           : parseTargets(component.targets, index + 1);
+      const componentDuration = duration(component.durationMin);
+      const componentDurationMax = duration(component.durationMax);
+      if (
+        componentDuration !== null &&
+        componentDurationMax !== null &&
+        componentDurationMax < componentDuration
+      )
+        throw new BadRequestError(
+          `Enter a duration range in ascending order for component ${index + 1}.`,
+        );
       return {
         name: text(component.name, "component name", 200, true),
         instructions: text(component.instructions ?? "", "component instructions", 10000),
-        durationMin: duration(component.durationMin),
+        durationMin: componentDuration,
+        durationMax: componentDurationMax,
         ...(targets !== undefined ? { targets } : {}),
       };
     });
@@ -83,6 +111,9 @@ const handleTemplates = (event) => {
       description: text(body.description ?? "", "description", 10000),
       session_type: body.sessionType,
       planned_duration_min: duration(body.plannedDurationMin),
+      planned_duration_max: durationMax,
+      planned_rpe_min: rpeMin,
+      planned_rpe_max: rpeMax,
       ...(intensity !== undefined ? { planned_intensity: intensity ?? "" } : {}),
       components,
     };
@@ -96,6 +127,9 @@ const handleTemplates = (event) => {
       description: data.description,
       sessionType: data.session_type,
       plannedDurationMin: data.planned_duration_min,
+      plannedDurationMax: data.planned_duration_max,
+      plannedRpeMin: data.planned_rpe_min,
+      plannedRpeMax: data.planned_rpe_max,
       plannedIntensity: data.planned_intensity || null,
       components: data.components,
       updated: record.getString("updated"),

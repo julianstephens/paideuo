@@ -127,6 +127,37 @@ test("rejects duplicate references to the same hierarchy record", () => {
   );
 });
 
+test("preserves planned and component ranges and rejects reversed endpoints", () => {
+  const valid = sample("import-v1-program.json");
+  const workout = valid.data.blocks[0].weeks[0].prescriptions[0].workout;
+  workout.plannedDurationMin = 35;
+  workout.plannedDurationMax = 40;
+  workout.plannedRpeMin = 6;
+  workout.plannedRpeMax = 7;
+  workout.components[0].durationMin = 10;
+  workout.components[0].durationMax = 12;
+  workout.components[0].targets = {
+    intensity: { min: 6, max: 7, scale: "RPE" },
+  };
+  const normalized = normalize(valid);
+  const normalizedWorkout = normalized.data.blocks[0].weeks[0].prescriptions[0].workout;
+  assert.equal(normalizedWorkout.plannedDurationMax, 40);
+  assert.equal(normalizedWorkout.plannedRpeMin, 6);
+  assert.equal(normalizedWorkout.plannedRpeMax, 7);
+  assert.equal(normalizedWorkout.components[0].durationMax, 12);
+  assert.deepEqual(normalizedWorkout.components[0].targets.intensity, {
+    min: 6,
+    max: 7,
+    scale: "RPE",
+  });
+
+  workout.plannedDurationMax = 30;
+  assert.throws(() => normalize(valid), /planned duration range/);
+  workout.plannedDurationMax = 40;
+  workout.plannedRpeMax = 5;
+  assert.throws(() => normalize(valid), /planned RPE range/);
+});
+
 test("normalizes workout component results and validates dates", () => {
   const valid = envelope("workout-component-results", {
     sourceSessionId: "session-id",

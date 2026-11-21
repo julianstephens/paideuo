@@ -17,16 +17,32 @@ export const PrescriptionSnapshot = ({
     ({ instructions, targets }) => instructions.trim() || Object.keys(targets ?? {}).length > 0,
   );
   const showDetails = !compact || detailsOpen;
+  const duration = (min: number | null, max?: number | null) =>
+    min == null && max == null
+      ? null
+      : min != null && max != null
+        ? min === max
+          ? `${min} min`
+          : `${min}–${max} min`
+        : `${min ?? max} min`;
+  const rpe = () =>
+    prescription.plannedRpeMin != null || prescription.plannedRpeMax != null
+      ? (() => {
+          const min = prescription.plannedRpeMin ?? prescription.plannedRpeMax;
+          const max = prescription.plannedRpeMax ?? prescription.plannedRpeMin;
+          return min === max ? `${min} RPE` : `${min}–${max} RPE`;
+        })()
+      : (prescription.plannedIntensity ?? "Intensity unspecified");
 
   return (
     <Stack gap="3">
       {!compact && (
         <Text textTransform="capitalize">
-          {prescription.plannedDurationMin === null
+          {duration(prescription.plannedDurationMin, prescription.plannedDurationMax) === null
             ? "Duration unspecified"
-            : `${prescription.plannedDurationMin} min`}
+            : duration(prescription.plannedDurationMin, prescription.plannedDurationMax)}
           {" · "}
-          {prescription.plannedIntensity ?? "Intensity unspecified"}
+          {rpe()}
         </Text>
       )}
       {prescription.description && <Text whiteSpace="pre-wrap">{prescription.description}</Text>}
@@ -77,7 +93,10 @@ export const PrescriptionSnapshot = ({
                     <Text fontWeight="medium">{component.name}</Text>
                     {compact && component.durationMin != null && (
                       <Text fontSize="xs" color="fg.muted">
-                        {component.durationMin} min
+                        {component.durationMax != null &&
+                        component.durationMax !== component.durationMin
+                          ? `${component.durationMin}–${component.durationMax} min`
+                          : `${component.durationMin} min`}
                       </Text>
                     )}
                   </Flex>
@@ -92,8 +111,12 @@ export const PrescriptionSnapshot = ({
                           <Badge key={key} whiteSpace="normal">
                             {label}{" "}
                             {key === "duration"
-                              ? `${targets.duration?.[0]} min`
-                              : targets[key]?.filter(Boolean).join(key === "grade" ? " – " : " ")}
+                              ? targets.duration?.[1]
+                                ? `${targets.duration[0] || targets.duration[1]}–${targets.duration[1]} min`
+                                : `${targets.duration?.[0]} min`
+                              : key === "intensity" && targets.intensity?.[1]
+                                ? `RPE ${targets.intensity[0] || targets.intensity[1]}–${targets.intensity[1]}`
+                                : targets[key]?.filter(Boolean).join(key === "grade" ? " – " : " ")}
                           </Badge>
                         ),
                     )}

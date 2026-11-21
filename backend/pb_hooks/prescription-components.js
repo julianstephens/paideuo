@@ -19,11 +19,20 @@ module.exports = (components) => {
     }
     const instructions = component.instructions ?? "";
     const duration = component.durationMin;
+    const durationMax = component.durationMax;
     if (typeof instructions !== "string" || instructions.trim().length > 10000) {
       throw new BadRequestError(`Enter valid instructions for component ${position}.`);
     }
     if (duration != null && !whole(duration)) {
       throw new BadRequestError(`Enter a nonnegative whole duration for component ${position}.`);
+    }
+    if (
+      durationMax != null &&
+      (!whole(durationMax) || (duration != null && durationMax < duration))
+    ) {
+      throw new BadRequestError(
+        `Enter a duration range in ascending order for component ${position}.`,
+      );
     }
     const suppliedKey = component.key ?? $security.randomString(24);
     if (!nonempty(suppliedKey, 200) || keys.has(suppliedKey.trim())) {
@@ -45,6 +54,7 @@ module.exports = (components) => {
       instructions: instructions.trim(),
       classification,
       duration_min: duration ?? 0,
+      duration_max: durationMax ?? 0,
       duration_specified: duration != null,
       targets: parseTargets(component.targets, position),
     };

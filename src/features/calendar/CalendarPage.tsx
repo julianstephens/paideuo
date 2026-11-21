@@ -419,7 +419,7 @@ const SessionButtons = ({
   compact?: boolean;
 }) =>
   sessions.map((session) => {
-    const { title, sessionType, plannedDurationMin } = session.prescription;
+    const { title, sessionType, plannedDurationMin, plannedDurationMax } = session.prescription;
     const actual = session.completion?.actualDurationMin;
     const palette = palettes[session.status];
     return (
@@ -462,7 +462,10 @@ const SessionButtons = ({
             {(plannedDurationMin != null || actual != null) && (
               <Text as="span" fontWeight="normal" fontSize="xs" color="fg.muted">
                 {[
-                  plannedDurationMin != null && `${plannedDurationMin} min planned`,
+                  plannedDurationMin != null &&
+                    (plannedDurationMax != null
+                      ? `${plannedDurationMin}–${plannedDurationMax} min planned`
+                      : `${plannedDurationMin} min planned`),
                   actual != null && `${actual} min actual`,
                 ]
                   .filter(Boolean)
@@ -780,8 +783,12 @@ const SessionDetail = ({
                           prescription.sessionType,
                           prescription.plannedDurationMin === null
                             ? undefined
-                            : `${prescription.plannedDurationMin} min`,
-                          prescription.plannedIntensity,
+                            : prescription.plannedDurationMax != null
+                              ? `${prescription.plannedDurationMin}–${prescription.plannedDurationMax} min`
+                              : `${prescription.plannedDurationMin} min`,
+                          prescription.plannedRpeMin != null || prescription.plannedRpeMax != null
+                            ? `${prescription.plannedRpeMin ?? prescription.plannedRpeMax}–${prescription.plannedRpeMax ?? prescription.plannedRpeMin} RPE`
+                            : prescription.plannedIntensity,
                         ]
                           .filter(Boolean)
                           .join(" · ")}

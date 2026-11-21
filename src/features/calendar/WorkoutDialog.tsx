@@ -1,6 +1,7 @@
 import {
   Button,
   Dialog,
+  Flex,
   Input,
   NativeSelect,
   Portal,
@@ -52,6 +53,9 @@ export const WorkoutDialog = ({
       description: "",
       notes: "",
       plannedDurationMin: null,
+      plannedDurationMax: null,
+      plannedRpeMin: null,
+      plannedRpeMax: null,
       plannedIntensity: null,
     },
   );
@@ -85,13 +89,25 @@ export const WorkoutDialog = ({
     setFields((current) => ({ ...current, [name]: value }));
   const nextKey = () => componentKey.current++;
   const insert = (template: SessionTemplate) => {
-    const { name, sessionType, description, plannedDurationMin, plannedIntensity } = template;
+    const {
+      name,
+      sessionType,
+      description,
+      plannedDurationMin,
+      plannedDurationMax,
+      plannedRpeMin,
+      plannedRpeMax,
+      plannedIntensity,
+    } = template;
     setFields((current) => ({
       ...current,
       title: name,
       sessionType,
       description,
       plannedDurationMin,
+      plannedDurationMax: plannedDurationMax ?? null,
+      plannedRpeMin: plannedRpeMin ?? null,
+      plannedRpeMax: plannedRpeMax ?? null,
       plannedIntensity,
     }));
     setComponents(template.components.map((component) => componentDraft(nextKey(), component)));
@@ -204,18 +220,67 @@ export const WorkoutDialog = ({
                   </FormField>
                   <FormField>
                     Planned duration in minutes
-                    <Input
-                      type="number"
-                      min={0}
-                      step={1}
-                      value={fields.plannedDurationMin ?? ""}
-                      onChange={(event) =>
-                        field(
-                          "plannedDurationMin",
-                          event.target.value === "" ? null : Number(event.target.value),
-                        )
-                      }
-                    />
+                    <Flex gap="2">
+                      <Input
+                        aria-label="Minimum planned duration"
+                        type="number"
+                        min={0}
+                        step={1}
+                        value={fields.plannedDurationMin ?? ""}
+                        onChange={(event) =>
+                          field(
+                            "plannedDurationMin",
+                            event.target.value === "" ? null : Number(event.target.value),
+                          )
+                        }
+                      />
+                      <Input
+                        aria-label="Maximum planned duration"
+                        type="number"
+                        min={fields.plannedDurationMin ?? 0}
+                        step={1}
+                        value={fields.plannedDurationMax ?? ""}
+                        onChange={(event) =>
+                          field(
+                            "plannedDurationMax",
+                            event.target.value === "" ? null : Number(event.target.value),
+                          )
+                        }
+                      />
+                    </Flex>
+                  </FormField>
+                  <FormField>
+                    Planned RPE
+                    <Flex gap="2">
+                      <Input
+                        aria-label="Minimum planned RPE"
+                        type="number"
+                        min={1}
+                        max={10}
+                        step="any"
+                        value={fields.plannedRpeMin ?? ""}
+                        onChange={(event) =>
+                          field(
+                            "plannedRpeMin",
+                            event.target.value === "" ? null : Number(event.target.value),
+                          )
+                        }
+                      />
+                      <Input
+                        aria-label="Maximum planned RPE"
+                        type="number"
+                        min={fields.plannedRpeMin ?? 1}
+                        max={10}
+                        step="any"
+                        value={fields.plannedRpeMax ?? ""}
+                        onChange={(event) =>
+                          field(
+                            "plannedRpeMax",
+                            event.target.value === "" ? null : Number(event.target.value),
+                          )
+                        }
+                      />
+                    </Flex>
                   </FormField>
                   <FormField>
                     Planned intensity

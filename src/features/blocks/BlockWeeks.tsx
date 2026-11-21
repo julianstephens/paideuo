@@ -98,9 +98,13 @@ const CellButton = ({
         <Text fontSize="xs" color="fg.muted" textTransform="capitalize">
           {session.plannedDurationMin === null
             ? "Duration missing"
-            : `${session.plannedDurationMin} min`}
+            : session.plannedDurationMax != null
+              ? `${session.plannedDurationMin}–${session.plannedDurationMax} min`
+              : `${session.plannedDurationMin} min`}
           {" · "}
-          {session.plannedIntensity ?? "Intensity unspecified"}
+          {session.plannedRpeMin != null || session.plannedRpeMax != null
+            ? `${session.plannedRpeMin ?? session.plannedRpeMax}–${session.plannedRpeMax ?? session.plannedRpeMin} RPE`
+            : (session.plannedIntensity ?? "Intensity unspecified")}
         </Text>
       </Stack>
     ) : (

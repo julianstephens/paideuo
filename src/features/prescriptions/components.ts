@@ -8,7 +8,7 @@ export type ComponentTargets = {
     modality?: "running" | "walking";
   }[];
   load?: { value: number; unit: string };
-  intensity?: { value: number; scale: "RPE" };
+  intensity?: { value?: number; min?: number; max?: number; scale: "RPE" };
   grade?: { min?: string; max?: string };
   angle_degrees?: number;
   work_seconds?: number;
@@ -20,6 +20,7 @@ export type PrescriptionComponent = {
   name: string;
   instructions: string;
   durationMin: number | null;
+  durationMax?: number | null;
   classification?: "aerobic" | "strength" | "movement" | "mobility" | "other";
   targets?: ComponentTargets | null;
 };
@@ -43,6 +44,7 @@ export const componentDraft = (
     instructions,
     classification,
     durationMin,
+    durationMax,
     targets,
   }: PrescriptionComponent,
 ): ComponentDraft => ({
@@ -52,11 +54,25 @@ export const componentDraft = (
   instructions,
   classification,
   targets: {
-    ...(durationMin != null ? { duration: [String(durationMin)] } : {}),
+    ...(durationMin != null || durationMax != null
+      ? {
+          duration: [
+            durationMin != null ? String(durationMin) : "",
+            durationMax != null ? String(durationMax) : "",
+          ],
+        }
+      : {}),
     ...(targets?.sets != null ? { sets: [String(targets.sets)] } : {}),
     ...(targets?.reps != null ? { reps: [targets.reps] } : {}),
     ...(targets?.load ? { load: [String(targets.load.value), targets.load.unit] } : {}),
-    ...(targets?.intensity ? { intensity: [String(targets.intensity.value)] } : {}),
+    ...(targets?.intensity
+      ? {
+          intensity: [
+            String(targets.intensity.value ?? targets.intensity.min ?? ""),
+            targets.intensity.max != null ? String(targets.intensity.max) : "",
+          ],
+        }
+      : {}),
     ...(targets?.grade ? { grade: [targets.grade.min ?? "", targets.grade.max ?? ""] } : {}),
     ...(targets?.angle_degrees != null ? { angle_degrees: [String(targets.angle_degrees)] } : {}),
     ...(targets?.work_seconds != null ? { work_seconds: [String(targets.work_seconds)] } : {}),
@@ -106,6 +122,18 @@ export const segmentError = (input: string) => {
   }
 };
 
+export const targetRangeError = (key: TargetName, values: string[]) => {
+  if (key !== "duration" && key !== "intensity") return "";
+  const minText = values[0]?.trim();
+  const maxText = values[1]?.trim();
+  if (!minText || !maxText) return "";
+  const min = Number(minText);
+  const max = Number(maxText);
+  if (!Number.isFinite(min) || !Number.isFinite(max)) return "Enter valid numeric endpoints.";
+  if (max < min) return "Maximum must be greater than or equal to minimum.";
+  return "";
+};
+
 export const componentPayload = ({
   snapshotKey,
   name,
@@ -126,17 +154,34 @@ export const componentPayload = ({
     repetitions,
     segments,
   } = targets;
+  const durationMin = duration?.[0] ? Number(duration[0]) : null;
+  const durationMax = duration?.[1] ? Number(duration[1]) : null;
+  const intensityMin = intensity?.[0] ? Number(intensity[0]) : null;
+  const intensityMax = intensity?.[1] ? Number(intensity[1]) : null;
   return {
     ...(snapshotKey ? { key: snapshotKey } : {}),
     name,
     instructions,
     ...(classification ? { classification } : {}),
-    durationMin: duration ? Number(duration[0]) : null,
+    durationMin,
+    ...(durationMax != null ? { durationMax } : {}),
     targets: {
       ...(sets ? { sets: Number(sets[0]) } : {}),
       ...(reps ? { reps: reps[0].trim() } : {}),
       ...(load ? { load: { value: Number(load[0]), unit: load[1].trim() } } : {}),
-      ...(intensity ? { intensity: { value: Number(intensity[0]), scale: "RPE" } } : {}),
+      ...(intensity
+        ? intensityMax != null
+          ? {
+              intensity: {
+                min: intensityMin as number,
+                max: intensityMax,
+                scale: "RPE" as const,
+              },
+            }
+          : intensityMin != null
+            ? { intensity: { value: intensityMin, scale: "RPE" as const } }
+            : {}
+        : {}),
       ...(grade
         ? { grade: { min: grade[0].trim() || undefined, max: grade[1].trim() || undefined } }
         : {}),
@@ -163,7 +208,22 @@ export const targetDefinitions: { key: TargetName; label: string; fields: Target
   {
     key: "duration",
     label: "Duration",
-    fields: [{ label: "Component duration in minutes", type: "number", min: 0, step: 1 }],
+    fields: [
+      {
+        label: "Minimum component duration in minutes",
+        type: "number",
+        min: 0,
+        step: 1,
+        required: false,
+      },
+      {
+        label: "Maximum component duration in minutes",
+        type: "number",
+        min: 0,
+        step: 1,
+        required: false,
+      },
+    ],
   },
   { key: "sets", label: "Sets", fields: [{ label: "Sets", type: "number", min: 0, step: 1 }] },
   { key: "reps", label: "Repetitions", fields: [{ label: "Repetitions", maxLength: 200 }] },
@@ -178,7 +238,10 @@ export const targetDefinitions: { key: TargetName; label: string; fields: Target
   {
     key: "intensity",
     label: "RPE",
-    fields: [{ label: "RPE", type: "number", min: 1, max: 10, step: "any" }],
+    fields: [
+      { label: "Minimum RPE", type: "number", min: 1, max: 10, step: "any", required: false },
+      { label: "Maximum RPE", type: "number", min: 1, max: 10, step: "any", required: false },
+    ],
   },
   {
     key: "grade",
