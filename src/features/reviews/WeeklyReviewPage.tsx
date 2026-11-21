@@ -11,9 +11,10 @@ import { useMetricPreferences } from "../compliance/MetricPreferences";
 import { metricValues, windowLabel } from "../compliance/MetricsCharts";
 import { averageRpe } from "../compliance/format";
 import { metricLabels } from "../compliance/metrics";
+import { formatPlannedRpe } from "../prescriptions/format";
 import type { DurationUnit } from "../recovery/recovery";
-import { reviewKey, reviewsApi } from "./reviews";
 import type { ReviewNotes, WeeklyReview } from "./reviews";
+import { reviewKey, reviewsApi } from "./reviews";
 
 const noteLabels = {
   worked: "What worked",
@@ -150,6 +151,7 @@ const Review = ({
               </Stack>
             </Panel>
           )}
+          <GppProgression review={data} unit={preferences.data?.durationUnit ?? "hours"} />
           <Panel as="section">
             <Heading as="h2" size="md">
               Review notes
@@ -190,6 +192,219 @@ const Review = ({
             </form>
           </Panel>
         </>
+      )}
+    </Stack>
+  );
+};
+
+const missing = "Missing";
+
+const GppProgression = ({ review, unit }: { review: WeeklyReview; unit: DurationUnit }) => {
+  const { progression, dataCoverage, total } = review;
+  const number = new Intl.NumberFormat(undefined, { maximumFractionDigits: 2 });
+  const durationValue = (minutes: number) =>
+    unit === "hours" ? number.format(minutes / 60) : number.format(minutes);
+  const unitLabel = unit === "hours" ? "hr" : "min";
+  const duration = (minutes: number | null) =>
+    minutes === null ? missing : `${durationValue(minutes)} ${unitLabel}`;
+  const plannedDuration = (modality: string) => {
+    const min = progression.plannedAerobicByModality[modality] ?? null;
+    const max = progression.plannedAerobicMaxByModality[modality] ?? null;
+    if (max == null || min === max) return duration(min);
+    return min == null ? `≤${duration(max)}` : `${durationValue(min)}–${duration(max)}`;
+  };
+  const modalities = new Set([
+    ...Object.keys(progression.plannedAerobicByModality),
+    ...Object.keys(progression.plannedAerobicMaxByModality),
+    ...Object.keys(progression.aerobicByModality),
+  ]);
+  const rpe = (value: WeeklyReview["progression"]["frontSquat"][number]["plannedRpe"]) =>
+    (typeof value === "number"
+      ? formatPlannedRpe(value)
+      : formatPlannedRpe(value?.min, value?.max)) ?? missing;
+
+  return (
+    <Stack as="section" aria-label="GPP planned outcomes and recorded outcomes" gap="3">
+      <Heading as="h2" size="md">
+        GPP progression and compliance
+      </Heading>
+      <Grid gap="3" templateColumns={{ base: "minmax(0, 1fr)", md: "repeat(2, minmax(0, 1fr))" }}>
+        <Panel as="article">
+          <Heading as="h3" size="sm">
+            Planned and actual hours
+          </Heading>
+          <Grid templateColumns="1fr 1fr" gap="3" mt="3">
+            <Stack gap="1">
+              <Text color="fg.muted" fontSize="sm">
+                Planned
+              </Text>
+              <Text fontWeight="semibold">{duration(total.compliance.plannedMinutes)}</Text>
+            </Stack>
+            <Stack gap="1">
+              <Text color="fg.muted" fontSize="sm">
+                Actual
+              </Text>
+              <Text fontWeight="semibold">{duration(total.compliance.actualMinutes)}</Text>
+            </Stack>
+          </Grid>
+        </Panel>
+        <Panel as="article">
+          <Heading as="h3" size="sm">
+            Aerobic minutes by modality
+          </Heading>
+          {modalities.size ? (
+            <Stack gap="2" mt="3">
+              {[...modalities].map((modality) => (
+                <Grid key={modality} templateColumns="1fr 1fr" gap="3">
+                  <Stack gap="1">
+                    <Text fontSize="sm" textTransform="capitalize">
+                      {modality} planned
+                    </Text>
+                    <Text fontWeight="semibold">{plannedDuration(modality)}</Text>
+                  </Stack>
+                  <Stack gap="1">
+                    <Text fontSize="sm" textTransform="capitalize">
+                      {modality} actual
+                    </Text>
+                    <Text fontWeight="semibold">
+                      {progression.aerobicCoverage.specified > 0
+                        ? duration(progression.aerobicByModality[modality] ?? null)
+                        : "No completed outcomes"}
+                    </Text>
+                  </Stack>
+                </Grid>
+              ))}
+            </Stack>
+          ) : (
+            <Text mt="3" color="fg.muted">
+              {missing}
+            </Text>
+          )}
+          <Text mt="2" fontSize="xs" color="fg.muted">
+            {progression.aerobicCoverage.planned} planned aerobic components
+            {" · "}
+            {progression.aerobicCoverage.specified > 0
+              ? `${progression.aerobicCoverage.measured}/${progression.aerobicCoverage.specified} measured in completed sessions`
+              : "No completed aerobic components"}
+          </Text>
+        </Panel>
+        <Panel as="article">
+          <Heading as="h3" size="sm">
+            Jogging bout progression
+          </Heading>
+          {progression.jogging.length ? (
+            <Stack gap="2" mt="3">
+              {progression.jogging.map((item) => (
+                <Grid key={`${item.sessionId}-${item.title}`} templateColumns="1fr 1fr" gap="3">
+                  <Stack gap="1">
+                    <Text fontSize="sm">Planned · {item.title}</Text>
+                    <Text fontWeight="semibold">{duration(item.plannedBoutMin)}</Text>
+                  </Stack>
+                  <Stack gap="1">
+                    <Text fontSize="sm">Actual · {item.status}</Text>
+                    <Text fontWeight="semibold">{duration(item.actualBoutMin)}</Text>
+                  </Stack>
+                </Grid>
+              ))}
+            </Stack>
+          ) : (
+            <Text mt="3" color="fg.muted">
+              {missing}
+            </Text>
+          )}
+        </Panel>
+        <Panel as="article">
+          <Heading as="h3" size="sm">
+            Front-squat working load / reps / RPE
+          </Heading>
+          {progression.frontSquat.length ? (
+            <Stack gap="3" mt="3">
+              {progression.frontSquat.map((item) => (
+                <Grid key={`${item.sessionId}-${item.title}`} templateColumns="1fr 1fr" gap="3">
+                  <Stack gap="1">
+                    <Text fontSize="sm">Planned</Text>
+                    <Text fontWeight="semibold">
+                      {item.plannedLoad
+                        ? `${item.plannedLoad.value} ${item.plannedLoad.unit}`
+                        : missing}{" "}
+                      · {item.plannedSets ?? missing} × {item.plannedReps ?? missing} ·{" "}
+                      {rpe(item.plannedRpe)}
+                    </Text>
+                  </Stack>
+                  <Stack gap="1">
+                    <Text fontSize="sm">Actual</Text>
+                    <Text fontWeight="semibold">
+                      {item.actualLoad
+                        ? `${item.actualLoad.value} ${item.actualLoad.unit}`
+                        : missing}{" "}
+                      · {item.actualSets ?? missing} × {item.actualReps ?? missing} ·{" "}
+                      {item.actualRpe == null ? missing : `${item.actualRpe} RPE`}
+                    </Text>
+                  </Stack>
+                </Grid>
+              ))}
+            </Stack>
+          ) : (
+            <Text mt="3" color="fg.muted">
+              {missing}
+            </Text>
+          )}
+        </Panel>
+        <Panel as="article">
+          <Heading as="h3" size="sm">
+            Circuit rounds
+          </Heading>
+          {progression.circuits.length ? (
+            <Stack gap="2" mt="3">
+              {progression.circuits.map((item) => (
+                <Grid key={`${item.sessionId}-${item.title}`} templateColumns="1fr 1fr" gap="3">
+                  <Stack gap="1">
+                    <Text fontSize="sm">Planned</Text>
+                    <Text fontWeight="semibold">{item.plannedRounds ?? missing}</Text>
+                  </Stack>
+                  <Stack gap="1">
+                    <Text fontSize="sm">Actual · {item.status}</Text>
+                    <Text fontWeight="semibold">{item.actualRounds ?? missing}</Text>
+                  </Stack>
+                </Grid>
+              ))}
+            </Stack>
+          ) : (
+            <Text mt="3" color="fg.muted">
+              {missing}
+            </Text>
+          )}
+        </Panel>
+        <Panel as="article">
+          <Heading as="h3" size="sm">
+            Data coverage
+          </Heading>
+          <Text mt="3" fontSize="sm">
+            {dataCoverage.completedSessions}/{dataCoverage.scheduledSessions} sessions completed
+          </Text>
+          <Text fontSize="sm">
+            {dataCoverage.recoveryDays} recovery check-in entries in this week
+          </Text>
+          <Text fontSize="xs" color="fg.muted">
+            Recorded outcomes only; no fitness prediction.
+          </Text>
+        </Panel>
+      </Grid>
+      {progression.sourceSessions.length > 0 && (
+        <Stack as="section" gap="2">
+          <Heading as="h3" size="sm">
+            Source sessions
+          </Heading>
+          <Flex wrap="wrap" gap="3">
+            {progression.sourceSessions.map((item) => (
+              <Link key={item.id} asChild variant="underline" fontSize="sm">
+                <RouterLink to={sessionCalendarUrl(item.date, item.id)}>
+                  {item.title} · {item.date} · {item.status}
+                </RouterLink>
+              </Link>
+            ))}
+          </Flex>
+        </Stack>
       )}
     </Stack>
   );

@@ -164,6 +164,8 @@ const detail = (event) => {
           ...result.observation,
         })),
     );
+    const weekSessions = week?.sessions ?? [];
+    const { progression } = require(__hooks + "/gpp-progression.js");
     result = {
       ...context,
       programName: program.getString("name"),
@@ -176,6 +178,17 @@ const detail = (event) => {
       trainingAvailable: Boolean(week),
       days: dailyBreakdown(entries, context.window),
       movementObservations,
+      progression: progression(weekSessions),
+      dataCoverage: {
+        scheduledSessions: weekSessions.length,
+        completedSessions: weekSessions.filter(({ status }) => status === "completed").length,
+        recoveryDays: weekSessions.length
+          ? entries.filter(
+              ({ date }) =>
+                context.window && date >= context.window.start && date <= context.window.end,
+            ).length
+          : 0,
+      },
     };
   });
   return event.json(200, result);

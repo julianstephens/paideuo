@@ -26,6 +26,48 @@ export type WeeklyReview = ReviewSummary & {
   notes: ReviewNotes;
   total: MetricsTotal;
   days: MetricsPeriod[];
+  progression: {
+    jogging: {
+      sessionId: string;
+      date: string;
+      title: string;
+      status: "planned" | "completed" | "skipped";
+      plannedBoutMin: number | null;
+      actualBoutMin: number | null;
+    }[];
+    frontSquat: {
+      sessionId: string;
+      date: string;
+      title: string;
+      status: "planned" | "completed" | "skipped";
+      plannedLoad: { value: number; unit: string } | null;
+      plannedSets: number | null;
+      plannedReps: string | null;
+      plannedRpe: number | { min: number; max?: number; scale: "RPE" } | null;
+      actualLoad: { value: number; unit: string } | null;
+      actualSets: number | null;
+      actualReps: string | null;
+      actualRpe: number | null;
+    }[];
+    circuits: {
+      sessionId: string;
+      date: string;
+      title: string;
+      status: "planned" | "completed" | "skipped";
+      plannedRounds: number | null;
+      actualRounds: number | null;
+    }[];
+    aerobicByModality: Record<string, number>;
+    plannedAerobicByModality: Record<string, number>;
+    plannedAerobicMaxByModality: Record<string, number>;
+    aerobicCoverage: { planned: number; measured: number; specified: number };
+    sourceSessions: { id: string; date: string; title: string; status: string }[];
+  };
+  dataCoverage: {
+    scheduledSessions: number;
+    completedSessions: number;
+    recoveryDays: number;
+  };
 };
 
 export type MovementObservation = ComponentObservation & {
