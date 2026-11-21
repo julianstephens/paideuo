@@ -2,9 +2,19 @@ import { Button, Flex, Grid, Heading, NativeSelect, Stack, Table, Text } from "@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { FormField, Notice, Panel } from "../../components/ui";
 import { errorMessage } from "../../lib/api/request";
-import { checkInApi, checkInPreferencesKey, checkInSections } from "../recovery/recovery";
+import {
+  checkInApi,
+  checkInFieldKeys,
+  checkInPreferencesKey,
+  checkInSections,
+} from "../recovery/recovery";
 import type { PreferenceUpdate } from "../recovery/recovery";
 import { metricKeys, metricLabels } from "./metrics";
+
+const visibilityColumns = [
+  { group: "hiddenSummary", label: "Weekly summary" },
+  { group: "hiddenCharts", label: "Chart" },
+] as const;
 
 export const useMetricPreferences = (ownerId: string) =>
   useQuery({
@@ -71,12 +81,26 @@ export const MetricPreferences = ({ ownerId }: { ownerId: string }) => {
           <Table.Header>
             <Table.Row>
               <Table.ColumnHeader scope="col">Metric</Table.ColumnHeader>
-              <Table.ColumnHeader scope="col" textAlign="center">
-                Weekly summary
-              </Table.ColumnHeader>
-              <Table.ColumnHeader scope="col" textAlign="center">
-                Chart
-              </Table.ColumnHeader>
+              {visibilityColumns.map(({ group, label }) => (
+                <Table.ColumnHeader key={group} scope="col" textAlign="center">
+                  <Stack align="center" gap="1">
+                    {label}
+                    <Button
+                      type="button"
+                      size="xs"
+                      variant="outline"
+                      aria-label={`Select all metrics for ${label === "Chart" ? "dashboard charts" : "weekly summary"}`}
+                      disabled={
+                        save.isPending ||
+                        !metricKeys.some((key) => preferences[group].includes(key))
+                      }
+                      onClick={() => save.mutate({ group, keys: metricKeys, enabled: true })}
+                    >
+                      Select all
+                    </Button>
+                  </Stack>
+                </Table.ColumnHeader>
+              ))}
             </Table.Row>
           </Table.Header>
           <Table.Body>
@@ -85,7 +109,7 @@ export const MetricPreferences = ({ ownerId }: { ownerId: string }) => {
                 <Table.Cell as="th" scope="row">
                   {metricLabels[key]}
                 </Table.Cell>
-                {(["hiddenSummary", "hiddenCharts"] as const).map((group) => (
+                {visibilityColumns.map(({ group }) => (
                   <Table.Cell key={group} textAlign="center" p="0">
                     <Flex as="label" justify="center" align="center" minH="10" cursor="pointer">
                       <input
@@ -109,6 +133,19 @@ export const MetricPreferences = ({ ownerId }: { ownerId: string }) => {
         <Heading as="h2" size="md">
           Daily check-in fields
         </Heading>
+        <Button
+          type="button"
+          size="sm"
+          variant="outline"
+          alignSelf="start"
+          aria-label="Select all daily check-in fields"
+          disabled={
+            save.isPending || !checkInFieldKeys.some((key) => preferences.disabled.includes(key))
+          }
+          onClick={() => save.mutate({ group: "disabled", keys: checkInFieldKeys, enabled: true })}
+        >
+          Select all
+        </Button>
         <Grid templateColumns={{ base: "minmax(0, 1fr)", sm: "repeat(2, minmax(0, 1fr))" }} gap="4">
           {checkInSections.map(({ label, fields }) => (
             <Stack key={label} as="fieldset" gap="0">

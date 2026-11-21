@@ -19,7 +19,13 @@ import { Disclosure, FormField, Notice } from "../../components/ui";
 import { errorMessage } from "../../lib/api/request";
 import { fullDate } from "../calendar/dates";
 import { metricsKey } from "../compliance/metrics";
-import { checkInApi, checkInKey, checkInPreferencesKey, checkInSections } from "./recovery";
+import {
+  checkInApi,
+  checkInFieldKeys,
+  checkInKey,
+  checkInPreferencesKey,
+  checkInSections,
+} from "./recovery";
 import type { CheckInEntry, CheckInField } from "./recovery";
 
 const CheckInForm = ({
@@ -40,14 +46,14 @@ const CheckInForm = ({
   });
   const [draft, setDraft] = useState<Partial<Record<CheckInField, string>>>({});
   const visibility = useMutation({
-    mutationFn: ({ key, enabled }: { key: CheckInField; enabled: boolean }) =>
-      checkInApi.setEnabled(key, enabled),
-    onSuccess: (data, { key, enabled }) => {
+    mutationFn: ({ keys, enabled }: { keys: CheckInField[]; enabled: boolean }) =>
+      checkInApi.updatePreferences({ group: "disabled", keys, enabled }),
+    onSuccess: (data, { keys, enabled }) => {
       queryClient.setQueryData(preferencesKey, data);
       if (!enabled) {
         setDraft((current) => {
           const remaining = { ...current };
-          delete remaining[key];
+          for (const key of keys) delete remaining[key];
           return remaining;
         });
       }
@@ -245,6 +251,17 @@ const CheckInForm = ({
       </form>
       <Disclosure label="Choose check-in fields">
         <Stack gap="2">
+          <Button
+            type="button"
+            size="sm"
+            variant="outline"
+            alignSelf="start"
+            aria-label="Select all check-in fields"
+            disabled={busy || !checkInFieldKeys.some((key) => hidden.has(key))}
+            onClick={() => visibility.mutate({ keys: checkInFieldKeys, enabled: true })}
+          >
+            Select all
+          </Button>
           {checkInSections.map(({ label, fields }) => (
             <Stack key={label} as="fieldset" gap="1">
               <Text as="legend" fontWeight="semibold">
@@ -256,7 +273,9 @@ const CheckInForm = ({
                     type="checkbox"
                     checked={!hidden.has(key)}
                     disabled={busy}
-                    onChange={(event) => visibility.mutate({ key, enabled: event.target.checked })}
+                    onChange={(event) =>
+                      visibility.mutate({ keys: [key], enabled: event.target.checked })
+                    }
                   />
                   {label}
                 </Flex>

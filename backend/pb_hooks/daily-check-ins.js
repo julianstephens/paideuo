@@ -180,16 +180,18 @@ const preferences = (event) => {
   if (event.request.method === "GET") {
     return event.json(200, readPreferences(event.app.findRecordById("paideuo_users", owner)));
   }
-  const { group = "disabled", key, enabled, durationUnit } = event.requestInfo().body;
-  const allowed = group === "disabled" ? Object.hasOwn(fields, key) : metricKeys.includes(key);
+  const { group = "disabled", key, keys = [key], enabled, durationUnit } = event.requestInfo().body;
+  const allowedKeys = group === "disabled" ? Object.keys(fields) : metricKeys;
   if (group === "durationUnit") {
     if (durationUnit !== "hours" && durationUnit !== "minutes") {
       throw new BadRequestError("Choose hours or minutes.");
     }
   } else if (
     !["disabled", "hiddenCharts", "hiddenSummary"].includes(group) ||
-    typeof key !== "string" ||
-    !allowed ||
+    !Array.isArray(keys) ||
+    keys.length === 0 ||
+    keys.length > allowedKeys.length ||
+    !keys.every((item) => allowedKeys.includes(item)) ||
     typeof enabled !== "boolean"
   ) {
     throw new BadRequestError("Choose a built-in metric and whether to show it.");
@@ -202,10 +204,12 @@ const preferences = (event) => {
     if (group === "durationUnit") {
       result.durationUnit = durationUnit;
     } else {
-      const keys = new Set(result[group]);
-      if (enabled) keys.delete(key);
-      else keys.add(key);
-      result[group] = [...keys];
+      const hidden = new Set(result[group]);
+      for (const item of keys) {
+        if (enabled) hidden.delete(item);
+        else hidden.add(item);
+      }
+      result[group] = [...hidden];
     }
     const { disabled, ...display } = result;
     user.set(preferenceField, disabled);

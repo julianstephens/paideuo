@@ -121,6 +121,22 @@ const RevisionSelection = ({
           }}
         >
           <Stack gap="3">
+            <Button
+              type="button"
+              size="sm"
+              variant="outline"
+              alignSelf="start"
+              aria-label="Select all available calendar changes"
+              disabled={
+                apply.isPending || refreshing || available.every(({ id }) => selected.includes(id))
+              }
+              onClick={() => {
+                setSelected(available.map(({ id }) => id));
+                apply.reset();
+              }}
+            >
+              Select all
+            </Button>
             {available.map((change) => (
               <Panel key={change.id} bg="bg.inset">
                 <Flex as="label" align="baseline" gap="2" cursor="pointer">
