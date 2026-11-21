@@ -7,13 +7,26 @@ migrate(
     const sessions = app.findCollectionByNameOrId("paideuo_scheduled_sessions");
     for (const row of app.findRecordsByFilter(sessions.name, "", "", 0, 0)) {
       const snapshot = JSON.parse(row.getString("prescription_snapshot") || "{}");
+      const existingResults = app.findRecordsByFilter(
+        results.name,
+        "session = {:session}",
+        "planned_position,id",
+        0,
+        0,
+        { session: row.id },
+      );
       let changed = false;
       snapshot.components = (snapshot.components ?? []).map((component, index) => {
         if (component.key) return component;
         changed = true;
+        const existing = existingResults.find(
+          (result) => result.getInt("planned_position") === index + 1,
+        );
         return {
           ...component,
-          key: `snapshot:${$security.sha256(`${row.id}:${index}:${component.name}`)}`,
+          key:
+            existing?.getString("component_key") ||
+            `snapshot:${$security.sha256(`${row.id}:${index}:${component.name}`)}`,
         };
       });
       if (changed) {

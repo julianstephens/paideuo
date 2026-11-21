@@ -736,6 +736,7 @@ const SessionDetail = ({
                       </Box>
                     )}
                     <CompletionForm
+                      key={completionRevision}
                       session={session}
                       pending={busy}
                       canSave={!executionConflict}

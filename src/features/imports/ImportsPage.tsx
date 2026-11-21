@@ -120,6 +120,7 @@ const workoutColumns: CsvColumn[] = [
   { key: "actualLoadValue", label: "Actual load value", numeric: true, min: 0 },
   { key: "actualLoadUnit", label: "Actual load unit" },
   { key: "componentRpe", label: "Component RPE", numeric: true, min: 1, max: 10 },
+  { key: "rounds", label: "Rounds", integer: true, min: 0 },
   { key: "componentNotes", label: "Component notes" },
 ];
 
@@ -399,6 +400,7 @@ const mapWorkoutCsv = (
         repsCompleted: string | null;
         actualLoad: { value: number; unit: string } | null;
         rpe: number | null;
+        rounds: number | null;
         notes: string;
       }[];
     }
@@ -486,6 +488,7 @@ const mapWorkoutCsv = (
     const loadValue = getMapped(row, mapping, "actualLoadValue", rowNumber, issues);
     const loadUnit = getMapped(row, mapping, "actualLoadUnit", rowNumber, issues);
     const componentRpe = getMapped(row, mapping, "componentRpe", rowNumber, issues);
+    const rounds = getMapped(row, mapping, "rounds", rowNumber, issues);
 
     if ((loadValue === "") !== (loadUnit === "")) {
       issues.push({
@@ -543,6 +546,15 @@ const mapWorkoutCsv = (
           : parseNumber(
               componentRpe,
               { key: "componentRpe", label: "Component RPE", min: 1, max: 10 },
+              rowNumber,
+              issues,
+            ),
+      rounds:
+        rounds === ""
+          ? null
+          : parseNumber(
+              rounds,
+              { key: "rounds", label: "Rounds", integer: true, min: 0 },
               rowNumber,
               issues,
             ),
