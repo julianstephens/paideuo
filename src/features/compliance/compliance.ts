@@ -21,6 +21,9 @@ export type ComplianceTotals = {
     PlannedIntensity | "unspecified",
     { sessions: number; plannedMinutes: number | null }
   >;
+  aerobicMinutes: number | null;
+  aerobicByModality: Record<string, number>;
+  aerobicCoverage: { measured: number; specified: number };
 };
 
 type ComplianceWeek = {

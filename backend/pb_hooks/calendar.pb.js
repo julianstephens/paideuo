@@ -131,6 +131,8 @@ routerAdd(
                 planned: session.prescription.plannedDurationMin ?? null,
                 plannedIntensity: session.prescription.plannedIntensity ?? null,
                 actual: session.completion?.actualDurationMin ?? null,
+                prescription: session.prescription,
+                componentResults: session.componentResults,
               })),
             ),
           }
@@ -397,6 +399,10 @@ routerAdd(
             result.set("actual_load", values.load);
             result.set("rpe", values.rpe);
             result.set("rounds", values.rounds);
+            result.set("running_min", values.runningMin);
+            result.set("walking_min", values.walkingMin);
+            result.set("continuous_bout_min", values.continuousBoutMin);
+            result.set("aerobic_modality", values.aerobicModality ?? "");
             result.set("notes", values.notes);
             tx.save(result);
           }

@@ -206,7 +206,7 @@ const component = (value, index) => {
   const label = `component ${index + 1}`;
   const fields = object(
     value,
-    ["key", "name", "instructions", "durationMin", "targets"],
+    ["key", "name", "instructions", "durationMin", "classification", "targets"],
     ["name"],
     label,
   );
@@ -215,6 +215,14 @@ const component = (value, index) => {
     name: text(fields.name, `${label} name`, 200, true),
     instructions: text(fields.instructions ?? "", `${label} instructions`, 10000),
     durationMin: whole(fields.durationMin, `${label} duration`, 0, Number.MAX_SAFE_INTEGER, true),
+    classification:
+      fields.classification == null
+        ? null
+        : ["aerobic", "strength", "movement", "mobility", "other"].includes(
+              fields.classification,
+            )
+          ? fields.classification
+          : fail(`${label} classification is invalid.`),
     targets: targets(fields.targets, `${label} targets`),
   };
 };
@@ -431,6 +439,10 @@ const normalizeWorkoutResults = (value, context) => {
           "actualLoad",
           "rpe",
           "rounds",
+          "runningMin",
+          "walkingMin",
+          "continuousBoutMin",
+          "aerobicModality",
           "notes",
         ],
         ["key", "plannedPosition", "name", "completed"],
@@ -471,6 +483,16 @@ const normalizeWorkoutResults = (value, context) => {
           : null,
         rpe: finite(item.rpe, `${label} RPE`, 1, 10, true),
         rounds: whole(item.rounds, `${label} rounds`, 0, Number.MAX_SAFE_INTEGER, true),
+        runningMin: whole(item.runningMin, `${label} running minutes`, 0, Number.MAX_SAFE_INTEGER, true),
+        walkingMin: whole(item.walkingMin, `${label} walking minutes`, 0, Number.MAX_SAFE_INTEGER, true),
+        continuousBoutMin: whole(
+          item.continuousBoutMin,
+          `${label} continuous-bout minutes`,
+          0,
+          Number.MAX_SAFE_INTEGER,
+          true,
+        ),
+        aerobicModality: optionalText(item.aerobicModality, `${label} aerobic modality`, 64),
         notes: text(item.notes ?? "", `${label} notes`, 10000),
       };
     },

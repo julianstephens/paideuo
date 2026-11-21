@@ -150,6 +150,7 @@ const handlePrograms = (event) => {
       "duration_min",
       "duration_specified",
       "external_key",
+      "classification",
     ]),
     targets: JSON.parse(component.getString("targets") || "null"),
   });
@@ -160,6 +161,7 @@ const handlePrograms = (event) => {
     instructions: component.instructions,
     durationMin:
       component.duration_specified || component.duration_min > 0 ? component.duration_min : null,
+    classification: component.classification ?? null,
     targets: component.targets,
   });
 

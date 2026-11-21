@@ -546,6 +546,10 @@ const observationPlan = (db, owner, document, options = {}) => {
           "actual_load_json",
           "rpe_json",
           "rounds_json",
+          "running_min_json",
+          "walking_min_json",
+          "continuous_bout_min_json",
+          "aerobic_modality",
           "notes",
         ]),
       ),
@@ -562,6 +566,10 @@ const observationPlan = (db, owner, document, options = {}) => {
       actualLoad: component.actual_load,
       rpe: component.rpe,
       rounds: component.rounds,
+      runningMin: component.running_min,
+      walkingMin: component.walking_min,
+      continuousBoutMin: component.continuous_bout_min,
+      aerobicModality: component.aerobic_modality ?? null,
       notes: component.notes,
     }));
     if (
@@ -809,6 +817,7 @@ const trainingComponentValues = (component, index) => ({
   instructions: component.instructions,
   duration_min: component.durationMin ?? 0,
   duration_specified: component.durationMin !== null,
+  classification: component.classification ?? null,
   targets: component.targets,
 });
 
@@ -1070,6 +1079,10 @@ const commitWorkout = (db, owner, data, plan, options = {}) => {
       actual_load: component.actualLoad,
       rpe: component.rpe,
       rounds: component.rounds,
+      running_min: component.runningMin,
+      walking_min: component.walkingMin,
+      continuous_bout_min: component.continuousBoutMin,
+      aerobic_modality: component.aerobicModality ?? "",
       notes: component.notes,
     });
   }

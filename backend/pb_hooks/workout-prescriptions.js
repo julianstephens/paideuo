@@ -46,6 +46,7 @@ const parsePrescription = (prescription) => {
       name: component.name,
       instructions: component.instructions,
       durationMin: component.duration_specified ? component.duration_min : null,
+      classification: component.classification ?? null,
       targets: component.targets,
     })),
   };

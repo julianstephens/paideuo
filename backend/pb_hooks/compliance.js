@@ -10,6 +10,10 @@ const calculate = (sessions, today) => {
   let resolvedPlannedMinutes = 0;
   let measuredCompletions = 0;
   let specifiedDurations = 0;
+  let aerobicMinutes = null;
+  let aerobicCoverageMeasured = 0;
+  let aerobicCoverageSpecified = 0;
+  const aerobicByModality = {};
 
   for (const {
     status,
@@ -18,6 +22,10 @@ const calculate = (sessions, today) => {
     actual,
     plannedIntensity,
     today: sessionToday,
+    prescription,
+    componentResults,
+    aerobicMinutes: directAerobicMinutes,
+    aerobicByModality: directAerobicByModality,
   } of sessions) {
     if (status === "planned")
       counts[scheduledDate < (sessionToday ?? today) ? "unresolved" : "pending"]++;
@@ -36,6 +44,39 @@ const calculate = (sessions, today) => {
       actualMinutes = (actualMinutes ?? 0) + actual;
       if (planned !== null && actual < planned) counts.shortened++;
     }
+
+    if (status === "completed") {
+      let sessionAerobic = directAerobicMinutes;
+      if (sessionAerobic == null && Array.isArray(componentResults) && Array.isArray(prescription?.components)) {
+        sessionAerobic = 0;
+        for (const component of prescription.components) {
+          if (component.classification !== "aerobic") continue;
+          const result = componentResults.find((item) => item.componentKey === component.key);
+          aerobicCoverageSpecified++;
+          if (!result) continue;
+          const minutes =
+            result.durationMin ??
+            ((result.runningMin ?? 0) + (result.walkingMin ?? 0) || null);
+          if (minutes == null) continue;
+          aerobicCoverageMeasured++;
+          sessionAerobic += minutes;
+          const modality =
+            (result.aerobicModality ?? result.modality ?? component.modality ?? "").toLowerCase().trim();
+          const key = modality || "unspecified";
+          aerobicByModality[key] = (aerobicByModality[key] ?? 0) + minutes;
+        }
+        if (aerobicCoverageMeasured === 0 && sessionAerobic === 0) sessionAerobic = null;
+      }
+      if (sessionAerobic != null) {
+        aerobicMinutes = (aerobicMinutes ?? 0) + sessionAerobic;
+      }
+      if (directAerobicByModality && typeof directAerobicByModality === "object") {
+        for (const [modality, minutes] of Object.entries(directAerobicByModality)) {
+          if (Number.isFinite(minutes) && minutes >= 0)
+            aerobicByModality[modality] = (aerobicByModality[modality] ?? 0) + minutes;
+        }
+      }
+    }
   }
 
   const resolved = counts.completed + counts.skipped;
@@ -53,6 +94,12 @@ const calculate = (sessions, today) => {
     measuredCompletions,
     specifiedDurations,
     intensity,
+    aerobicMinutes,
+    aerobicByModality,
+    aerobicCoverage: {
+      measured: aerobicCoverageMeasured,
+      specified: aerobicCoverageSpecified,
+    },
   };
 };
 

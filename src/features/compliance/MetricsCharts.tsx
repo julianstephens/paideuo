@@ -51,6 +51,12 @@ export const metricValues = (metric: Metric, total: MetricsTotal, unit: Duration
           value: compliance.actualMinutes,
           display: duration(compliance.actualMinutes, unit),
         },
+        {
+          label: "Aerobic",
+          coverage: `${compliance.aerobicCoverage.measured}/${compliance.aerobicCoverage.specified} aerobic component outcomes measured`,
+          value: compliance.aerobicMinutes,
+          display: duration(compliance.aerobicMinutes, unit),
+        },
       ];
     case "load":
       return [

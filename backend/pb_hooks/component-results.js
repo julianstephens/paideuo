@@ -22,6 +22,11 @@ const nullableText = (value, max, label) => {
   return value.trim();
 };
 
+const nullableModality = (value) => {
+  if (value == null || value === "") return null;
+  return nullableText(value, 64, "Aerobic modality");
+};
+
 const resultLoad = (load) => {
   if (load == null) return null;
   if (
@@ -63,6 +68,11 @@ const parseResults = (values, snapshot) => {
       "rpe",
       "durationMin",
       "rounds",
+      "runningMin",
+      "walkingMin",
+      "continuousBoutMin",
+      "aerobicModality",
+      "modality",
       "notes",
     ];
     if (Object.keys(value).some((key) => !allowed.includes(key))) {
@@ -86,6 +96,10 @@ const parseResults = (values, snapshot) => {
       rpe: nullableRpe(value.rpe),
       durationMin: nullableWhole(value.durationMin, "duration in minutes"),
       rounds: nullableWhole(value.rounds, "number of rounds"),
+      runningMin: nullableWhole(value.runningMin, "running minutes"),
+      walkingMin: nullableWhole(value.walkingMin, "walking minutes"),
+      continuousBoutMin: nullableWhole(value.continuousBoutMin, "continuous-bout minutes"),
+      aerobicModality: nullableModality(value.aerobicModality ?? value.modality),
       notes: notes.trim(),
     };
   });
@@ -105,6 +119,10 @@ const resultData = (record) => {
     rpe: JSON.parse(record.getString("rpe") || "null"),
     durationMin: JSON.parse(record.getString("actual_duration_min") || "null"),
     rounds: JSON.parse(record.getString("rounds") || "null"),
+    runningMin: JSON.parse(record.getString("running_min") || "null"),
+    walkingMin: JSON.parse(record.getString("walking_min") || "null"),
+    continuousBoutMin: JSON.parse(record.getString("continuous_bout_min") || "null"),
+    aerobicModality: record.getString("aerobic_modality") || null,
     notes: record.getString("notes"),
   };
 };

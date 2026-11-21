@@ -171,6 +171,7 @@ const readSessions = (tx, sessionFilter, params, bySchedule) => {
       plannedIntensity: snapshot.plannedIntensity ?? null,
       actual: completion?.actualDurationMin ?? null,
       completion,
+      prescription: snapshot,
     };
   });
 };
