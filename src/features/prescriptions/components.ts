@@ -29,7 +29,13 @@ export type ComponentDraft = {
 
 export const componentDraft = (
   key: number,
-  { key: snapshotKey, name, instructions, durationMin, targets }: PrescriptionComponent,
+  {
+    key: snapshotKey = crypto.randomUUID(),
+    name,
+    instructions,
+    durationMin,
+    targets,
+  }: PrescriptionComponent,
 ): ComponentDraft => ({
   key,
   snapshotKey,

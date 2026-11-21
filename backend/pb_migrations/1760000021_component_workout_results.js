@@ -1,5 +1,8 @@
 migrate(
   (app) => {
+    const components = app.findCollectionByNameOrId("paideuo_training_components");
+    components.fields.add(new TextField({ name: "external_key", max: 200 }));
+    app.save(components);
     const results = app.findCollectionByNameOrId("paideuo_workout_component_results");
     results.fields.add(new JSONField({ name: "rounds", maxSize: 32 }));
     app.save(results);
@@ -39,5 +42,8 @@ migrate(
     const results = app.findCollectionByNameOrId("paideuo_workout_component_results");
     results.fields.removeByName("rounds");
     app.save(results);
+    const components = app.findCollectionByNameOrId("paideuo_training_components");
+    components.fields.removeByName("external_key");
+    app.save(components);
   },
 );

@@ -350,6 +350,8 @@ const programPlan = (db, owner, data) => {
                 "position",
               ).map((component) =>
                 recordSnapshot(component, [
+                  "position",
+                  "external_key",
                   "name",
                   "instructions",
                   "duration_min",
@@ -362,6 +364,7 @@ const programPlan = (db, owner, data) => {
         });
         const componentState = state[state.length - 1];
         const currentComponents = componentState.current.map((component) => ({
+          key: component.external_key || `component-${component.position}`,
           name: component.name,
           instructions: component.instructions,
           durationMin: component.duration_specified ? component.duration_min : null,
@@ -790,6 +793,7 @@ const update = (db, record, values) => {
 
 const trainingComponentValues = (component, position) => ({
   position,
+  external_key: component.key,
   name: component.name,
   instructions: component.instructions,
   duration_min: component.durationMin ?? 0,
@@ -799,6 +803,7 @@ const trainingComponentValues = (component, position) => ({
 
 const sameTrainingComponent = (record, values) =>
   record.getInt("position") === values.position &&
+  record.getString("external_key") === values.external_key &&
   record.getString("name") === values.name &&
   record.getString("instructions") === values.instructions &&
   record.getInt("duration_min") === values.duration_min &&

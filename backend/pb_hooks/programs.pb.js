@@ -138,13 +138,14 @@ const handlePrograms = (event) => {
     children(db, "paideuo_training_components", "prescription", id, "position,id");
 
   const componentFields = (component) => ({
-    key: component.id,
+    key: component.getString("external_key") || component.id,
     ...copyFields(component, [
       "position",
       "name",
       "instructions",
       "duration_min",
       "duration_specified",
+      "external_key",
     ]),
     targets: JSON.parse(component.getString("targets") || "null"),
   });
@@ -159,6 +160,10 @@ const handlePrograms = (event) => {
   });
 
   const componentValues = require(__hooks + "/prescription-components.js");
+  const storedComponent = ({ key, ...component }) => ({
+    ...component,
+    ...(key ? { external_key: key } : {}),
+  });
 
   const copyPrescription = (db, fields, components, weekId, slotId) => {
     const prescription = save(db, "paideuo_session_prescriptions", {
@@ -167,7 +172,10 @@ const handlePrograms = (event) => {
       slot: slotId,
     });
     for (const component of components) {
-      save(db, "paideuo_training_components", { ...component, prescription: prescription.id });
+      save(db, "paideuo_training_components", {
+        ...storedComponent(component),
+        prescription: prescription.id,
+      });
     }
   };
 
@@ -722,7 +730,10 @@ const handlePrograms = (event) => {
             if (components) {
               for (const component of prescriptionComponents(tx, record.id)) tx.delete(component);
               for (const component of components) {
-                save(tx, "paideuo_training_components", { ...component, prescription: record.id });
+                save(tx, "paideuo_training_components", {
+                  ...storedComponent(component),
+                  prescription: record.id,
+                });
               }
             }
           });

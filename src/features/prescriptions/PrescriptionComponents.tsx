@@ -58,7 +58,7 @@ export const PrescriptionComponents = ({ components, change, nextKey, disabled }
                   onClick={() =>
                     change([
                       ...components.slice(0, index + 1),
-                      { ...component, key: nextKey() },
+                      { ...component, key: nextKey(), snapshotKey: crypto.randomUUID() },
                       ...components.slice(index + 1),
                     ])
                   }
@@ -84,7 +84,16 @@ export const PrescriptionComponents = ({ components, change, nextKey, disabled }
         variant="outline"
         disabled={disabled}
         onClick={() =>
-          change([...components, { key: nextKey(), name: "", instructions: "", targets: {} }])
+          change([
+            ...components,
+            {
+              key: nextKey(),
+              snapshotKey: crypto.randomUUID(),
+              name: "",
+              instructions: "",
+              targets: {},
+            },
+          ])
         }
       >
         Add component

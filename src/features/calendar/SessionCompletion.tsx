@@ -69,12 +69,15 @@ export const CompletionForm = ({
         result.componentKey === componentKey ? { ...result, ...patch } : result,
       ),
     );
+  const invalidLoads = componentResults.some(
+    ({ active, load, unit }) => active && (load === "") !== (unit.trim() === ""),
+  );
 
   return (
     <form
       onSubmit={(event) => {
         event.preventDefault();
-        if (pending || !canSave) return;
+        if (pending || !canSave || invalidLoads) return;
         save({
           completedDate,
           actualDurationMin: duration === "" ? null : Number(duration),
@@ -298,7 +301,10 @@ export const CompletionForm = ({
           />
         </FormField>
         <Flex gap="2" wrap="wrap">
-          <Button type="submit" loading={pending} disabled={!canSave}>
+          {invalidLoads && (
+            <Notice role="alert">Enter both load and unit, or clear both fields.</Notice>
+          )}
+          <Button type="submit" loading={pending} disabled={!canSave || invalidLoads}>
             {session.status === "completed" ? "Save completion details" : "Save completion"}
           </Button>
           <Button type="button" variant="outline" disabled={pending} onClick={cancel}>
