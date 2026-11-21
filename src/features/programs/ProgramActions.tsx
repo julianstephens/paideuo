@@ -16,13 +16,21 @@ export const ProgramActions = ({
   const navigate = useNavigate();
   const queryClient = useQueryClient();
   const operationId = useRef<string | undefined>(undefined);
+  type ProgramAction = "archive" | "complete" | "duplicate" | "unschedule";
   const mutation = useMutation({
-    mutationFn: (action: "archive" | "complete" | "duplicate") => {
-      if (action !== "duplicate") return programsApi[action](program.id);
-      operationId.current ??= crypto.randomUUID();
-      return programsApi.duplicate(program.id, operationId.current);
+    mutationFn: ({ action, unscheduleWorkouts = false }: {
+      action: ProgramAction;
+      unscheduleWorkouts?: boolean;
+    }) => {
+      if (action === "duplicate") {
+        operationId.current ??= crypto.randomUUID();
+        return programsApi.duplicate(program.id, operationId.current);
+      }
+      if (action === "archive") return programsApi.archive(program.id, unscheduleWorkouts);
+      if (action === "complete") return programsApi.complete(program.id);
+      return programsApi.unschedule(program.id);
     },
-    onSuccess: async ({ id }, action) => {
+    onSuccess: async ({ id }, { action }) => {
       await queryClient.invalidateQueries({ queryKey: programKeys.owner(ownerId) });
       if (action === "duplicate") {
         operationId.current = undefined;
@@ -39,7 +47,7 @@ export const ProgramActions = ({
             size="sm"
             variant="outline"
             disabled={mutation.isPending}
-            onClick={() => mutation.mutate("duplicate")}
+            onClick={() => mutation.mutate({ action: "duplicate" })}
           >
             Duplicate
           </Button>
@@ -54,10 +62,27 @@ export const ProgramActions = ({
                     `Mark “${program.name}” complete? Unresolved sessions will keep their current status. You can still record them later.`,
                   )
                 )
-                  mutation.mutate("complete");
+                  mutation.mutate({ action: "complete" });
               }}
             >
               Mark program complete
+            </Button>
+          )}
+          {program.scheduled && (
+            <Button
+              size="sm"
+              variant="outline"
+              disabled={mutation.isPending}
+              onClick={() => {
+                if (
+                  window.confirm(
+                    `Unschedule workouts for “${program.name}”? This removes this program’s scheduled workouts from the calendar.`,
+                  )
+                )
+                  mutation.mutate({ action: "unschedule" });
+              }}
+            >
+              Unschedule workouts
             </Button>
           )}
           {program.status !== "archived" && (
@@ -66,7 +91,13 @@ export const ProgramActions = ({
               variant="outline"
               disabled={mutation.isPending}
               onClick={() => {
-                if (window.confirm(`Archive “${program.name}”?`)) mutation.mutate("archive");
+                if (!window.confirm(`Archive “${program.name}”?`)) return;
+                const unscheduleWorkouts =
+                  program.scheduled &&
+                  window.confirm(
+                    `Also unschedule this program’s workouts? Choosing “OK” removes scheduled workouts from the calendar. Choosing “Cancel” keeps them scheduled.`,
+                  );
+                mutation.mutate({ action: "archive", unscheduleWorkouts });
               }}
             >
               Archive
