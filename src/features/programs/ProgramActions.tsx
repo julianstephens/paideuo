@@ -18,7 +18,10 @@ export const ProgramActions = ({
   const operationId = useRef<string | undefined>(undefined);
   type ProgramAction = "archive" | "complete" | "duplicate" | "unschedule";
   const mutation = useMutation({
-    mutationFn: ({ action, unscheduleWorkouts = false }: {
+    mutationFn: ({
+      action,
+      unscheduleWorkouts = false,
+    }: {
       action: ProgramAction;
       unscheduleWorkouts?: boolean;
     }) => {

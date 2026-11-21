@@ -1356,6 +1356,10 @@ test("PocketBase upgrades historical component results and rolls back failed com
           rpe: 6,
           durationMin: null,
           rounds: null,
+          runningMin: null,
+          walkingMin: null,
+          continuousBoutMin: null,
+          aerobicModality: null,
           notes: "",
         },
         {
@@ -1366,6 +1370,10 @@ test("PocketBase upgrades historical component results and rolls back failed com
           rpe: null,
           durationMin: null,
           rounds: null,
+          runningMin: null,
+          walkingMin: null,
+          continuousBoutMin: null,
+          aerobicModality: null,
           notes: "",
         },
       ]);
@@ -1428,5 +1436,175 @@ test("PocketBase upgrades historical component results and rolls back failed com
       assert.deepEqual((await readSession()).componentResults, edited.componentResults);
     },
     { beforeComponentMigration: true },
+  );
+});
+
+test("imported Winter GPP intervals and saved component results reach weekly metrics", async () => {
+  await withPocketBase(async ({ admin, baseUrl }) => {
+    const { client, userId } = await createAuthedUser(admin, baseUrl, "aerobic-metrics");
+    const document = makeProgramDocument();
+    document.data.program.name = "Winter GPP";
+    const [block] = document.data.blocks;
+    document.data.blocks = [block];
+    block.durationWeeks = 3;
+    block.slots = [
+      { externalId: "tue", weekday: 2, position: 1, label: "Jogging" },
+      { externalId: "wed", weekday: 3, position: 2, label: "Cycling and mobility" },
+      { externalId: "sat", weekday: 6, position: 3, label: "Endurance and sauna" },
+    ];
+    const workout = (slotExternalId, components) => ({
+      slotExternalId,
+      workout: { title: slotExternalId, sessionType: "other", components },
+    });
+    const component = (key, durationMin, classification = "aerobic") => ({
+      key,
+      name: key,
+      durationMin,
+      classification,
+    });
+    block.weeks = [
+      [3, 300],
+      [4, 300],
+      [2, 600],
+    ].map(([repetitions, seconds], index) => {
+      const run = {
+        ...component("run", null),
+        targets: {
+          repetitions,
+          segments: [
+            { type: "warmup", duration_seconds: 120, modality: "walking" },
+            { type: "work", duration_seconds: seconds, modality: "running" },
+            { type: "recovery", duration_seconds: 60, modality: "walking" },
+          ],
+        },
+      };
+      return {
+        externalId: `week-${index + 1}`,
+        position: index + 1,
+        weekType: "normal",
+        prescriptions: [
+          workout("tue", [run]),
+          ...(index === 0
+            ? [
+                workout("wed", [component("cycle", 30), component("mobility", 10, "mobility")]),
+                workout("sat", [
+                  component("endurance", 40),
+                  component("sauna", 15, "other"),
+                  { key: "legacy", name: "Legacy", durationMin: 10 },
+                ]),
+              ]
+            : []),
+        ],
+      };
+    });
+    const preview = await previewImport(client, document);
+    await commitImport(client, document, preview.previewToken);
+    const repeatedPreview = await previewImport(client, document);
+    assert.deepEqual(
+      repeatedPreview.items.filter(({ status }) => status !== "skip"),
+      [],
+    );
+    const program = await admin
+      .collection("paideuo_programs")
+      .getFirstListItem(admin.filter("owner = {:owner}", { owner: userId }));
+    const path = `/api/paideuo/programs/${program.id}/schedule`;
+    const schedule = { startDate: "2026-01-05", timezone: "UTC" };
+    const { revision } = await client.send(path + "/preview", { method: "POST", body: schedule });
+    await client.send(path, { method: "POST", body: { ...schedule, revision } });
+
+    const weekly = async (start) =>
+      (await client.send(`/api/paideuo/metrics?view=weekly&program=${program.id}&start=${start}`))
+        .total.compliance;
+    const [first, second, third] = await Promise.all(
+      ["2026-01-06", "2026-01-13", "2026-01-20"].map(weekly),
+    );
+    assert.deepEqual(
+      [first, second, third].map((week) => week.plannedRunningMinutes),
+      [15, 20, 20],
+    );
+    assert.deepEqual(
+      [first, second, third].map((week) => week.plannedContinuousBoutMinutes),
+      [5, 5, 10],
+    );
+    assert.deepEqual(
+      [first, second, third].map((week) => week.plannedWalkingMinutes),
+      [5, 6, 4],
+    );
+    assert.deepEqual(
+      [first, second, third].map((week) => week.plannedAerobicMinutes),
+      [90, 26, 24],
+    );
+
+    const sessions = await client.send("/api/paideuo/calendar?start=2026-01-05&end=2026-01-11");
+    const [tuesday, wednesday, saturday] = sessions;
+    const complete = (session, componentResults) =>
+      client.send(`/api/paideuo/calendar/sessions/${session.id}/execution`, {
+        method: "PATCH",
+        body: {
+          action: "complete",
+          revision: session.revision,
+          completion: { completedDate: session.scheduledDate, actualDurationMin: 50 },
+          componentResults,
+        },
+      });
+    await assert.rejects(
+      () =>
+        complete(tuesday, [
+          { componentKey: "run", durationMin: 15, runningMin: 20, walkingMin: 5 },
+        ]),
+      (error) => error.status === 400 && /elapsed component duration/.test(error.response.message),
+    );
+    await assert.rejects(
+      () => complete(tuesday, [{ componentKey: "run", runningMin: 12, continuousBoutMin: 13 }]),
+      (error) => error.status === 400 && /longest continuous bout/.test(error.response.message),
+    );
+    await complete(tuesday, []);
+    const missing = await weekly("2026-01-06");
+    assert.equal(missing.aerobicMinutes, null);
+    assert.deepEqual(missing.aerobicCoverage, { measured: 0, specified: 1 });
+
+    await complete(wednesday, [
+      { componentKey: "cycle", durationMin: 25, aerobicModality: "Cycling", continuousBoutMin: 20 },
+      { componentKey: "mobility", durationMin: 10 },
+    ]);
+    await complete(saturday, [
+      {
+        componentKey: "endurance",
+        runningMin: 30,
+        walkingMin: 4,
+        continuousBoutMin: 12,
+        aerobicModality: "Run/walk",
+      },
+      { componentKey: "sauna", durationMin: 15 },
+      { componentKey: "legacy", durationMin: 10 },
+    ]);
+    const measured = await weekly("2026-01-06");
+    assert.equal(measured.actualMinutes, 150);
+    assert.equal(measured.aerobicMinutes, 59);
+    assert.equal(measured.actualRunningMinutes, 30);
+    assert.equal(measured.actualWalkingMinutes, 4);
+    assert.equal(measured.actualContinuousBoutMinutes, 20);
+    assert.deepEqual(measured.aerobicByModality, { cycling: 25, "run/walk": 34 });
+    assert.deepEqual(measured.aerobicCoverage, { measured: 2, specified: 3 });
+  });
+});
+
+test("invalid prescription segment text cannot become a save payload", async () => {
+  const { componentPayload, segmentError } =
+    await import("../../src/features/prescriptions/components.ts");
+  const draft = { key: 0, name: "Intervals", instructions: "" };
+  for (const value of ["[", "[]", '[{"type":"work","duration_seconds":-1}]']) {
+    assert.match(segmentError(value), /nonempty JSON array/);
+    assert.throws(
+      () => componentPayload({ ...draft, targets: { segments: [value] } }),
+      /nonempty JSON array/,
+    );
+  }
+  const segments = [{ type: "work", duration_seconds: 60, modality: "running" }];
+  const value = JSON.stringify(segments);
+  assert.equal(segmentError(value), "");
+  assert.deepEqual(
+    componentPayload({ ...draft, targets: { segments: [value] } }).targets.segments,
+    segments,
   );
 });

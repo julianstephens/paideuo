@@ -37,6 +37,10 @@ export type ComponentResult = {
   rpe: number | null;
   durationMin: number | null;
   rounds: number | null;
+  runningMin: number | null;
+  walkingMin: number | null;
+  continuousBoutMin: number | null;
+  aerobicModality: string | null;
   notes: string;
 };
 export type SessionExecution =

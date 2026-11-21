@@ -31,11 +31,19 @@ module.exports = (components) => {
     }
     const key = suppliedKey.trim();
     keys.add(key);
+    const classifications = ["aerobic", "strength", "movement", "mobility", "other"];
+    const classification = component.classification ?? component.trainingClassification ?? null;
+    if (classification !== null && !classifications.includes(classification)) {
+      throw new BadRequestError(
+        `Choose a valid training classification for component ${position}.`,
+      );
+    }
     return {
       key,
       position,
       name: component.name.trim(),
       instructions: instructions.trim(),
+      classification,
       duration_min: duration ?? 0,
       duration_specified: duration != null,
       targets: parseTargets(component.targets, position),

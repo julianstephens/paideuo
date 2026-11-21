@@ -15,6 +15,10 @@ type ComponentResultDraft = {
   rpe: string;
   durationMin: string;
   rounds: string;
+  runningMin: string;
+  walkingMin: string;
+  continuousBoutMin: string;
+  aerobicModality: string;
   notes: string;
 };
 
@@ -28,6 +32,10 @@ const resultDraft = (componentKey: string, result?: ComponentResult): ComponentR
   rpe: result?.rpe == null ? "" : String(result.rpe),
   durationMin: result?.durationMin == null ? "" : String(result.durationMin),
   rounds: result?.rounds == null ? "" : String(result.rounds),
+  runningMin: result?.runningMin == null ? "" : String(result.runningMin),
+  walkingMin: result?.walkingMin == null ? "" : String(result.walkingMin),
+  continuousBoutMin: result?.continuousBoutMin == null ? "" : String(result.continuousBoutMin),
+  aerobicModality: result?.aerobicModality ?? "",
   notes: result?.notes ?? "",
 });
 
@@ -97,6 +105,10 @@ export const CompletionForm = ({
                     rpe: nullableNumber(result.rpe),
                     durationMin: nullableNumber(result.durationMin),
                     rounds: nullableNumber(result.rounds),
+                    runningMin: nullableNumber(result.runningMin),
+                    walkingMin: nullableNumber(result.walkingMin),
+                    continuousBoutMin: nullableNumber(result.continuousBoutMin),
+                    aerobicModality: result.aerobicModality.trim() || null,
                     notes: result.notes,
                   },
                 ]
@@ -217,7 +229,7 @@ export const CompletionForm = ({
                                 />
                               </FormField>
                               <FormField>
-                                Duration (minutes)
+                                Elapsed component duration (minutes)
                                 <Input
                                   type="number"
                                   min={0}
@@ -242,6 +254,65 @@ export const CompletionForm = ({
                                   onChange={(event) =>
                                     updateResult(result.componentKey, {
                                       rounds: event.target.value,
+                                    })
+                                  }
+                                />
+                              </FormField>
+                              <FormField>
+                                Running minutes
+                                <Input
+                                  type="number"
+                                  min={0}
+                                  step={1}
+                                  value={result.runningMin}
+                                  disabled={pending}
+                                  onChange={(event) =>
+                                    updateResult(result.componentKey, {
+                                      runningMin: event.target.value,
+                                    })
+                                  }
+                                />
+                              </FormField>
+                              <FormField>
+                                Walking minutes
+                                <Input
+                                  type="number"
+                                  min={0}
+                                  step={1}
+                                  value={result.walkingMin}
+                                  disabled={pending}
+                                  onChange={(event) =>
+                                    updateResult(result.componentKey, {
+                                      walkingMin: event.target.value,
+                                    })
+                                  }
+                                />
+                              </FormField>
+                              <FormField>
+                                Longest continuous bout (minutes)
+                                <Input
+                                  type="number"
+                                  min={0}
+                                  step={1}
+                                  value={result.continuousBoutMin}
+                                  disabled={pending}
+                                  onChange={(event) =>
+                                    updateResult(result.componentKey, {
+                                      continuousBoutMin: event.target.value,
+                                    })
+                                  }
+                                />
+                              </FormField>
+                              <FormField>
+                                Aerobic modality
+                                <Input
+                                  maxLength={64}
+                                  placeholder="run, walk, cycle…"
+                                  value={result.aerobicModality}
+                                  disabled={pending}
+                                  onChange={(event) =>
+                                    updateResult(result.componentKey, {
+                                      aerobicModality: event.target.value,
                                     })
                                   }
                                 />
@@ -367,6 +438,11 @@ export const CompletionResults = ({
                   result.rpe != null && `RPE ${result.rpe}`,
                   result.durationMin != null && `${result.durationMin} min`,
                   result.rounds != null && `${result.rounds} rounds`,
+                  result.runningMin != null && `${result.runningMin} running min`,
+                  result.walkingMin != null && `${result.walkingMin} walking min`,
+                  result.continuousBoutMin != null &&
+                    `${result.continuousBoutMin} min continuous bout`,
+                  result.aerobicModality,
                 ]
                   .filter(Boolean)
                   .join(" · ");

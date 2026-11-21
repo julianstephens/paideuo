@@ -158,8 +158,8 @@ const ComparisonCharts = ({
   const [metric, setMetric] = useState<Metric>("duration");
   const measurements = (period: MetricsPeriod) => {
     if (isRecoveryMetric(metric) && !period.window) return [];
-    return metricValues(metric, period, unit).flatMap(({ label, value }) =>
-      label === "Recorded responses"
+    return metricValues(metric, period, unit).flatMap(({ label, value, detailOnly }) =>
+      detailOnly || label === "Recorded responses"
         ? []
         : [
             {
