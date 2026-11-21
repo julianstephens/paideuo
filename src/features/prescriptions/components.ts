@@ -2,7 +2,11 @@ export type ComponentTargets = {
   sets?: number;
   reps?: string;
   repetitions?: number;
-  segments?: { type: "warmup" | "work" | "recovery" | "cooldown"; duration_seconds: number }[];
+  segments?: {
+    type: "warmup" | "work" | "recovery" | "cooldown";
+    duration_seconds: number;
+    modality?: "running" | "walking";
+  }[];
   load?: { value: number; unit: string };
   intensity?: { value: number; scale: "RPE" };
   grade?: { min?: string; max?: string };
@@ -62,6 +66,46 @@ export const componentDraft = (
   },
 });
 
+const parseSegments = (input: string): ComponentTargets["segments"] => {
+  const message =
+    'Enter a nonempty JSON array such as [{"type":"work","duration_seconds":60,"modality":"running"}]. Use whole seconds and omit modality or choose running or walking.';
+  let value: unknown;
+  try {
+    value = JSON.parse(input);
+  } catch {
+    throw new Error(message);
+  }
+  if (
+    !Array.isArray(value) ||
+    !value.length ||
+    !value.every(
+      (segment) =>
+        segment &&
+        typeof segment === "object" &&
+        !Array.isArray(segment) &&
+        Object.keys(segment).every((key) =>
+          ["type", "duration_seconds", "modality"].includes(key),
+        ) &&
+        ["warmup", "work", "recovery", "cooldown"].includes(segment.type) &&
+        Number.isSafeInteger(segment.duration_seconds) &&
+        segment.duration_seconds >= 0 &&
+        (!Object.hasOwn(segment, "modality") || ["running", "walking"].includes(segment.modality)),
+    )
+  ) {
+    throw new Error(message);
+  }
+  return value;
+};
+
+export const segmentError = (input: string) => {
+  try {
+    parseSegments(input);
+    return "";
+  } catch (error) {
+    return (error as Error).message;
+  }
+};
+
 export const componentPayload = ({
   snapshotKey,
   name,
@@ -100,17 +144,7 @@ export const componentPayload = ({
       ...(work_seconds ? { work_seconds: Number(work_seconds[0]) } : {}),
       ...(rest_seconds ? { rest_seconds: Number(rest_seconds[0]) } : {}),
       ...(repetitions ? { repetitions: Number(repetitions[0]) } : {}),
-      ...(segments
-        ? (() => {
-            try {
-              return {
-                segments: JSON.parse(segments[0]) as ComponentTargets["segments"],
-              };
-            } catch {
-              return {};
-            }
-          })()
-        : {}),
+      ...(segments ? { segments: parseSegments(segments[0]) } : {}),
     },
   };
 };
@@ -179,8 +213,7 @@ export const targetDefinitions: { key: TargetName; label: string; fields: Target
     label: "Ordered interval segments",
     fields: [
       {
-        label:
-          "Segments JSON (warmup/work/recovery/cooldown)",
+        label: "Segments JSON (warmup/work/recovery/cooldown)",
         maxLength: 4000,
       },
     ],

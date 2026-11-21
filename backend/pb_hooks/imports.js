@@ -358,6 +358,7 @@ const programPlan = (db, owner, data) => {
                   "instructions",
                   "duration_min",
                   "duration_specified",
+                  "classification",
                   "targets_json",
                 ]),
               )
@@ -370,12 +371,14 @@ const programPlan = (db, owner, data) => {
           name: component.name,
           instructions: component.instructions,
           durationMin: component.duration_specified ? component.duration_min : null,
+          classification: component.classification || null,
           targets: component.targets,
         }));
+        const { serialize } = require(__hooks + "/schedule-revisions.js");
         const item = items[items.length - 1];
         if (
           item.status === "skip" &&
-          JSON.stringify(currentComponents) !== JSON.stringify(componentState.desired)
+          serialize(currentComponents) !== serialize(componentState.desired)
         ) {
           item.status = "update";
         }
@@ -569,7 +572,7 @@ const observationPlan = (db, owner, document, options = {}) => {
       runningMin: component.running_min,
       walkingMin: component.walking_min,
       continuousBoutMin: component.continuous_bout_min,
-      aerobicModality: component.aerobic_modality ?? null,
+      aerobicModality: component.aerobic_modality || null,
       notes: component.notes,
     }));
     if (

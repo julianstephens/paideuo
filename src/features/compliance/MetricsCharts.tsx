@@ -22,7 +22,8 @@ export const windowLabel = ({ start, end }: NonNullable<MetricsPeriod["window"]>
   start === end ? shortDate(start) : `${shortDate(start)} – ${shortDate(end)}`;
 
 const descriptions: Record<Metric, string> = {
-  duration: "Sum of specified planned durations and recorded durations for completed sessions.",
+  duration:
+    "Training duration sums planned session durations and actual durations from completed sessions. Aerobic plans use classified components across scheduled sessions. Recorded aerobic duration and coverage use completed sessions.",
   load: "Sum of actual minutes × session RPE for completed sessions with both measurements.",
   completion:
     "Adherence is completed ÷ (completed + skipped). Pending and unresolved sessions are shown separately.",
@@ -33,11 +34,23 @@ const descriptions: Record<Metric, string> = {
   intensity: "Scheduled session count by planned intensity, including unspecified intensity.",
 };
 
-type Value = { label: string; value: number | null; display: string; coverage?: string };
+type Value = {
+  label: string;
+  value: number | null;
+  display: string;
+  coverage?: string;
+  detailOnly?: boolean;
+};
 export const metricValues = (metric: Metric, total: MetricsTotal, unit: DurationUnit): Value[] => {
   const { compliance, recovery, nutrition, load, measuredLoad } = total;
   switch (metric) {
     case "duration":
+      const aerobicDuration = (label: string, value: number | null, detailOnly = false) => ({
+        label,
+        value,
+        display: duration(value, unit),
+        detailOnly,
+      });
       return [
         {
           label: "Planned",
@@ -51,12 +64,22 @@ export const metricValues = (metric: Metric, total: MetricsTotal, unit: Duration
           value: compliance.actualMinutes,
           display: duration(compliance.actualMinutes, unit),
         },
+        aerobicDuration("Planned aerobic", compliance.plannedAerobicMinutes),
         {
-          label: "Aerobic",
-          coverage: `${compliance.aerobicCoverage.measured}/${compliance.aerobicCoverage.specified} aerobic component outcomes measured`,
+          label: "Actual aerobic",
+          coverage: `${compliance.aerobicCoverage.measured}/${compliance.aerobicCoverage.specified} aerobic components measured in completed sessions`,
           value: compliance.aerobicMinutes,
           display: duration(compliance.aerobicMinutes, unit),
         },
+        aerobicDuration("Planned running", compliance.plannedRunningMinutes, true),
+        aerobicDuration("Actual running", compliance.actualRunningMinutes, true),
+        aerobicDuration("Planned walking", compliance.plannedWalkingMinutes, true),
+        aerobicDuration("Actual walking", compliance.actualWalkingMinutes, true),
+        aerobicDuration("Longest planned work bout", compliance.plannedContinuousBoutMinutes, true),
+        aerobicDuration("Longest recorded bout", compliance.actualContinuousBoutMinutes, true),
+        ...Object.entries(compliance.aerobicByModality).map(([modality, value]) =>
+          aerobicDuration(`Actual aerobic · ${modality}`, value, true),
+        ),
       ];
     case "load":
       return [
@@ -170,7 +193,10 @@ export const MetricsCharts = ({
     ...new Set(
       rows.flatMap(({ measurements }) =>
         measurements
-          .filter(({ label }) => label !== "Adherence" && label !== "Recorded responses")
+          .filter(
+            ({ label, detailOnly }) =>
+              !detailOnly && label !== "Adherence" && label !== "Recorded responses",
+          )
           .map(({ label }) => label),
       ),
     ),
@@ -224,8 +250,9 @@ export const MetricsCharts = ({
                       : metricLabels[metric]}
                 </Heading>
                 <Stack as="dl" gap="1.5">
-                  {metricValues(metric, report.total, durationUnit).map(
-                    ({ label, display, coverage }) => {
+                  {metricValues(metric, report.total, durationUnit)
+                    .filter(({ detailOnly }) => !detailOnly)
+                    .map(({ label, display, coverage }) => {
                       const missing = display === noData || display === noResolvedSessions;
                       return (
                         <Grid
@@ -255,8 +282,7 @@ export const MetricsCharts = ({
                           )}
                         </Grid>
                       );
-                    },
-                  )}
+                    })}
                 </Stack>
               </Panel>
             ))}

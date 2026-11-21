@@ -113,4 +113,4 @@ const compare = (rows, desired, today) => {
 };
 
 // oxlint-disable-next-line import/no-commonjs
-module.exports = { todayFor, isProtected, compare };
+module.exports = { todayFor, isProtected, compare, serialize };

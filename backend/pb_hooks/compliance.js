@@ -1,5 +1,33 @@
 const intensityLevels = ["easy", "moderate", "hard", "maximal", "unspecified"];
 
+const add = (total, value) => (value == null ? total : (total ?? 0) + value);
+const longest = (total, value) => (value == null ? total : Math.max(total ?? 0, value));
+
+const plannedAerobic = ({ durationMin, targets }) => {
+  const { segments, repetitions = 1, work_seconds, rest_seconds = 0 } = targets ?? {};
+  const intervals =
+    segments ??
+    (work_seconds == null
+      ? []
+      : [
+          { type: "work", duration_seconds: work_seconds },
+          { type: "recovery", duration_seconds: rest_seconds },
+        ]);
+  let minutes = null;
+  let running = null;
+  let walking = null;
+  let bout = null;
+  for (const segment of intervals) {
+    const repeats = ["work", "recovery"].includes(segment.type) ? repetitions : 1;
+    const segmentMinutes = segment.duration_seconds / 60;
+    minutes = add(minutes, segmentMinutes * repeats);
+    if (segment.modality === "running") running = add(running, segmentMinutes * repeats);
+    if (segment.modality === "walking") walking = add(walking, segmentMinutes * repeats);
+    if (repeats > 0 && segment.type === "work") bout = longest(bout, segmentMinutes);
+  }
+  return { minutes: durationMin ?? minutes, running, walking, bout };
+};
+
 const calculate = (sessions, today) => {
   const counts = { completed: 0, skipped: 0, pending: 0, unresolved: 0, shortened: 0 };
   const intensity = Object.fromEntries(
@@ -13,7 +41,14 @@ const calculate = (sessions, today) => {
   let aerobicMinutes = null;
   let aerobicCoverageMeasured = 0;
   let aerobicCoverageSpecified = 0;
-  const aerobicByModality = {};
+  const aerobicByModality = Object.create(null);
+  let plannedAerobicMinutes = null;
+  let plannedRunningMinutes = null;
+  let plannedWalkingMinutes = null;
+  let plannedContinuousBoutMinutes = null;
+  let actualRunningMinutes = null;
+  let actualWalkingMinutes = null;
+  let actualContinuousBoutMinutes = null;
 
   for (const {
     status,
@@ -45,31 +80,37 @@ const calculate = (sessions, today) => {
       if (planned !== null && actual < planned) counts.shortened++;
     }
 
+    let sessionAerobic = null;
+    const results = new Map(
+      (componentResults ?? []).map((result) => [result.componentKey, result]),
+    );
+    for (const component of prescription?.components ?? []) {
+      if (component.classification !== "aerobic") continue;
+      const target = plannedAerobic(component);
+      plannedAerobicMinutes = add(plannedAerobicMinutes, target.minutes);
+      plannedRunningMinutes = add(plannedRunningMinutes, target.running);
+      plannedWalkingMinutes = add(plannedWalkingMinutes, target.walking);
+      plannedContinuousBoutMinutes = longest(plannedContinuousBoutMinutes, target.bout);
+      if (status !== "completed") continue;
+
+      aerobicCoverageSpecified++;
+      const result = results.get(component.key);
+      if (!result) continue;
+      actualRunningMinutes = add(actualRunningMinutes, result.runningMin);
+      actualWalkingMinutes = add(actualWalkingMinutes, result.walkingMin);
+      actualContinuousBoutMinutes = longest(actualContinuousBoutMinutes, result.continuousBoutMin);
+      const minutes = result.durationMin ?? add(result.runningMin, result.walkingMin) ?? null;
+      if (minutes == null) continue;
+      aerobicCoverageMeasured++;
+      sessionAerobic = add(sessionAerobic, minutes);
+      const modality = (result.aerobicModality ?? result.modality ?? component.modality ?? "")
+        .toLowerCase()
+        .trim();
+      const key = modality || "unspecified";
+      aerobicByModality[key] = add(aerobicByModality[key], minutes);
+    }
     if (status === "completed") {
-      let sessionAerobic = directAerobicMinutes;
-      if (sessionAerobic == null && Array.isArray(componentResults) && Array.isArray(prescription?.components)) {
-        sessionAerobic = 0;
-        for (const component of prescription.components) {
-          if (component.classification !== "aerobic") continue;
-          const result = componentResults.find((item) => item.componentKey === component.key);
-          aerobicCoverageSpecified++;
-          if (!result) continue;
-          const minutes =
-            result.durationMin ??
-            ((result.runningMin ?? 0) + (result.walkingMin ?? 0) || null);
-          if (minutes == null) continue;
-          aerobicCoverageMeasured++;
-          sessionAerobic += minutes;
-          const modality =
-            (result.aerobicModality ?? result.modality ?? component.modality ?? "").toLowerCase().trim();
-          const key = modality || "unspecified";
-          aerobicByModality[key] = (aerobicByModality[key] ?? 0) + minutes;
-        }
-        if (aerobicCoverageMeasured === 0 && sessionAerobic === 0) sessionAerobic = null;
-      }
-      if (sessionAerobic != null) {
-        aerobicMinutes = (aerobicMinutes ?? 0) + sessionAerobic;
-      }
+      aerobicMinutes = add(aerobicMinutes, directAerobicMinutes ?? sessionAerobic);
       if (directAerobicByModality && typeof directAerobicByModality === "object") {
         for (const [modality, minutes] of Object.entries(directAerobicByModality)) {
           if (Number.isFinite(minutes) && minutes >= 0)
@@ -95,7 +136,14 @@ const calculate = (sessions, today) => {
     specifiedDurations,
     intensity,
     aerobicMinutes,
-    aerobicByModality,
+    plannedAerobicMinutes,
+    plannedRunningMinutes,
+    plannedWalkingMinutes,
+    plannedContinuousBoutMinutes,
+    actualRunningMinutes,
+    actualWalkingMinutes,
+    actualContinuousBoutMinutes,
+    aerobicByModality: { ...aerobicByModality },
     aerobicCoverage: {
       measured: aerobicCoverageMeasured,
       specified: aerobicCoverageSpecified,

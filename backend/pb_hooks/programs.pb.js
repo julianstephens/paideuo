@@ -161,7 +161,7 @@ const handlePrograms = (event) => {
     instructions: component.instructions,
     durationMin:
       component.duration_specified || component.duration_min > 0 ? component.duration_min : null,
-    classification: component.classification ?? null,
+    classification: component.classification || null,
     targets: component.targets,
   });
 

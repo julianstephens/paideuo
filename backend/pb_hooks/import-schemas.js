@@ -81,6 +81,17 @@ const finite = (value, label, minimum, maximum, nullable = false) => {
   return value;
 };
 
+const aerobicDurationError = ({ durationMin, runningMin, walkingMin, continuousBoutMin }) => {
+  if (durationMin != null && (runningMin ?? 0) + (walkingMin ?? 0) > durationMin) {
+    return "Running and walking minutes together must fit within the elapsed component duration.";
+  }
+  const boutLimit = runningMin ?? durationMin ?? walkingMin;
+  if (continuousBoutMin != null && boutLimit != null && continuousBoutMin > boutLimit) {
+    return "The longest continuous bout must fit within the running or component duration.";
+  }
+  return null;
+};
+
 const civilDate = (value, label) => {
   if (typeof value !== "string" || !/^\d{4}-\d{2}-\d{2}$/.test(value) || value.startsWith("0000")) {
     fail(`Enter a valid ${label}.`);
@@ -155,7 +166,18 @@ const targets = (value, label) => {
   if (value == null) return null;
   const fields = object(
     value,
-    ["sets", "reps", "load", "intensity", "grade", "angle_degrees", "work_seconds", "rest_seconds"],
+    [
+      "sets",
+      "reps",
+      "load",
+      "intensity",
+      "grade",
+      "angle_degrees",
+      "work_seconds",
+      "rest_seconds",
+      "repetitions",
+      "segments",
+    ],
     [],
     label,
   );
@@ -199,6 +221,40 @@ const targets = (value, label) => {
   if (has(fields, "rest_seconds")) {
     normalized.rest_seconds = whole(fields.rest_seconds, `${label} rest duration`);
   }
+  if (has(fields, "repetitions")) {
+    normalized.repetitions = whole(fields.repetitions, `${label} repetitions`);
+  }
+  if (has(fields, "segments")) {
+    if (!Array.isArray(fields.segments) || !fields.segments.length) {
+      fail(`${label} segments must be a nonempty array.`);
+    }
+    normalized.segments = fields.segments.map((value, index) => {
+      const segmentLabel = `${label} segment ${index + 1}`;
+      const segment = object(
+        value,
+        ["type", "duration_seconds", "modality"],
+        ["type", "duration_seconds"],
+        segmentLabel,
+      );
+      return {
+        type: choice(
+          segment.type,
+          ["warmup", "work", "recovery", "cooldown"],
+          `${segmentLabel} type`,
+        ),
+        duration_seconds: whole(segment.duration_seconds, `${segmentLabel} duration in seconds`),
+        ...(has(segment, "modality")
+          ? {
+              modality: choice(
+                segment.modality,
+                ["running", "walking"],
+                `${segmentLabel} modality`,
+              ),
+            }
+          : {}),
+      };
+    });
+  }
   return Object.keys(normalized).length ? normalized : null;
 };
 
@@ -218,9 +274,7 @@ const component = (value, index) => {
     classification:
       fields.classification == null
         ? null
-        : ["aerobic", "strength", "movement", "mobility", "other"].includes(
-              fields.classification,
-            )
+        : ["aerobic", "strength", "movement", "mobility", "other"].includes(fields.classification)
           ? fields.classification
           : fail(`${label} classification is invalid.`),
     targets: targets(fields.targets, `${label} targets`),
@@ -452,7 +506,7 @@ const normalizeWorkoutResults = (value, context) => {
         item.actualLoad == null
           ? null
           : object(item.actualLoad, ["value", "unit"], ["value", "unit"], `${label} actual load`);
-      return {
+      const result = {
         key: externalId(item.key, `${label} key`),
         plannedPosition: whole(item.plannedPosition, `${label} planned position`, 1),
         name: text(item.name, `${label} name`, 200, true),
@@ -483,8 +537,20 @@ const normalizeWorkoutResults = (value, context) => {
           : null,
         rpe: finite(item.rpe, `${label} RPE`, 1, 10, true),
         rounds: whole(item.rounds, `${label} rounds`, 0, Number.MAX_SAFE_INTEGER, true),
-        runningMin: whole(item.runningMin, `${label} running minutes`, 0, Number.MAX_SAFE_INTEGER, true),
-        walkingMin: whole(item.walkingMin, `${label} walking minutes`, 0, Number.MAX_SAFE_INTEGER, true),
+        runningMin: whole(
+          item.runningMin,
+          `${label} running minutes`,
+          0,
+          Number.MAX_SAFE_INTEGER,
+          true,
+        ),
+        walkingMin: whole(
+          item.walkingMin,
+          `${label} walking minutes`,
+          0,
+          Number.MAX_SAFE_INTEGER,
+          true,
+        ),
         continuousBoutMin: whole(
           item.continuousBoutMin,
           `${label} continuous-bout minutes`,
@@ -495,6 +561,9 @@ const normalizeWorkoutResults = (value, context) => {
         aerobicModality: optionalText(item.aerobicModality, `${label} aerobic modality`, 64),
         notes: text(item.notes ?? "", `${label} notes`, 10000),
       };
+      const error = aerobicDurationError({ ...result, durationMin: result.actualDurationMin });
+      if (error) fail(`${label}. ${error}`);
+      return result;
     },
   );
   unique(components, (item) => item.key, "result components");
@@ -688,6 +757,7 @@ const normalize = (value, context = {}) => {
 // oxlint-disable-next-line import/no-commonjs
 module.exports = {
   ImportValidationError,
+  aerobicDurationError,
   limits,
   normalize,
 };

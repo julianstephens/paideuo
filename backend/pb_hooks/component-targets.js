@@ -35,7 +35,9 @@ module.exports = (targets, position) => {
       value.length > 0 &&
       value.every(
         (segment) =>
-          object(segment, ["type", "duration_seconds"]) &&
+          object(segment, ["type", "duration_seconds", "modality"]) &&
+          (!Object.hasOwn(segment, "modality") ||
+            ["running", "walking"].includes(segment.modality)) &&
           ["warmup", "work", "recovery", "cooldown"].includes(segment.type) &&
           whole(segment.duration_seconds),
       ),

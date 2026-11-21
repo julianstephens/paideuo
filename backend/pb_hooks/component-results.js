@@ -54,6 +54,7 @@ const parseResults = (values, snapshot) => {
       { component, position: index + 1 },
     ]),
   );
+  const { aerobicDurationError } = require(__hooks + "/import-schemas.js");
   const seen = new Set();
   const results = values.map((value, index) => {
     const label = `Component result ${index + 1}`;
@@ -88,7 +89,7 @@ const parseResults = (values, snapshot) => {
     if (typeof notes !== "string" || notes.trim().length > 10000) {
       throw new BadRequestError("Component notes must be 10,000 characters or fewer.");
     }
-    return {
+    const result = {
       componentKey: value.componentKey,
       load: resultLoad(value.load),
       sets: nullableWhole(value.sets, "number of sets"),
@@ -102,6 +103,9 @@ const parseResults = (values, snapshot) => {
       aerobicModality: nullableModality(value.aerobicModality ?? value.modality),
       notes: notes.trim(),
     };
+    const error = aerobicDurationError(result);
+    if (error) throw new BadRequestError(`${label}. ${error}`);
+    return result;
   });
   return results.sort(
     (left, right) =>

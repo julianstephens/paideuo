@@ -20,7 +20,9 @@ const compile = (filename, replacements = {}) => {
   result._compile(fs.readFileSync(filename, "utf8"), filename);
   return result.exports;
 };
-const { parseResults, resultData } = compile(path.join(__dirname, "component-results.js"));
+const { parseResults, resultData } = compile(path.join(__dirname, "component-results.js"), {
+  [path.join(__dirname, "import-schemas.js")]: compile(path.join(__dirname, "import-schemas.js")),
+});
 const componentTargets = compile(path.join(__dirname, "component-targets.js"));
 const prescriptionComponents = compile(path.join(__dirname, "prescription-components.js"), {
   [path.join(__dirname, "component-targets.js")]: componentTargets,
@@ -60,10 +62,6 @@ test("component results preserve optional values independently", () => {
         rpe: 6,
         durationMin: null,
         rounds: null,
-        runningMin: null,
-        walkingMin: null,
-        continuousBoutMin: null,
-        aerobicModality: null,
         runningMin: null,
         walkingMin: null,
         continuousBoutMin: null,

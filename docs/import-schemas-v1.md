@@ -74,6 +74,17 @@ prescription needs an explicit key. Use each retained component's current key wh
 removing, or reordering components. For a new prescription, an omitted key defaults to
 `component-N`, where `N` is the one-based component position.
 
+Aerobic plans use components with `classification: "aerobic"`. A component's `durationMin` is
+its planned elapsed duration. If omitted, reporting uses the sum of its interval durations.
+
+`targets.segments` is a nonempty array in workout order. Each entry has a `type` of `warmup`,
+`work`, `recovery`, or `cooldown`, and a nonnegative whole `duration_seconds`. Set the optional
+`modality` to `running` or `walking` to include the segment in the corresponding planned
+breakdown. `targets.repetitions` is a nonnegative whole count for the work and recovery segments
+and defaults to one. Warmup and cooldown occur once. When segments are omitted, `work_seconds`
+and `rest_seconds` can specify an unlabelled work and recovery pair. The longest scheduled work
+segment supplies the planned bout target.
+
 See [the program sample](examples/import-v1-program.json).
 
 ## Workout component results
@@ -86,6 +97,18 @@ scheduled prescription snapshot; results cannot reference live program component
 `sourceSessionId`, when supplied, is an authorized `scheduled-session` reference. Actual durations,
 sets, rounds, and positions are non-negative whole numbers (positions are at least one); RPE is
 from 1 through 10. Load is an object containing a non-negative `value` and a non-empty `unit`.
+For a component, `actualDurationMin` is elapsed time. `runningMin` and `walkingMin` are optional
+parts of that time and their sum must fit within the elapsed duration when supplied.
+`continuousBoutMin` is the longest uninterrupted effort. When running minutes are supplied, the
+bout describes running and must fit within that time. Otherwise it must fit within the elapsed
+duration, or the walking duration if that is the only available total. Each field uses
+nonnegative whole minutes, with missing values stored as null.
+
+Actual aerobic totals use elapsed minutes when available and otherwise sum the recorded running
+and walking minutes. Coverage counts aerobic components with a measured duration out of all
+aerobic components in completed sessions. The optional `aerobicModality` label groups actual
+minutes by activity, such as cycling or run/walk.
+
 Program imports derive prescription workout keys as
 `<program>/<block>/<week>/<slot>` using the four external IDs, providing a unique owner-scoped
 observation key. If that readable form would exceed the 200-character key limit, Paideuo substitutes

@@ -34,8 +34,7 @@ const resultDraft = (componentKey: string, result?: ComponentResult): ComponentR
   rounds: result?.rounds == null ? "" : String(result.rounds),
   runningMin: result?.runningMin == null ? "" : String(result.runningMin),
   walkingMin: result?.walkingMin == null ? "" : String(result.walkingMin),
-  continuousBoutMin:
-    result?.continuousBoutMin == null ? "" : String(result.continuousBoutMin),
+  continuousBoutMin: result?.continuousBoutMin == null ? "" : String(result.continuousBoutMin),
   aerobicModality: result?.aerobicModality ?? "",
   notes: result?.notes ?? "",
 });
@@ -230,7 +229,7 @@ export const CompletionForm = ({
                                 />
                               </FormField>
                               <FormField>
-                                Duration (minutes)
+                                Elapsed component duration (minutes)
                                 <Input
                                   type="number"
                                   min={0}
@@ -268,7 +267,9 @@ export const CompletionForm = ({
                                   value={result.runningMin}
                                   disabled={pending}
                                   onChange={(event) =>
-                                    updateResult(result.componentKey, { runningMin: event.target.value })
+                                    updateResult(result.componentKey, {
+                                      runningMin: event.target.value,
+                                    })
                                   }
                                 />
                               </FormField>
@@ -281,12 +282,14 @@ export const CompletionForm = ({
                                   value={result.walkingMin}
                                   disabled={pending}
                                   onChange={(event) =>
-                                    updateResult(result.componentKey, { walkingMin: event.target.value })
+                                    updateResult(result.componentKey, {
+                                      walkingMin: event.target.value,
+                                    })
                                   }
                                 />
                               </FormField>
                               <FormField>
-                                Continuous-bout minutes
+                                Longest continuous bout (minutes)
                                 <Input
                                   type="number"
                                   min={0}
@@ -439,7 +442,7 @@ export const CompletionResults = ({
                   result.walkingMin != null && `${result.walkingMin} walking min`,
                   result.continuousBoutMin != null &&
                     `${result.continuousBoutMin} min continuous bout`,
-                  result.aerobicModality && result.aerobicModality,
+                  result.aerobicModality,
                 ]
                   .filter(Boolean)
                   .join(" · ");

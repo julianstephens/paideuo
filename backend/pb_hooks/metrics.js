@@ -136,7 +136,7 @@ const sourceGroups = (tx, programId, start, sessions) => {
 };
 
 const readSessions = (tx, sessionFilter, params, bySchedule) => {
-  const { completionCollection, completionData, statusFor } = require(
+  const { completionCollection, componentResultCollection, completionData, statusFor } = require(
     __hooks + "/calendar-sessions.js",
   );
   const rows = tx.findRecordsByFilter(
@@ -158,6 +158,21 @@ const readSessions = (tx, sessionFilter, params, bySchedule) => {
   const bySession = new Map(
     completions.map((row) => [row.getString("session"), completionData(row)]),
   );
+  const { resultData } = require(__hooks + "/component-results.js");
+  const resultsBySession = new Map(rows.map(({ id }) => [id, []]));
+  if (rows.length) {
+    const results = tx.findRecordsByFilter(
+      componentResultCollection,
+      "completed = true && session.deleted = false && (" + sessionFilter("session.") + ")",
+      "session,planned_position,id",
+      0,
+      0,
+      params,
+    );
+    for (const record of results) {
+      resultsBySession.get(record.getString("session"))?.push(resultData(record));
+    }
+  }
   return rows.map((row) => {
     const snapshot = JSON.parse(row.getString("prescription_snapshot"));
     const completion = bySession.get(row.id);
@@ -172,6 +187,7 @@ const readSessions = (tx, sessionFilter, params, bySchedule) => {
       actual: completion?.actualDurationMin ?? null,
       completion,
       prescription: snapshot,
+      componentResults: resultsBySession.get(row.id),
     };
   });
 };

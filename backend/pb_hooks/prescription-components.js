@@ -32,10 +32,11 @@ module.exports = (components) => {
     const key = suppliedKey.trim();
     keys.add(key);
     const classifications = ["aerobic", "strength", "movement", "mobility", "other"];
-    const classification =
-      component.classification ?? component.trainingClassification ?? null;
+    const classification = component.classification ?? component.trainingClassification ?? null;
     if (classification !== null && !classifications.includes(classification)) {
-      throw new BadRequestError(`Choose a valid training classification for component ${position}.`);
+      throw new BadRequestError(
+        `Choose a valid training classification for component ${position}.`,
+      );
     }
     return {
       key,

@@ -30,7 +30,13 @@ test("aerobic totals exclude missing component outcomes and aggregate by modalit
         ],
       },
       componentResults: [
-        { componentKey: "run", durationMin: 15, runningMin: 10, walkingMin: 5, aerobicModality: "run/walk" },
+        {
+          componentKey: "run",
+          durationMin: 15,
+          runningMin: 10,
+          walkingMin: 5,
+          aerobicModality: "run/walk",
+        },
         { componentKey: "mobility", durationMin: 20 },
       ],
     },
@@ -40,4 +46,20 @@ test("aerobic totals exclude missing component outcomes and aggregate by modalit
   assert.equal(total.aerobicMinutes, 15);
   assert.deepEqual(total.aerobicByModality, { "run/walk": 15 });
   assert.deepEqual(total.aerobicCoverage, { measured: 1, specified: 2 });
+});
+
+test("a later missing aerobic result does not add minutes or measured coverage", () => {
+  const session = {
+    status: "completed",
+    planned: null,
+    actual: null,
+    prescription: { components: [{ key: "run", classification: "aerobic" }] },
+  };
+  const measured = { ...session, componentResults: [{ componentKey: "run", runningMin: 0 }] };
+  const total = calculate([measured, session]);
+  assert.equal(total.aerobicMinutes, 0);
+  assert.equal(total.actualRunningMinutes, 0);
+  assert.equal(total.actualWalkingMinutes, null);
+  assert.deepEqual(total.aerobicCoverage, { measured: 1, specified: 2 });
+  assert.equal(calculate([session]).aerobicMinutes, null);
 });
