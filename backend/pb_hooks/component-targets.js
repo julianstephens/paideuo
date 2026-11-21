@@ -29,6 +29,16 @@ module.exports = (targets, position) => {
     angle_degrees: nonnegative,
     work_seconds: whole,
     rest_seconds: whole,
+    repetitions: whole,
+    segments: (value) =>
+      Array.isArray(value) &&
+      value.length > 0 &&
+      value.every(
+        (segment) =>
+          object(segment, ["type", "duration_seconds"]) &&
+          ["warmup", "work", "recovery", "cooldown"].includes(segment.type) &&
+          whole(segment.duration_seconds),
+      ),
   };
   if (!object(targets, Object.keys(validators))) {
     throw new BadRequestError(`Component ${position} contains an unknown or invalid target.`);

@@ -125,6 +125,29 @@ const ComponentFields = ({
           onChange={(event) => change({ ...component, name: event.target.value })}
         />
       </FormField>
+      <FormField>
+        Training classification
+        <NativeSelect.Root disabled={disabled} size="sm">
+          <NativeSelect.Field
+            value={component.classification ?? ""}
+            onChange={(event) =>
+              change({
+                ...component,
+                classification:
+                  (event.target.value as ComponentDraft["classification"]) || undefined,
+              })
+            }
+          >
+            <option value="">Unclassified</option>
+            <option value="aerobic">Aerobic</option>
+            <option value="strength">Strength</option>
+            <option value="movement">Movement</option>
+            <option value="mobility">Mobility</option>
+            <option value="other">Other</option>
+          </NativeSelect.Field>
+          <NativeSelect.Indicator />
+        </NativeSelect.Root>
+      </FormField>
       <Stack gap="1.5">
         <FormField htmlFor={instructionsId}>Component instructions</FormField>
         <Textarea

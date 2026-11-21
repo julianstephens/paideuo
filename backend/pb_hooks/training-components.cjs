@@ -7,6 +7,7 @@ const sameTrainingComponent = (record, values) =>
   record.getString("instructions") === values.instructions &&
   record.getInt("duration_min") === values.duration_min &&
   record.getBool("duration_specified") === values.duration_specified &&
+  record.getString("classification") === (values.classification ?? "") &&
   JSON.stringify(JSON.parse(record.getString("targets") || "null")) ===
     JSON.stringify(values.targets);
 

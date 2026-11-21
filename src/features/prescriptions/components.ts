@@ -1,6 +1,8 @@
 export type ComponentTargets = {
   sets?: number;
   reps?: string;
+  repetitions?: number;
+  segments?: { type: "warmup" | "work" | "recovery" | "cooldown"; duration_seconds: number }[];
   load?: { value: number; unit: string };
   intensity?: { value: number; scale: "RPE" };
   grade?: { min?: string; max?: string };
@@ -14,6 +16,7 @@ export type PrescriptionComponent = {
   name: string;
   instructions: string;
   durationMin: number | null;
+  classification?: "aerobic" | "strength" | "movement" | "mobility" | "other";
   targets?: ComponentTargets | null;
 };
 
@@ -24,6 +27,7 @@ export type ComponentDraft = {
   snapshotKey?: string;
   name: string;
   instructions: string;
+  classification?: "aerobic" | "strength" | "movement" | "mobility" | "other";
   targets: TargetDrafts;
 };
 
@@ -33,6 +37,7 @@ export const componentDraft = (
     key: snapshotKey = crypto.randomUUID(),
     name,
     instructions,
+    classification,
     durationMin,
     targets,
   }: PrescriptionComponent,
@@ -41,6 +46,7 @@ export const componentDraft = (
   snapshotKey,
   name,
   instructions,
+  classification,
   targets: {
     ...(durationMin != null ? { duration: [String(durationMin)] } : {}),
     ...(targets?.sets != null ? { sets: [String(targets.sets)] } : {}),
@@ -51,6 +57,8 @@ export const componentDraft = (
     ...(targets?.angle_degrees != null ? { angle_degrees: [String(targets.angle_degrees)] } : {}),
     ...(targets?.work_seconds != null ? { work_seconds: [String(targets.work_seconds)] } : {}),
     ...(targets?.rest_seconds != null ? { rest_seconds: [String(targets.rest_seconds)] } : {}),
+    ...(targets?.repetitions != null ? { repetitions: [String(targets.repetitions)] } : {}),
+    ...(targets?.segments ? { segments: [JSON.stringify(targets.segments)] } : {}),
   },
 });
 
@@ -58,6 +66,7 @@ export const componentPayload = ({
   snapshotKey,
   name,
   instructions,
+  classification,
   targets,
 }: ComponentDraft): PrescriptionComponent => {
   const {
@@ -70,11 +79,14 @@ export const componentPayload = ({
     angle_degrees,
     work_seconds,
     rest_seconds,
+    repetitions,
+    segments,
   } = targets;
   return {
     ...(snapshotKey ? { key: snapshotKey } : {}),
     name,
     instructions,
+    ...(classification ? { classification } : {}),
     durationMin: duration ? Number(duration[0]) : null,
     targets: {
       ...(sets ? { sets: Number(sets[0]) } : {}),
@@ -87,6 +99,18 @@ export const componentPayload = ({
       ...(angle_degrees ? { angle_degrees: Number(angle_degrees[0]) } : {}),
       ...(work_seconds ? { work_seconds: Number(work_seconds[0]) } : {}),
       ...(rest_seconds ? { rest_seconds: Number(rest_seconds[0]) } : {}),
+      ...(repetitions ? { repetitions: Number(repetitions[0]) } : {}),
+      ...(segments
+        ? (() => {
+            try {
+              return {
+                segments: JSON.parse(segments[0]) as ComponentTargets["segments"],
+              };
+            } catch {
+              return {};
+            }
+          })()
+        : {}),
     },
   };
 };
@@ -144,5 +168,21 @@ export const targetDefinitions: { key: TargetName; label: string; fields: Target
     key: "rest_seconds",
     label: "Rest interval",
     fields: [{ label: "Rest interval in seconds", type: "number", min: 0, step: 1 }],
+  },
+  {
+    key: "repetitions",
+    label: "Interval repetitions",
+    fields: [{ label: "Repetitions", type: "number", min: 0, step: 1 }],
+  },
+  {
+    key: "segments",
+    label: "Ordered interval segments",
+    fields: [
+      {
+        label:
+          "Segments JSON (warmup/work/recovery/cooldown)",
+        maxLength: 4000,
+      },
+    ],
   },
 ];
