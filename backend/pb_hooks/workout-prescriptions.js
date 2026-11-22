@@ -24,9 +24,8 @@ const parsePrescription = (prescription) => {
     kind = null,
     rest = false,
   } = prescription;
-  if (
-    !["climbing", "strength", "conditioning", "mobility", "other", "rest"].includes(sessionType)
-  ) {
+  const { sessionTypes } = require(__hooks + "/training-prescription.cjs");
+  if (!sessionTypes.includes(sessionType)) {
     throw new BadRequestError("Choose a session type.");
   }
   if (

@@ -1,77 +1,113 @@
-import { Box, Button, Flex, Grid, Link, Popover, Portal, Stack, Text } from "@chakra-ui/react";
-import { useLayoutEffect, useRef } from "react";
-import { NavLink, Outlet, useLocation } from "react-router";
+import { Button, Link, Popover, Portal, Stack, Tooltip } from "@chakra-ui/react";
+import { useLayoutEffect, useRef, useState } from "react";
+import { Link as RouterLink, NavLink, Outlet, useLocation } from "react-router";
 
 import { signOut } from "../lib/api/pocketbase";
+import { AppIcon, Wordmark } from "./AppIcon";
 import { ColorModeControl } from "./ColorModeControl";
 
 const navigation = [
-  { to: "/", label: "Calendar" },
-  { to: "/annual-plan", label: "Annual Plan" },
-  { to: "/programs", label: "Programs" },
-  { to: "/metrics", label: "Metrics" },
-  { to: "/library", label: "Library" },
-  { to: "/imports", label: "Imports" },
-];
+  { to: "/", label: "Calendar", icon: "calendar" },
+  { to: "/annual-plan", label: "Annual Plan", icon: "plan" },
+  { to: "/programs", label: "Programs", icon: "programs" },
+  { to: "/metrics", label: "Metrics", icon: "metrics" },
+  { to: "/library", label: "Library", icon: "library" },
+  { to: "/imports", label: "Imports", icon: "imports" },
+] as const;
 
-const Navigation = ({ placement }: { placement: "sidebar" | "header" | "bottom" }) => (
-  <Flex
-    as="nav"
-    aria-label="Primary"
-    className={placement === "bottom" ? "app-mobile-nav" : undefined}
-    display={
-      {
-        sidebar: { base: "none", lg: "flex" },
-        header: { base: "none", md: "flex", lg: "none" },
-        bottom: { base: "flex", md: "none" },
-      }[placement]
-    }
-    direction={placement === "sidebar" ? "column" : "row"}
-    bg="bg.panel"
-    borderTopWidth={placement === "bottom" ? "1px" : undefined}
-    align={placement === "bottom" ? "center" : undefined}
-    gap="1"
-  >
-    {navigation.map(({ to, label }) => (
-      <Link
-        key={to}
-        asChild
-        flex={placement === "bottom" ? "1" : undefined}
-        justifyContent={placement === "bottom" ? "center" : "start"}
-        minH="11"
-        textAlign="center"
-        px={placement === "bottom" ? "1" : "3"}
-        py="2"
-        borderRadius="md"
-        fontSize={placement === "bottom" ? "xs" : "sm"}
-        fontWeight="medium"
-        color="fg.muted"
-        _hover={{ bg: "bg.inset", textDecoration: "none" }}
-        _currentPage={{ bg: "teal.subtle", color: "teal.fg", fontWeight: "bold" }}
-      >
-        <NavLink to={to} end={to === "/"}>
-          {label}
-        </NavLink>
-      </Link>
-    ))}
-  </Flex>
-);
+const workspaces = {
+  train: { label: "Train", to: "/" },
+  plan: { label: "Plan", to: "/programs" },
+} as const;
+const planRoutes = ["/annual-plan", "/programs", "/library", "/imports"];
+const workspaceKey = "paideuo-workspace";
+
+const sidebarKey = "paideuo-sidebar-collapsed";
+
+const readSidebarPreference = () => {
+  try {
+    return localStorage.getItem(sidebarKey) === "true";
+  } catch {
+    return false;
+  }
+};
+
+const NavigationLink = ({
+  to,
+  label,
+  icon,
+  collapsed,
+}: (typeof navigation)[number] & { collapsed: boolean }) => {
+  const link = (
+    <NavLink className="app-nav-link" to={to} end={to === "/"} aria-label={label}>
+      <AppIcon name={icon} />
+      <span className="app-nav-label">{label}</span>
+    </NavLink>
+  );
+
+  return collapsed ? (
+    <Tooltip.Root positioning={{ placement: "right" }} openDelay={200}>
+      <Tooltip.Trigger asChild>{link}</Tooltip.Trigger>
+      <Portal>
+        <Tooltip.Positioner>
+          <Tooltip.Content hideBelow="lg">{label}</Tooltip.Content>
+        </Tooltip.Positioner>
+      </Portal>
+    </Tooltip.Root>
+  ) : (
+    link
+  );
+};
 
 export const AppLayout = () => {
   const { pathname } = useLocation();
   const main = useRef<HTMLElement>(null);
+  const routedWorkspace =
+    pathname === "/"
+      ? "train"
+      : planRoutes.some((route) => pathname === route || pathname.startsWith(route + "/"))
+        ? "plan"
+        : undefined;
+  const [lastWorkspace, setLastWorkspace] = useState<keyof typeof workspaces>(() => {
+    try {
+      return sessionStorage.getItem(workspaceKey) === "plan" ? "plan" : "train";
+    } catch {
+      return "train";
+    }
+  });
+  if (routedWorkspace && routedWorkspace !== lastWorkspace) setLastWorkspace(routedWorkspace);
+  const workspace = routedWorkspace ?? lastWorkspace;
+  const primary =
+    workspace === "train"
+      ? navigation.filter(({ to }) => to === "/" || to === "/metrics")
+      : navigation.filter(({ to }, index) => index < 4 && to !== "/");
+  const secondary = workspace === "plan" ? navigation.slice(4) : [];
 
   useLayoutEffect(() => {
-    if (main.current) main.current.scrollTop = 0;
+    if (!routedWorkspace) return;
+    try {
+      sessionStorage.setItem(workspaceKey, routedWorkspace);
+    } catch {
+      // The workspace is still tracked while the app is open.
+    }
+  }, [routedWorkspace]);
+  const [collapsed, setCollapsed] = useState(readSidebarPreference);
+  const toggleSidebar = () => {
+    const next = !collapsed;
+    setCollapsed(next);
+    try {
+      localStorage.setItem(sidebarKey, String(next));
+    } catch {
+      // The preference still applies for this visit.
+    }
+  };
+
+  useLayoutEffect(() => {
+    main.current?.scrollTo(0, 0);
   }, [pathname]);
 
   return (
-    <Grid
-      className="app-shell"
-      minH="100dvh"
-      templateColumns={{ base: "minmax(0, 1fr)", lg: "13rem minmax(0, 1fr)" }}
-      templateRows="auto 1fr"
-    >
+    <div className="app-shell" data-sidebar-collapsed={collapsed || undefined}>
       <Link
         href="#main-content"
         position="absolute"
@@ -86,33 +122,29 @@ export const AppLayout = () => {
       >
         Skip to main content
       </Link>
-      <Flex
-        as="header"
-        className="app-header"
-        gridColumn="1 / -1"
-        align="center"
-        gap="4"
-        justify="space-between"
-        minH="16"
-        px={{ base: "4", md: "6" }}
-        bg="bg.panel"
-        borderBottomWidth="1px"
-      >
-        <Text fontWeight="bold" fontSize="xl" letterSpacing="tight">
-          Paideuo
-        </Text>
-        <Navigation placement="header" />
+      <header className="app-header">
+        <NavLink to={workspaces[workspace].to} className="app-home">
+          <Wordmark />
+        </NavLink>
+        <nav className="app-workspaces" aria-label="Workspace">
+          {Object.entries(workspaces).map(([key, { label, to }]) => (
+            <RouterLink key={key} to={to} aria-current={workspace === key ? "true" : undefined}>
+              {label}
+            </RouterLink>
+          ))}
+        </nav>
         <Popover.Root positioning={{ placement: "bottom-end" }}>
           <Popover.Trigger asChild>
-            <Button variant="outline" size="sm">
-              Account
+            <Button variant="outline" size="sm" aria-label="Account">
+              <AppIcon name="account" size={17} />
+              <span className="app-account-label">Account</span>
             </Button>
           </Popover.Trigger>
           <Portal>
             <Popover.Positioner>
               <Popover.Content w="14rem" aria-label="Account settings">
                 <Popover.Body>
-                  <Stack gap="4">
+                  <Stack gap="3">
                     <ColorModeControl />
                     <Popover.CloseTrigger asChild>
                       <Button asChild variant="outline">
@@ -128,32 +160,68 @@ export const AppLayout = () => {
             </Popover.Positioner>
           </Portal>
         </Popover.Root>
-      </Flex>
-      <Box
-        as="aside"
-        display={{ base: "none", lg: "block" }}
-        bg="bg.panel"
-        borderInlineEndWidth="1px"
-        p="4"
-      >
-        <Navigation placement="sidebar" />
-      </Box>
-      <Box
-        as="main"
-        ref={main}
-        id="main-content"
-        tabIndex={-1}
-        className="app-content"
-        maxW="100rem"
-        w="full"
-        mx="auto"
-        px={{ base: "4", md: "6", xl: "8" }}
-        py={{ base: "5", md: "8" }}
-        minW="0"
-      >
-        <Outlet />
-      </Box>
-      <Navigation placement="bottom" />
-    </Grid>
+      </header>
+      <nav id="primary-navigation" aria-label="Primary" className="app-nav">
+        <button
+          type="button"
+          className="app-nav-link app-sidebar-toggle"
+          aria-label={collapsed ? "Expand sidebar" : "Collapse sidebar"}
+          aria-expanded={!collapsed}
+          aria-controls="primary-navigation"
+          title={collapsed ? "Expand sidebar" : undefined}
+          onClick={toggleSidebar}
+        >
+          <AppIcon name={collapsed ? "expandSidebar" : "collapseSidebar"} />
+          <span className="app-nav-label">Collapse sidebar</span>
+        </button>
+        {primary.map((item) => (
+          <NavigationLink key={item.to} {...item} collapsed={collapsed} />
+        ))}
+        {secondary.length > 0 && (
+          <>
+            <div className="app-nav-secondary">
+              {secondary.map((item) => (
+                <NavigationLink key={item.to} {...item} collapsed={collapsed} />
+              ))}
+            </div>
+            <Popover.Root positioning={{ placement: "top-end" }} closeOnInteractOutside>
+              <Popover.Trigger asChild>
+                <button
+                  type="button"
+                  className="app-nav-link app-nav-more"
+                  data-current={secondary.some(({ to }) => pathname === to) || undefined}
+                >
+                  <AppIcon name="more" />
+                  <span>More</span>
+                </button>
+              </Popover.Trigger>
+              <Portal>
+                <Popover.Positioner>
+                  <Popover.Content w="11rem" aria-label="More navigation">
+                    <Popover.Body>
+                      <Stack gap="1">
+                        {secondary.map((item) => (
+                          <Popover.CloseTrigger key={item.to} asChild>
+                            <NavLink className="app-nav-link" to={item.to}>
+                              <AppIcon name={item.icon} />
+                              {item.label}
+                            </NavLink>
+                          </Popover.CloseTrigger>
+                        ))}
+                      </Stack>
+                    </Popover.Body>
+                  </Popover.Content>
+                </Popover.Positioner>
+              </Portal>
+            </Popover.Root>
+          </>
+        )}
+      </nav>
+      <main ref={main} id="main-content" tabIndex={-1} className="app-content">
+        <div className="app-page">
+          <Outlet />
+        </div>
+      </main>
+    </div>
   );
 };

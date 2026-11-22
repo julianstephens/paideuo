@@ -15,6 +15,10 @@
   min-width: 23rem;
 }
 
+.annual-month {
+  min-width: 17rem;
+}
+
 .annual-row {
   display: grid;
   grid-template-columns: repeat(var(--annual-days), minmax(0, 1fr));

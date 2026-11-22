@@ -16,6 +16,7 @@ import { useState } from "react";
 import { useSession } from "../auth/session";
 import { FormField, Notice, PageHeader, Panel } from "../../components/ui";
 import { errorMessage } from "../../lib/api/request";
+import { CheckInFieldSettings } from "./CheckInFieldSettings";
 import { type ServiceCredentialScope, serviceCredentialsApi } from "./serviceCredentials";
 
 const columnLayout = { base: "minmax(0, 1fr)", md: "repeat(2, minmax(0, 1fr))" };
@@ -32,11 +33,11 @@ const defaultServiceScopes: ServiceCredentialScope[] = [
 export const SettingsPage = () => {
   const session = useSession();
   return session.status === "signed-in" ? (
-    <CredentialSettings key={session.ownerId} ownerId={session.ownerId} />
+    <AccountSettings key={session.ownerId} ownerId={session.ownerId} />
   ) : null;
 };
 
-const CredentialSettings = ({ ownerId }: { ownerId: string }) => {
+const AccountSettings = ({ ownerId }: { ownerId: string }) => {
   const [saving, setSaving] = useState(false);
   const [credentialsError, setCredentialsError] = useState<string | null>(null);
   const [issueLabel, setIssueLabel] = useState("");
@@ -104,6 +105,7 @@ const CredentialSettings = ({ ownerId }: { ownerId: string }) => {
   return (
     <Stack gap="6">
       <PageHeader title="Settings" />
+      <CheckInFieldSettings ownerId={ownerId} />
       <Panel as="section" gap="4">
         <Stack gap="1">
           <Heading as="h2" size="md">

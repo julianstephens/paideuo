@@ -1,9 +1,22 @@
-import { Flex, Grid, Heading, Link, NativeSelect, Stack, Text } from "@chakra-ui/react";
+import {
+  Badge,
+  Button,
+  Box,
+  Flex,
+  Grid,
+  Heading,
+  Link,
+  NativeSelect,
+  Stack,
+  Text,
+} from "@chakra-ui/react";
 import { useState } from "react";
 import { Link as RouterLink } from "react-router";
+import { comparisonDelta } from "../../components/ComparisonChange";
 import { Disclosure, FormField, Notice, Panel } from "../../components/ui";
 import { formatDate, parseDate } from "../calendar/dates";
 import type { DurationUnit, Preferences } from "../recovery/recovery";
+import { MetricBar } from "./MetricBars";
 import { MetricPlot, plotColors } from "./MetricPlot";
 import type { PlotPoint } from "./MetricPlot";
 import { hours, loadPoints, percent } from "./format";
@@ -163,6 +176,103 @@ export const plotMetricUnit = (metric: Metric, unit: DurationUnit) => {
   if (metric === "fatigue" || metric === "soreness") return "/ 5";
 };
 
+const summaryTitle: Partial<Record<Metric, string>> = {
+  duration: "Training duration",
+  completion: "Session adherence",
+  load: "Training load",
+};
+
+const highlights: Partial<Record<Metric, string>> = {
+  duration: "Actual",
+  completion: "Adherence",
+  load: "Total",
+  sleep: "Daily average",
+  fatigue: "Daily average",
+  soreness: "Daily average",
+};
+
+const SummaryCard = ({
+  metric,
+  total,
+  unit,
+}: {
+  metric: Metric;
+  total: MetricsTotal;
+  unit: DurationUnit;
+}) => {
+  const values = metricValues(metric, total, unit);
+  const primary = values.find(({ label }) => label === highlights[metric]);
+  const supporting = values.filter((value) => !value.detailOnly && value !== primary);
+  const distribution = metric === "intensity" || metric === "nutrition";
+  const population = distribution
+    ? supporting.reduce((sum, { value }) => sum + (value ?? 0), 0)
+    : 0;
+
+  return (
+    <Panel as="article" p="4" gap="3">
+      <Heading as="h3" size="sm">
+        {summaryTitle[metric] ?? metricLabels[metric]}
+      </Heading>
+      <Stack as="dl" gap="2">
+        {primary && (
+          <Box>
+            <Text as="dt" fontSize="xs" color="fg.muted" srOnly={metric === "completion"}>
+              {primary.label}
+            </Text>
+            <Text
+              as="dd"
+              fontSize={
+                primary.display === noData || primary.display === noResolvedSessions ? "sm" : "2xl"
+              }
+              lineHeight="short"
+              fontWeight="bold"
+            >
+              {primary.display}
+            </Text>
+            {metric === "completion" && <MetricBar value={total.compliance.adherence} max={1} />}
+          </Box>
+        )}
+        {supporting.map(({ label, display, value }) => (
+          <Box key={label}>
+            <Flex gap="2" justify="space-between" align="baseline" fontSize="sm">
+              <Text as="dt" color="fg.muted">
+                {label}
+              </Text>
+              <Text as="dd" textAlign="end" fontWeight="semibold">
+                {display}
+              </Text>
+            </Flex>
+            {population > 0 && <MetricBar value={value} max={population} />}
+          </Box>
+        ))}
+      </Stack>
+    </Panel>
+  );
+};
+
+const SummaryGrid = ({
+  metrics,
+  total,
+  unit,
+}: {
+  metrics: Metric[];
+  total: MetricsTotal;
+  unit: DurationUnit;
+}) => (
+  <Grid
+    gap="3"
+    templateColumns={{
+      base: "minmax(0, 1fr)",
+      sm: `repeat(${Math.min(metrics.length, 2)}, minmax(0, 1fr))`,
+      xl: `repeat(${metrics.length}, minmax(0, 1fr))`,
+    }}
+  >
+    {metrics.map((metric) => (
+      <SummaryCard key={metric} metric={metric} total={total} unit={unit} />
+    ))}
+  </Grid>
+);
+
 export const MetricsCharts = ({
   report,
   preferences,
@@ -177,6 +287,7 @@ export const MetricsCharts = ({
   reviewUrl?: (weekId: string) => string;
 }) => {
   const [comparison, setComparison] = useState<Metric>("duration");
+  const [showTotals, setShowTotals] = useState(false);
   const { durationUnit, hiddenSummary, hiddenCharts } = preferences;
   const shown = metricKeys.filter((metric) => !hiddenCharts.includes(metric));
   const chart = selected ?? shown.find((metric) => metric === comparison) ?? shown[0];
@@ -218,95 +329,48 @@ export const MetricsCharts = ({
         ),
       }) as PlotPoint,
   );
+  const showChanges = plotData.length > 1 && !showTotals;
+  const trendData = showChanges
+    ? plotData.slice(1).map((point, index) => ({
+        label: point.label,
+        ...Object.fromEntries(
+          [...series.map(({ name }) => name), "adherence"].map((name) => {
+            const before = plotData[index][name];
+            const after = point[name];
+            return [
+              name,
+              comparisonDelta(
+                typeof before === "number" ? before : null,
+                typeof after === "number" ? after : null,
+              ),
+            ];
+          }),
+        ),
+      }))
+    : plotData;
+  const training = summaries.filter((metric) => !isRecovery(metric));
+  const recovery = summaries.filter(isRecovery);
+  const coverage = summaries.flatMap((metric) =>
+    metricValues(metric, report.total, durationUnit).flatMap(({ label, coverage }) =>
+      coverage ? [{ metric, label, coverage }] : [],
+    ),
+  );
+
   return (
-    <Stack gap="4">
-      {summaries.length > 0 && (
+    <Stack gap={{ base: "5", md: "7" }}>
+      {training.length > 0 && (
         <Stack as="section" gap="3">
           <Flex align="baseline" justify="space-between" gap="2" wrap="wrap">
             <Heading as="h2" size="md">
-              {weekly ? "Weekly summary" : "Period totals"}
+              {weekly ? "Weekly training" : "Training totals"}
             </Heading>
-            {report.window && (
-              <Text fontSize="sm" color="fg.muted">
-                {windowLabel(report.window)}
-              </Text>
-            )}
+            {report.window && <Badge variant="surface">{windowLabel(report.window)}</Badge>}
           </Flex>
-          <Grid
-            gap="3"
-            templateColumns={{
-              base: "minmax(0, 1fr)",
-              sm: "repeat(2, minmax(0, 1fr))",
-              xl: "repeat(4, minmax(0, 1fr))",
-            }}
-          >
-            {summaries.map((metric) => (
-              <Panel key={metric} as="article" p="4" gap="2.5">
-                <Heading as="h3" size="md">
-                  {metric === "duration"
-                    ? "Training duration"
-                    : metric === "completion"
-                      ? "Completion and adherence"
-                      : metricLabels[metric]}
-                </Heading>
-                <Stack as="dl" gap="1.5">
-                  {metricValues(metric, report.total, durationUnit)
-                    .filter(({ detailOnly }) => !detailOnly)
-                    .map(({ label, display, coverage }) => {
-                      const missing = display === noData || display === noResolvedSessions;
-                      return (
-                        <Grid
-                          key={label}
-                          templateColumns="minmax(0, 1fr) fit-content(58%)"
-                          alignItems="baseline"
-                          gapX="2"
-                          fontSize="sm"
-                        >
-                          <Text as="dt" color="fg.muted">
-                            {label}
-                          </Text>
-                          <Text
-                            as="dd"
-                            textAlign="end"
-                            fontSize={missing ? "xs" : undefined}
-                            fontWeight={missing ? "normal" : "semibold"}
-                            fontVariantNumeric="tabular-nums"
-                            color={missing ? "fg.muted" : undefined}
-                          >
-                            {display}
-                          </Text>
-                          {coverage && (
-                            <Text as="dd" gridColumn="1 / -1" fontSize="xs" color="fg.muted">
-                              {coverage}
-                            </Text>
-                          )}
-                        </Grid>
-                      );
-                    })}
-                </Stack>
-              </Panel>
-            ))}
-          </Grid>
+          <SummaryGrid metrics={training} total={report.total} unit={durationUnit} />
         </Stack>
       )}
       {report.unassigned > 0 && (
         <Notice>{report.unassigned} unassigned sessions are included in program totals.</Notice>
-      )}
-      {reviewUrl && report.periods.length > 0 && (
-        <Panel as="section">
-          <Heading as="h2" size="md">
-            Weekly reviews
-          </Heading>
-          <Stack as="ul" listStyleType="none" gap="2">
-            {report.periods.map((period) => (
-              <li key={period.id}>
-                <Link asChild variant="underline">
-                  <RouterLink to={reviewUrl(period.id)}>Weekly review · {period.label}</RouterLink>
-                </Link>
-              </li>
-            ))}
-          </Stack>
-        </Panel>
       )}
       {chart ? (
         <Panel as="section">
@@ -347,29 +411,48 @@ export const MetricsCharts = ({
               {metricLabels[chart]}
             </Heading>
           )}
-          <Disclosure label="How this metric is calculated">
-            <Text fontSize="sm" color="fg.muted">
-              {descriptions[chart]}
-            </Text>
-          </Disclosure>
+          {plotData.length > 1 && (
+            <Flex gap="1" wrap="wrap" role="group" aria-label="Chart values">
+              <Button
+                size="sm"
+                variant={showChanges ? "solid" : "ghost"}
+                aria-pressed={showChanges}
+                onClick={() => setShowTotals(false)}
+              >
+                Change from prior period
+              </Button>
+              <Button
+                size="sm"
+                variant={showTotals ? "solid" : "ghost"}
+                aria-pressed={showTotals}
+                onClick={() => setShowTotals(true)}
+              >
+                Period values
+              </Button>
+            </Flex>
+          )}
           {!rows.length && <Notice>No comparison periods available.</Notice>}
           {!!rows.length && (
             <>
               <MetricPlot
-                title={metricLabels[chart]}
-                data={plotData}
+                title={showChanges ? `Change in ${metricLabels[chart]}` : metricLabels[chart]}
+                data={trendData}
+                signed={showChanges}
                 series={series}
                 unit={plotMetricUnit(chart, durationUnit)}
-                line={chart === "sleep" || chart === "fatigue" || chart === "soreness"}
-                ceiling={chart === "fatigue" || chart === "soreness" ? 5 : undefined}
+                line={!showChanges && isRecovery(chart) && chart !== "nutrition"}
+                ceiling={
+                  !showChanges && (chart === "fatigue" || chart === "soreness") ? 5 : undefined
+                }
               />
               {chart === "completion" && (
                 <MetricPlot
-                  title="Session adherence"
-                  data={plotData}
+                  title={showChanges ? "Change in session adherence" : "Session adherence"}
+                  data={trendData}
+                  signed={showChanges}
                   series={[{ name: "adherence", label: "Adherence", color: plotColors[0] }]}
-                  unit="%"
-                  ceiling={100}
+                  unit={showChanges ? "percentage points" : "%"}
+                  ceiling={showChanges ? undefined : 100}
                 />
               )}
               <Disclosure label="Detailed values">
@@ -429,9 +512,59 @@ export const MetricsCharts = ({
               </Disclosure>
             </>
           )}
+          <Disclosure label="How this metric is calculated">
+            <Text fontSize="sm" color="fg.muted">
+              {descriptions[chart]}
+            </Text>
+          </Disclosure>
         </Panel>
       ) : (
         <Notice>Enable dashboard charts in Settings to see comparisons.</Notice>
+      )}
+      {recovery.length > 0 && (
+        <Stack as="section" gap="3">
+          <Flex align="baseline" justify="space-between" gap="2" wrap="wrap">
+            <Heading as="h2" size="md">
+              Recovery and nutrition
+            </Heading>
+            {training.length === 0 && report.window && (
+              <Badge variant="surface">{windowLabel(report.window)}</Badge>
+            )}
+          </Flex>
+          <SummaryGrid metrics={recovery} total={report.total} unit={durationUnit} />
+        </Stack>
+      )}
+      {coverage.length > 0 && (
+        <Panel>
+          <Disclosure label="Measurement coverage">
+            <Stack as="ul" listStyleType="none" gap="2">
+              {coverage.map(({ metric, label, coverage }) => (
+                <Text key={`${metric}/${label}`} as="li" fontSize="sm">
+                  <Text as="span" fontWeight="semibold">
+                    {summaryTitle[metric] ?? metricLabels[metric]} · {label}
+                  </Text>
+                  {" · "}
+                  {coverage}
+                </Text>
+              ))}
+            </Stack>
+          </Disclosure>
+        </Panel>
+      )}
+      {reviewUrl && report.periods.length > 0 && (
+        <Panel as="section">
+          <Disclosure label="Weekly reviews">
+            <Stack as="ul" listStyleType="none" gap="2">
+              {report.periods.map((period) => (
+                <li key={period.id}>
+                  <Link asChild variant="underline">
+                    <RouterLink to={reviewUrl(period.id)}>{period.label}</RouterLink>
+                  </Link>
+                </li>
+              ))}
+            </Stack>
+          </Disclosure>
+        </Panel>
       )}
     </Stack>
   );

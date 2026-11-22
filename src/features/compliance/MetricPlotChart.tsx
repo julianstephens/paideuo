@@ -6,19 +6,36 @@ import {
   Legend,
   Line,
   LineChart,
+  ReferenceLine,
   Tooltip,
   XAxis,
   YAxis,
 } from "recharts";
 import type { MetricPlotProps } from "./MetricPlot";
 
-const MetricPlotChart = ({ title, data, series, unit, line = false, ceiling }: MetricPlotProps) => {
+const MetricPlotChart = ({
+  title,
+  data,
+  series,
+  unit,
+  line = false,
+  ceiling,
+  signed,
+}: MetricPlotProps) => {
   const chart = useChart({ data, series });
   const number = chart.formatNumber({ maximumFractionDigits: 2 });
   const axes = [
     <CartesianGrid key="grid" vertical={false} stroke={chart.color("border.muted")} />,
     <XAxis key="x" dataKey="label" tickLine={false} minTickGap={16} />,
-    <YAxis key="y" width={48} tickLine={false} domain={[0, ceiling ?? "auto"]} />,
+    <YAxis
+      key="y"
+      width={48}
+      tickLine={false}
+      domain={
+        signed ? [(min) => Math.min(0, min), (max) => Math.max(0, max)] : [0, ceiling ?? "auto"]
+      }
+    />,
+    signed && <ReferenceLine key="zero" y={0} stroke={chart.color("fg.muted")} />,
     <Tooltip
       key="tooltip"
       cursor={false}

@@ -1,5 +1,7 @@
 const { add, plannedAerobic, measuredAerobic } = require(__hooks + "/aerobic.cjs");
 
+const { isRest, isOptional } = require(__hooks + "/training-prescription.cjs");
+
 const normalized = (value) =>
   String(value ?? "")
     .toLowerCase()
@@ -54,6 +56,7 @@ const progression = (sessions) => {
   const sourceSessions = [];
 
   for (const session of sessions) {
+    if (isRest(session)) continue;
     const status = session.status;
     const prescription = session.prescription ?? {};
     const results = new Map(
@@ -67,6 +70,7 @@ const progression = (sessions) => {
     });
 
     for (const component of prescription.components ?? []) {
+      if (isOptional(component)) continue;
       const name = normalized(component.name);
       const target = component.targets ?? {};
       const result = status === "completed" ? results.get(component.key) : null;

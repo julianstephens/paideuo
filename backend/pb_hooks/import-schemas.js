@@ -1,3 +1,5 @@
+const { sessionTypes } = require(__hooks + "/training-prescription.cjs");
+
 const VERSION = 1;
 const limits = Object.freeze({
   blocks: 100,
@@ -400,11 +402,7 @@ const prescription = (value, index) => {
     fail(`${label} planned RPE range must be in ascending order.`);
   return {
     title: text(fields.title, `${label} title`, 200, true),
-    sessionType: choice(
-      fields.sessionType,
-      ["climbing", "strength", "conditioning", "mobility", "other", "rest"],
-      "session type",
-    ),
+    sessionType: choice(fields.sessionType, sessionTypes, "session type"),
     description: text(fields.description ?? "", `${label} description`, 10000),
     notes: text(fields.notes ?? "", `${label} notes`, 10000),
     plannedDurationMin,
@@ -428,8 +426,51 @@ const prescription = (value, index) => {
   };
 };
 
+const normalizeTemplates = (value, context) => {
+  const data = object(value, ["templates"], ["templates"], "session templates import data");
+  const templates = list(data.templates, 100, "session templates").map((raw, index) => {
+    const template = object(
+      raw,
+      [
+        "id",
+        "externalId",
+        "name",
+        "sessionType",
+        "description",
+        "plannedDurationMin",
+        "plannedDurationMax",
+        "plannedRpeMin",
+        "plannedRpeMax",
+        "plannedRpe",
+        "plannedIntensity",
+        "components",
+      ],
+      ["externalId", "name", "sessionType"],
+      `session template ${index + 1}`,
+    );
+    const { id, externalId: key, name, ...fields } = template;
+    return {
+      id: authorize(id, "session-template", "template id", context),
+      externalId: externalId(key, "template external ID"),
+      workout: prescription({ ...fields, title: name }, index),
+    };
+  });
+  unique(templates, (template) => template.externalId, "template external IDs");
+  unique(
+    templates.filter((template) => template.id),
+    (template) => template.id,
+    "template IDs",
+  );
+  return { templates };
+};
+
 const normalizeProgram = (value, context) => {
-  const data = object(value, ["program", "blocks"], ["program", "blocks"], "program import data");
+  const data = object(
+    value,
+    ["program", "blocks", "templateWorkoutKeys"],
+    ["program", "blocks"],
+    "program import data",
+  );
   const identity = object(
     data.program,
     ["id", "externalId", "name", "description", "objective", "status"],
@@ -448,7 +489,7 @@ const normalizeProgram = (value, context) => {
       const slots = list(block.slots, limits.slots, "block slots").map((rawSlot, slotIndex) => {
         const slot = object(
           rawSlot,
-          ["id", "externalId", "weekday", "position", "label"],
+          ["id", "externalId", "weekday", "position", "label", "templateExternalId"],
           ["externalId", "weekday", "position", "label"],
           `slot ${slotIndex + 1}`,
         );
@@ -458,6 +499,14 @@ const normalizeProgram = (value, context) => {
           weekday: whole(slot.weekday, "slot weekday", 1, 7),
           position: whole(slot.position, "slot position", 1),
           label: text(slot.label, "slot label", 200, true),
+          ...(has(slot, "templateExternalId")
+            ? {
+                templateExternalId:
+                  slot.templateExternalId === null
+                    ? null
+                    : externalId(slot.templateExternalId, "slot template external ID"),
+              }
+            : {}),
         };
       });
       const slotIds = new Set(slots.map((slot) => slot.externalId));
@@ -538,7 +587,14 @@ const normalizeProgram = (value, context) => {
     (week) => week.id,
     "program week IDs",
   );
+  const templateWorkoutKeys = list(
+    data.templateWorkoutKeys ?? [],
+    100,
+    "template workout keys",
+  ).map((key) => externalId(key, "template workout key"));
+  unique(templateWorkoutKeys, (key) => key, "template workout keys");
   return {
+    ...(templateWorkoutKeys.length ? { templateWorkoutKeys } : {}),
     program: {
       id: authorize(identity.id, "program", "program id", context),
       externalId: externalId(identity.externalId, "program external ID"),
@@ -849,6 +905,7 @@ const normalizeHeartRateRecording = (value, context) => {
 
 const normalizers = {
   program: normalizeProgram,
+  "session-templates": normalizeTemplates,
   "workout-component-results": normalizeWorkoutResults,
   "daily-check-ins": normalizeDailyCheckIns,
   "heart-rate-recording": normalizeHeartRateRecording,

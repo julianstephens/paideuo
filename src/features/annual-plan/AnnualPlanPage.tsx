@@ -1,9 +1,19 @@
-import { Badge, Box, Button, Flex, Heading, Link, Stack, Text } from "@chakra-ui/react";
+import {
+  Badge,
+  Box,
+  Button,
+  Flex,
+  Heading,
+  Link,
+  NativeSelect,
+  Stack,
+  Text,
+} from "@chakra-ui/react";
 import { useQuery } from "@tanstack/react-query";
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import type { CSSProperties } from "react";
 import { Link as RouterLink, useSearchParams } from "react-router";
-import { Notice, PageHeader, Panel } from "../../components/ui";
+import { FormField, Notice, PageHeader, Panel } from "../../components/ui";
 import { errorMessage } from "../../lib/api/request";
 import { useSession } from "../auth/session";
 import { addDays, dateKey, formatDate, localToday, monday } from "../calendar/dates";
@@ -14,6 +24,7 @@ import type { Span } from "./annualPlan";
 import "./annual-plan.scss";
 
 const palettes = ["blue", "teal", "orange", "purple"];
+const quarterLabels = ["Jan–Mar", "Apr–Jun", "Jul–Sep", "Oct–Dec"];
 const hoursFormat = new Intl.NumberFormat(undefined, { maximumFractionDigits: 2 });
 const dateRange = ({ start, end }: Span) =>
   [start, end].map((date) => formatDate(new Date(date), { dateStyle: "medium" })).join(" – ");
@@ -30,7 +41,7 @@ export const AnnualPlanPage = () => {
 const AnnualPlan = ({ ownerId }: { ownerId: string }) => {
   const [params, setParams] = useSearchParams();
   const [selectedId, select] = useState<string>();
-  const [hoverWeek, setHoverWeek] = useState<string>();
+  const [hoverWeek, setHoverWeek] = useState<{ start: string; scope: string }>();
   const today = localToday();
   const currentMonday = monday(today);
   const currentStart = dateKey(currentMonday);
@@ -42,12 +53,25 @@ const AnnualPlan = ({ ownerId }: { ownerId: string }) => {
       : today.getUTCFullYear();
   const requestedQuarter = params.get("quarter") ?? "";
   const quarter = /^[1-4]$/.test(requestedQuarter) ? Number(requestedQuarter) : 0;
+  const requestedMonth = params.get("month") ?? "";
+  const month = /^(?:[1-9]|1[0-2])$/.test(requestedMonth) ? Number(requestedMonth) : 0;
+  const scope = `${year}/${quarter}/${month}`;
+  if (hoverWeek && hoverWeek.scope !== scope) setHoverWeek(undefined);
   const showHours = params.get("hours") === "true";
-  const setView = (nextYear: number, hours: boolean, nextQuarter = quarter) =>
+  const timeline = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    if (timeline.current) timeline.current.scrollLeft = 0;
+  }, [year, quarter, month]);
+
+  const setView = (nextYear: number, hours: boolean, nextQuarter = quarter, nextMonth = month) =>
     setParams({
       year: yearKey(nextYear),
       ...(hours ? { hours: "true" } : {}),
-      ...(nextQuarter ? { quarter: String(nextQuarter) } : {}),
+      ...(nextMonth
+        ? { month: String(nextMonth) }
+        : nextQuarter
+          ? { quarter: String(nextQuarter) }
+          : {}),
     });
 
   const plan = useQuery({
@@ -60,8 +84,12 @@ const AnnualPlan = ({ ownerId }: { ownerId: string }) => {
     enabled: showHours,
   });
 
-  const { columns, place, visible, months, weeks } = yearTimeline(year, quarter);
-  const programs = (plan.data?.programs ?? []).filter(visible);
+  const { columns, place, visible, months, weeks } = yearTimeline(year, quarter, month);
+  const yearMonths = yearTimeline(year).months;
+  const allPrograms = plan.data?.programs ?? [];
+  const programs = allPrograms.filter(visible);
+  const zoom = month ? `month-${month}` : quarter ? `quarter-${quarter}` : "year";
+  const zoomed = month > 0 || quarter > 0;
   const lanes = programLanes(programs);
   const selectedProgram = programs.find((program) =>
     program.blocks.some((block) => block.id === selectedId && visible(block)),
@@ -70,7 +98,7 @@ const AnnualPlan = ({ ownerId }: { ownerId: string }) => {
   const workload = new Map(hours.data?.workload.map((total) => [total.start, total]));
   const maxMinutes = Math.max(1, ...Array.from(workload.values(), ({ minutes }) => minutes));
   const current = (week: Span) => week.start <= currentEnd && week.end >= currentStart;
-  const inspectedWeek = weeks.find(({ start }) => start === hoverWeek);
+  const inspectedWeek = weeks.find(({ start }) => start === hoverWeek?.start);
   const workloadLabel = (week: Span) => {
     const total = workload.get(week.start);
     if (!total) return "No scheduled prescriptions";
@@ -118,24 +146,54 @@ const AnnualPlan = ({ ownerId }: { ownerId: string }) => {
           <Button
             size="sm"
             variant={showHours ? "solid" : "outline"}
-            aria-pressed={showHours}
+            aria-expanded={showHours}
+            aria-controls="annual-hours-overlay"
             onClick={() => setView(year, !showHours)}
           >
-            Planned hours
+            {showHours ? "Hide weekly planned hours" : "Show weekly planned hours"}
           </Button>
         </Flex>
-        <Flex gap="1" wrap="wrap" role="group" aria-label="Timeline scale">
-          {["Full year", "Jan–Mar", "Apr–Jun", "Jul–Sep", "Oct–Dec"].map((label, index) => (
-            <Button
-              key={label}
-              size="xs"
-              variant={quarter === index ? "subtle" : "ghost"}
-              aria-pressed={quarter === index}
-              onClick={() => setView(year, showHours, index)}
-            >
-              {label}
+        <Flex gap="3" align="end" wrap="wrap">
+          <FormField as="div" w={{ base: "full", sm: "16rem" }}>
+            <label htmlFor="annual-timeline-zoom">Timeline zoom</label>
+            <NativeSelect.Root>
+              <NativeSelect.Field
+                id="annual-timeline-zoom"
+                value={zoom}
+                onChange={({ target }) => {
+                  const [scale, index] = target.value.split("-");
+                  setView(
+                    year,
+                    showHours,
+                    scale === "quarter" ? Number(index) : 0,
+                    scale === "month" ? Number(index) : 0,
+                  );
+                }}
+              >
+                <option value="year">Full year</option>
+                <optgroup label="Quarters">
+                  {quarterLabels.map((label, index) => (
+                    <option key={label} value={`quarter-${index + 1}`}>
+                      {label}
+                    </option>
+                  ))}
+                </optgroup>
+                <optgroup label="Months">
+                  {yearMonths.map(({ date }, index) => (
+                    <option key={index} value={`month-${index + 1}`}>
+                      {formatDate(date, { month: "long" })}
+                    </option>
+                  ))}
+                </optgroup>
+              </NativeSelect.Field>
+              <NativeSelect.Indicator />
+            </NativeSelect.Root>
+          </FormField>
+          {zoomed && (
+            <Button size="sm" variant="ghost" onClick={() => setView(year, showHours, 0, 0)}>
+              Back to full year
             </Button>
-          ))}
+          )}
         </Flex>
         <Flex gap="2" wrap="wrap">
           <Badge colorPalette="teal">Current week</Badge>
@@ -172,17 +230,18 @@ const AnnualPlan = ({ ownerId }: { ownerId: string }) => {
           </Text>
         )}
         <Box
+          ref={timeline}
           className="annual-scroll"
           tabIndex={0}
           role="region"
           aria-label="Scrollable annual timeline"
         >
           <Box
-            className={quarter ? "annual-timeline annual-quarter" : "annual-timeline"}
+            className={`annual-timeline${month ? " annual-month" : quarter ? " annual-quarter" : ""}`}
             style={{ "--annual-days": columns } as CSSProperties}
           >
             <Box className="annual-row annual-gridlines" aria-hidden="true">
-              {(quarter ? weeks : months).map((span) => (
+              {(zoomed ? weeks : months).map((span) => (
                 <Box key={span.start} gridColumn={place(span)} className="annual-divider" />
               ))}
             </Box>
@@ -192,11 +251,30 @@ const AnnualPlan = ({ ownerId }: { ownerId: string }) => {
               ))}
             </Box>
             <Box className="annual-row annual-months">
-              {months.map((month) => (
-                <Text key={month.start} gridColumn={place(month)}>
-                  {formatDate(month.date, { month: "short" })}
-                </Text>
-              ))}
+              {months.map(({ date, ...span }) => {
+                const label = formatDate(date, { month: month ? "long" : "short" });
+                return month ? (
+                  <Text key={span.start} gridColumn={place(span)} py="2">
+                    {label}
+                  </Text>
+                ) : (
+                  <Button
+                    key={span.start}
+                    gridColumn={place(span)}
+                    size="xs"
+                    variant="ghost"
+                    px="0"
+                    minW="0"
+                    aria-label={`Zoom to ${formatDate(date, { month: "long" })}`}
+                    onClick={() => {
+                      setView(year, showHours, 0, date.getUTCMonth() + 1);
+                      document.getElementById("annual-timeline-zoom")?.focus();
+                    }}
+                  >
+                    {label}
+                  </Button>
+                );
+              })}
             </Box>
             <Box className="annual-row annual-weeks">
               {weeks.map((week) => (
@@ -207,16 +285,16 @@ const AnnualPlan = ({ ownerId }: { ownerId: string }) => {
                   aria-current={current(week) ? "date" : undefined}
                   aria-label={`${dateRange(week)}${showHours && hours.isSuccess ? " · " + workloadLabel(week) : ""}`}
                   title={dateRange(week)}
-                  onFocus={() => setHoverWeek(week.start)}
-                  onMouseEnter={() => setHoverWeek(week.start)}
+                  onFocus={() => setHoverWeek({ start: week.start, scope })}
+                  onMouseEnter={() => setHoverWeek({ start: week.start, scope })}
                 >
                   <RouterLink to={calendarWeekPath(week.start)}>
-                    {quarter || current(week) ? new Date(week.start).getUTCDate() : "·"}
+                    {zoomed || current(week) ? new Date(week.start).getUTCDate() : "·"}
                   </RouterLink>
                 </Link>
               ))}
             </Box>
-            {showHours && hours.isSuccess && (
+            <Box id="annual-hours-overlay" hidden={!showHours || !hours.isSuccess}>
               <Box className="annual-row annual-hours" aria-hidden="true">
                 {weeks.map((week) => {
                   const total = workload.get(week.start);
@@ -225,7 +303,7 @@ const AnnualPlan = ({ ownerId }: { ownerId: string }) => {
                       key={week.start}
                       gridColumn={place(week)}
                       className="annual-hours-cell"
-                      onMouseEnter={() => setHoverWeek(week.start)}
+                      onMouseEnter={() => setHoverWeek({ start: week.start, scope })}
                     >
                       {!!total?.missing && <span className="annual-missing" />}
                       {!!total?.minutes && (
@@ -238,12 +316,12 @@ const AnnualPlan = ({ ownerId }: { ownerId: string }) => {
                   );
                 })}
               </Box>
-            )}
+            </Box>
             {lanes.map((lane) => (
               <Box key={lane[0].id} className="annual-programs">
                 <Box className="annual-row">
                   {lane.map((program) => {
-                    const palette = palettes[programs.indexOf(program) % palettes.length];
+                    const palette = palettes[allPrograms.indexOf(program) % palettes.length];
                     return (
                       <Link
                         key={program.id}
@@ -267,7 +345,7 @@ const AnnualPlan = ({ ownerId }: { ownerId: string }) => {
                       <Button
                         key={block.id}
                         size="xs"
-                        colorPalette={palettes[programs.indexOf(program) % palettes.length]}
+                        colorPalette={palettes[allPrograms.indexOf(program) % palettes.length]}
                         variant="subtle"
                         className="annual-block"
                         gridColumn={place(block)}

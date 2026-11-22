@@ -45,6 +45,7 @@ export type PrescriptionSummary = Pick<
 > & {
   weekId: string;
   slotId: string;
+  sessionType?: SessionType;
 };
 export type PrescriptionCell = {
   revision: string;

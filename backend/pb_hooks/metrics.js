@@ -26,7 +26,7 @@ const summarize = (sessions, entries, window) => {
       rpeSum += rpe;
       measuredRpe++;
     }
-    const value = sessionLoad(session.completion);
+    const value = sessionLoad(session.completion, session.prescription);
     if (value === null) continue;
     load = (load ?? 0) + value;
     measuredLoad++;

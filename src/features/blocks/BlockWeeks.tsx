@@ -1,4 +1,5 @@
 import {
+  Badge,
   Box,
   Button,
   Flex,
@@ -15,8 +16,10 @@ import { useId, useState } from "react";
 import { useSearchParams } from "react-router";
 import { Disclosure, FormField, Notice, Panel } from "../../components/ui";
 import { ComplianceQueryState, ComplianceSummary } from "../compliance/ComplianceSummary";
+import { MetricBar } from "../compliance/MetricBars";
 import { useCompliance } from "../compliance/compliance";
 import { formatPlannedDuration, formatPlannedRpe } from "../prescriptions/format";
+import { workoutTypes } from "../prescriptions/workoutTypes";
 import { plannedIntensities } from "../programs/programs";
 import type {
   BlockDetail,
@@ -41,13 +44,19 @@ export const weekdays = [
 ];
 
 type Workload = {
-  minutes: number;
+  minMinutes: number;
+  maxMinutes: number;
+  sessions: number;
+  rest: number;
   incomplete: number;
   intensities: Record<PlannedIntensity | "unspecified", number>;
 };
 
 const emptyWorkload = (): Workload => ({
-  minutes: 0,
+  minMinutes: 0,
+  maxMinutes: 0,
+  sessions: 0,
+  rest: 0,
   incomplete: 0,
   intensities: { easy: 0, moderate: 0, hard: 0, maximal: 0, unspecified: 0 },
 });
@@ -55,15 +64,54 @@ const emptyWorkload = (): Workload => ({
 const hours = new Intl.NumberFormat(undefined, { maximumFractionDigits: 2 });
 const formatHours = (minutes: number) => `${hours.format(minutes / 60)} h`;
 
-const WeeklyWorkload = ({ workload }: { workload: Workload }) => (
-  <Stack as="div" gap="1" fontSize="xs" fontWeight="normal">
-    <Text>{formatHours(workload.minutes)} planned</Text>
-    {workload.incomplete > 0 && <Text>{workload.incomplete} missing duration</Text>}
-    <Text textTransform="capitalize">
-      {[...plannedIntensities, "unspecified" as const]
-        .map((level) => `${level} ${workload.intensities[level]}`)
-        .join(" · ")}
-    </Text>
+const formatWorkloadHours = ({ minMinutes, maxMinutes }: Workload) =>
+  minMinutes === maxMinutes
+    ? formatHours(minMinutes)
+    : `${hours.format(minMinutes / 60)}–${hours.format(maxMinutes / 60)} h`;
+
+const intensityPalette = {
+  easy: "blue",
+  moderate: "teal",
+  hard: "orange",
+  maximal: "red",
+  unspecified: "gray",
+} as const;
+
+const WeeklyWorkload = ({ workload, max }: { workload: Workload; max: number }) => (
+  <Stack gap="2" fontWeight="normal">
+    <Flex gap="1" wrap="wrap" align="baseline" justify="space-between">
+      <Text fontWeight="bold">{formatWorkloadHours(workload)}</Text>
+      <Text fontSize="xs" color="fg.muted">
+        {workload.sessions} {workload.sessions === 1 ? "workout" : "workouts"}
+        {workload.rest > 0 && ` · ${workload.rest} rest`}
+      </Text>
+    </Flex>
+    <MetricBar value={workload.maxMinutes} max={max} />
+    <Flex gap="1" wrap="wrap">
+      {[...plannedIntensities, "unspecified" as const].map((level) =>
+        workload.intensities[level] > 0 ? (
+          <Badge key={level} colorPalette={intensityPalette[level]} textTransform="capitalize">
+            {workload.intensities[level]} {level === "unspecified" ? "no intensity" : level}
+          </Badge>
+        ) : null,
+      )}
+    </Flex>
+    {workload.incomplete > 0 && (
+      <Text fontSize="xs" color="fg.muted">
+        {workload.incomplete} missing duration
+      </Text>
+    )}
+  </Stack>
+);
+
+const WeekContext = ({ week }: { week: ProgramWeek }) => (
+  <Stack gap="1" mb="2" align="start">
+    {week.weekType === "recovery" && <Badge colorPalette="blue">Recovery</Badge>}
+    {week.focus && (
+      <Text fontSize="sm" color="fg.muted" fontWeight="normal">
+        {week.focus}
+      </Text>
+    )}
   </Stack>
 );
 
@@ -77,39 +125,73 @@ const CellButton = ({
   slot: Slot;
   session?: PrescriptionSummary;
   open: (week: ProgramWeek, slot: Slot) => void;
-}) => (
-  <Button
-    variant="ghost"
-    size="sm"
-    minH="10"
-    h="auto"
-    w="full"
-    px="1"
-    py="2"
-    justifyContent="start"
-    whiteSpace="normal"
-    textAlign="start"
-    overflowWrap="anywhere"
-    aria-label={`${session ? "Edit" : "Create"} ${slot.label} in Week ${week.position}`}
-    onClick={() => open(week, slot)}
-  >
-    {session ? (
-      <Stack gap="0" align="start" minW="0">
-        <Text fontWeight="semibold">{session.title}</Text>
-        <Text fontSize="xs" color="fg.muted" textTransform="capitalize">
-          {formatPlannedDuration(session.plannedDurationMin, session.plannedDurationMax) ??
-            "Duration missing"}
-          {" · "}
-          {formatPlannedRpe(session.plannedRpeMin, session.plannedRpeMax) ??
-            session.plannedIntensity ??
-            "Intensity unspecified"}
+}) => {
+  const type = session?.sessionType ? workoutTypes[session.sessionType] : undefined;
+  const intensity = session?.plannedIntensity;
+  const duration =
+    session && formatPlannedDuration(session.plannedDurationMin, session.plannedDurationMax);
+  const rpe = session && formatPlannedRpe(session.plannedRpeMin, session.plannedRpeMax);
+  return (
+    <Button
+      variant={session ? "subtle" : "outline"}
+      colorPalette={type?.palette ?? "gray"}
+      color="fg"
+      borderInlineStartWidth={session ? "3px" : undefined}
+      borderInlineStartColor={session ? "colorPalette.solid" : undefined}
+      borderStyle={session ? undefined : "dashed"}
+      size="sm"
+      minH="11"
+      h="auto"
+      w="full"
+      px="3"
+      py="2"
+      justifyContent="start"
+      whiteSpace="normal"
+      textAlign="start"
+      overflowWrap="anywhere"
+      aria-label={`${session ? `Edit ${session.title}` : `Add prescription for ${slot.label}`}, ${weekTitle(week)}${type ? `, ${type.label}` : ""}${duration ? `, ${duration}` : ""}${rpe ? `, ${rpe}` : ""}${intensity ? `, ${intensity} intensity` : ""}`}
+      onClick={() => open(week, slot)}
+    >
+      {session ? (
+        <Stack as="span" gap="1.5" align="start" minW="0">
+          {type && (
+            <Text as="span" fontSize="xs" color="colorPalette.fg">
+              {type.label}
+            </Text>
+          )}
+          <Text as="span" fontWeight="bold" lineHeight="short">
+            {session.title}
+          </Text>
+          {session.sessionType !== "rest" && (
+            <Flex as="span" gap="1" wrap="wrap">
+              <Badge as="span" colorPalette="gray" variant="surface">
+                {duration ?? "No duration"}
+              </Badge>
+              {rpe && (
+                <Badge as="span" colorPalette="gray" variant="surface">
+                  {rpe}
+                </Badge>
+              )}
+              {intensity && (
+                <Badge
+                  as="span"
+                  colorPalette={intensityPalette[intensity]}
+                  textTransform="capitalize"
+                >
+                  {intensity}
+                </Badge>
+              )}
+            </Flex>
+          )}
+        </Stack>
+      ) : (
+        <Text as="span" color="fg.muted">
+          Add prescription
         </Text>
-      </Stack>
-    ) : (
-      <Text color="fg.muted">No prescription</Text>
-    )}
-  </Button>
-);
+      )}
+    </Button>
+  );
+};
 
 const pinnedColumn = {
   position: "sticky",
@@ -166,21 +248,32 @@ export const BlockWeeks = ({
     block.prescriptions.map((session) => [`${session.weekId}/${session.slotId}`, session]),
   );
   const workloads = new Map(block.weeks.map((entry) => [entry.id, emptyWorkload()]));
-  let totalMinutes = 0;
-  let totalIncomplete = 0;
+  const total = emptyWorkload();
   for (const session of block.prescriptions) {
     const workload = workloads.get(session.weekId);
     if (!workload) continue;
-    workload.intensities[session.plannedIntensity ?? "unspecified"]++;
-    if (session.plannedDurationMin === null) {
-      workload.incomplete++;
-      totalIncomplete++;
-    } else {
-      workload.minutes += session.plannedDurationMin;
-      totalMinutes += session.plannedDurationMin;
+    for (const summary of [workload, total]) {
+      if (session.sessionType === "rest") {
+        summary.rest++;
+        continue;
+      }
+      summary.sessions++;
+      summary.intensities[session.plannedIntensity ?? "unspecified"]++;
+      const min = session.plannedDurationMin;
+      const max = session.plannedDurationMax ?? min;
+      if (max == null) summary.incomplete++;
+      else {
+        summary.minMinutes += min ?? 0;
+        summary.maxMinutes += max;
+      }
     }
   }
+  const hasWeekContext = block.weeks.some((entry) => entry.focus || entry.weekType === "recovery");
   const workloadFor = (week: ProgramWeek) => workloads.get(week.id) ?? emptyWorkload();
+  const maxWeekMinutes = Math.max(
+    0,
+    ...Array.from(workloads.values(), ({ maxMinutes }) => maxMinutes),
+  );
 
   return (
     <Panel as="section">
@@ -229,10 +322,14 @@ export const BlockWeeks = ({
             : `Created ${initialization.data.created} ${initialization.data.created === 1 ? "prescription" : "prescriptions"}.`}
         </Notice>
       )}
-      <Text fontWeight="semibold">
-        Block total · {formatHours(totalMinutes)} planned
-        {totalIncomplete > 0 && ` · ${totalIncomplete} missing duration`}
-      </Text>
+      <Flex gapX="4" gapY="1" wrap="wrap" align="baseline" bg="bg.inset" borderRadius="lg" p="3">
+        <Text fontWeight="bold">{formatWorkloadHours(total)} prescribed</Text>
+        <Text fontSize="sm" color="fg.muted">
+          {total.sessions} {total.sessions === 1 ? "workout" : "workouts"}
+          {total.rest > 0 && ` · ${total.rest} rest`}
+          {total.incomplete > 0 && ` · ${total.incomplete} missing duration`}
+        </Text>
+      </Flex>
       {selectedWeek && (
         <Stack
           gap="1.5"
@@ -292,13 +389,21 @@ export const BlockWeeks = ({
           <Table.Root size="sm">
             <Table.Header bg="bg.inset">
               <Table.Row>
-                <Table.ColumnHeader scope="col" {...pinnedColumn}>
+                <Table.ColumnHeader
+                  scope="col"
+                  {...pinnedColumn}
+                  rowSpan={hasWeekContext ? 3 : 2}
+                  verticalAlign="top"
+                >
                   Session slot
                 </Table.ColumnHeader>
                 {block.weeks.map((entry) => (
                   <Table.ColumnHeader
                     scope="col"
-                    minW="8rem"
+                    minW="12rem"
+                    borderBottomWidth="0"
+                    pb="0"
+                    verticalAlign="top"
                     key={entry.id}
                     bg={entry.id === selected ? "teal.subtle" : undefined}
                   >
@@ -314,8 +419,33 @@ export const BlockWeeks = ({
                     >
                       {weekTitle(entry)}
                     </Button>
-                    <WeeklyWorkload workload={workloadFor(entry)} />
                   </Table.ColumnHeader>
+                ))}
+              </Table.Row>
+              {hasWeekContext && (
+                <Table.Row>
+                  {block.weeks.map((entry) => (
+                    <Table.Cell
+                      key={entry.id}
+                      verticalAlign="top"
+                      borderBottomWidth="0"
+                      py="0"
+                      bg={entry.id === selected ? "teal.subtle" : undefined}
+                    >
+                      <WeekContext week={entry} />
+                    </Table.Cell>
+                  ))}
+                </Table.Row>
+              )}
+              <Table.Row>
+                {block.weeks.map((entry) => (
+                  <Table.Cell
+                    key={entry.id}
+                    verticalAlign="top"
+                    bg={entry.id === selected ? "teal.subtle" : undefined}
+                  >
+                    <WeeklyWorkload workload={workloadFor(entry)} max={maxWeekMinutes} />
+                  </Table.Cell>
                 ))}
               </Table.Row>
             </Table.Header>
@@ -327,6 +457,11 @@ export const BlockWeeks = ({
                       {weekdays[slot.weekday - 1]}
                     </Text>
                     <Text fontWeight="semibold">{slot.label}</Text>
+                    {slot.baselineName && (
+                      <Text fontSize="xs" color="fg.muted">
+                        Baseline: {slot.baselineName}
+                      </Text>
+                    )}
                   </Table.Cell>
                   {block.weeks.map((entry) => (
                     <Table.Cell key={entry.id} maxW="16rem" verticalAlign="top">
@@ -349,7 +484,8 @@ export const BlockWeeks = ({
           <Button alignSelf="start" variant="outline" size="sm" onClick={() => openWeek(week)}>
             Edit {weekTitle(week)}
           </Button>
-          <WeeklyWorkload workload={workloadFor(week)} />
+          <WeekContext week={week} />
+          <WeeklyWorkload workload={workloadFor(week)} max={maxWeekMinutes} />
           {weekdays.map((day, index) => {
             const slots = block.slots.filter(({ weekday }) => weekday === index + 1);
             if (slots.length === 0) return null;

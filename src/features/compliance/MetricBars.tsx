@@ -1,6 +1,7 @@
-import { Box, Flex, Stack, Text } from "@chakra-ui/react";
+import { Box, Stack, Text } from "@chakra-ui/react";
+import { NumericChange } from "../../components/ComparisonChange";
+import type { DurationUnit } from "../recovery/recovery";
 import type { ComplianceTotals } from "./compliance";
-import { hours } from "./format";
 
 export const MetricBar = ({
   value,
@@ -17,7 +18,7 @@ export const MetricBar = ({
     aria-hidden="true"
     h="1.5"
     bg="bg.inset"
-    borderRadius="full"
+    borderRadius="xs"
     overflow="hidden"
   >
     {value !== null && max > 0 && (
@@ -32,29 +33,32 @@ export const MetricBar = ({
   </Box>
 );
 
-export const DurationComparison = ({ total }: { total: ComplianceTotals }) => {
-  const max = Math.max(total.plannedMinutes ?? 0, total.actualMinutes ?? 0);
+export const DurationComparison = ({
+  total,
+  unit = "hours",
+}: {
+  total: ComplianceTotals;
+  unit?: DurationUnit;
+}) => {
+  const convert = (minutes: number | null) =>
+    minutes === null ? null : unit === "hours" ? minutes / 60 : minutes;
   return (
-    <Stack gap="2" borderWidth="1px" borderRadius="md" p="3">
-      {[
-        { label: "Planned hours", value: total.plannedMinutes, muted: true },
-        { label: "Measured actual hours", value: total.actualMinutes, muted: false },
-      ].map(({ label, value, muted }) => (
-        <Stack key={label} gap="1">
-          <Flex justify="space-between" align="baseline" gap="2">
-            <Text fontSize="sm" color="fg.muted">
-              {label}
-            </Text>
-            <Text fontWeight="semibold">{hours(value)}</Text>
-          </Flex>
-          <MetricBar value={value} max={max} muted={muted} />
-        </Stack>
-      ))}
+    <Stack gap="2">
+      <NumericChange
+        label="Duration · planned to measured actual"
+        first={convert(total.plannedMinutes)}
+        second={convert(total.actualMinutes)}
+        unit={unit === "hours" ? "h" : "min"}
+        comparable={
+          total.specifiedDurations === total.scheduled &&
+          total.measuredCompletions === total.completed &&
+          total.pending === 0 &&
+          total.unresolved === 0
+        }
+      />
       <Text fontSize="xs" color="fg.muted">
-        {total.specifiedDurations} of {total.scheduled} sessions have a planned duration
-      </Text>
-      <Text fontSize="xs" color="fg.muted">
-        {total.measuredCompletions} of {total.completed} completed sessions measured
+        {total.specifiedDurations} of {total.scheduled} scheduled durations specified ·{" "}
+        {total.measuredCompletions} of {total.completed} completions measured
       </Text>
     </Stack>
   );

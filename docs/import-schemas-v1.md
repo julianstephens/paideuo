@@ -15,6 +15,7 @@ IDs. Import documents use the following envelope:
 The supported `kind` values are:
 
 - `program` for a complete hierarchical training program.
+- `session-templates` for reusable sessions in the Library.
 - `workout-component-results` for date-scoped workout and component observations.
 - `daily-check-ins` for date-scoped recovery and nutrition observations.
 - `heart-rate-recording` for heart-rate recording provenance and sample metadata, not sample values.
@@ -51,6 +52,22 @@ represent the same normalized meaning.
 Arrays remain in their supplied semantic order. The exception is daily check-ins, which are sorted
 by date after duplicate dates are rejected.
 
+## Session templates
+
+Choose **Import templates** in the Library or upload the JSON from Bulk imports. A document
+contains up to 100 entries in `data.templates`. Each entry requires `externalId`, `name`, and
+`sessionType`. It can also include `description`, `plannedDurationMin`, `plannedDurationMax`,
+`plannedRpeMin`, `plannedRpeMax`, `plannedIntensity`, and `components`. These use the same
+prescription ranges and component format as program imports. Keep component keys stable across
+updates.
+
+External IDs are unique within each owner's Library. A repeat import updates the matching template
+if its content changed. To assign an external ID to a template you previously created by hand,
+include its authorized template record `id` on the first import. Imported external IDs are shown
+in the Library. A service credential needs `imports:commit` and `programs:write`.
+
+See [the session templates sample](examples/import-v1-session-templates.json).
+
 ## Program hierarchy
 
 A `program` import has:
@@ -85,6 +102,18 @@ and defaults to one. Warmup and cooldown occur once. When segments are omitted, 
 and `rest_seconds` can specify an unlabelled work and recovery pair. The longest scheduled work
 segment supplies the planned bout target.
 
+A slot can include `templateExternalId` to copy an existing Library template into its baseline.
+The template must belong to the importing owner. A missing template is a preview conflict.
+Omit the field to preserve the slot's current baseline or set it to `null` to clear the baseline.
+Future Library edits do not modify the saved baseline. Week prescriptions remain explicit in the
+program document.
+
+In Bulk imports, select workouts under **Save to Library**, then preview the selection before
+confirming the import. Program JSON can also supply `data.templateWorkoutKeys`, an optional list
+of up to 100 prescription keys as shown in preview. Paideuo saves each selected workout as a
+template in the same transaction as the program and uses a stable import ID so repeat selections
+reconcile with the previously saved template.
+
 See [the program sample](examples/import-v1-program.json).
 
 ## Workout component results
@@ -97,6 +126,9 @@ scheduled prescription snapshot; results cannot reference live program component
 `sourceSessionId`, when supplied, is an authorized `scheduled-session` reference. Actual durations,
 sets, rounds, and positions are non-negative whole numbers (positions are at least one); RPE is
 from 1 through 10. Load is an object containing a non-negative `value` and a non-empty `unit`.
+At the workout level, `actualDurationMin` records training time used to calculate session load.
+Log optional recovery time on its component result and exclude it from the workout duration.
+
 For a component, `actualDurationMin` is elapsed time. `runningMin` and `walkingMin` are optional
 parts of that time and their sum must fit within the elapsed duration when supplied.
 `continuousBoutMin` is the longest uninterrupted effort. When running minutes are supplied, the
@@ -269,6 +301,41 @@ original response, provenance, and audit summary in the same transaction as the 
 provenance fields have the same meaning as on the generic commit endpoint.
 
 ## MCP tools
+
+### Connect ChatGPT
+
+## v0.2.0
+
+Deploy the frontend and PocketBase hooks together and apply the PocketBase migrations. Set these
+environment variables on the **PocketBase process**:
+
+| Variable                          | Value                                                                                                                                                                                                |
+| --------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `PAIDEUO_MCP_OAUTH_ORIGIN`        | The public HTTPS origin that serves the Paideuo frontend and proxies PocketBase, such as `https://paideuo.example.com`. Omit the trailing slash.                                                     |
+| `PAIDEUO_MCP_OAUTH_CLIENT_ID`     | A client ID you choose, such as `paideuo-chatgpt`.                                                                                                                                                   |
+| `PAIDEUO_MCP_OAUTH_CLIENT_SECRET` | A random server-side secret, such as the output of `openssl rand -hex 32`. Use 32–256 URL-safe characters.                                                                                           |
+| `PAIDEUO_MCP_OAUTH_REDIRECT_URI`  | Optional exact ChatGPT callback URI. Defaults to `https://chatgpt.com/connector_platform_oauth_redirect`. Set it if ChatGPT shows a different callback under `https://chatgpt.com/connector/oauth/`. |
+
+After restarting PocketBase, check that the public URL
+`/.well-known/oauth-protected-resource/api/paideuo/v1/mcp` returns JSON and lists the same origin
+that appears as the issuer at `/.well-known/oauth-authorization-server`. The bundled nginx
+configuration forwards both URLs. If you run your own proxy, forward them to PocketBase along
+with `/api/`.
+
+In ChatGPT, open **Plugins → Add custom MCP server**. Enter **Paideuo** and use
+`https://<your-paideuo-host>/api/paideuo/v1/mcp` as the **Server URL**. Choose **OAuth**, then use the
+predefined client option in **Advanced OAuth settings**. Enter the configured client ID and secret
+and set the default scope to `paideuo:mcp`. Both `client_secret_basic` and `client_secret_post`
+are supported. Create and install the plugin, sign in to Paideuo when prompted, and approve
+access. In a conversation with the plugin enabled, ask it to list your Paideuo training programs.
+See [OpenAI's custom MCP server guide](https://developers.openai.com/api/docs/guides/custom-mcp-server).
+
+This scope grants access to the MCP tools listed below for the consenting Paideuo account. The
+authorization code expires after five minutes and is single-use. Access tokens last one hour,
+and refreshing rotates both credentials. Refresh tokens expire after 30 days of inactivity. The
+OAuth client can revoke the grant at `POST /api/paideuo/v1/mcp-oauth/revoke`.
+
+### Tool behavior
 
 The JSON-RPC 2.0 MCP endpoint is `POST /api/paideuo/v1/service/mcp` for service credentials and
 `POST /api/paideuo/v1/mcp` for authenticated human sessions. It supports `tools/list` and

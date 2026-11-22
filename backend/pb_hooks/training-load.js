@@ -1,28 +1,23 @@
-const sessionTypes = ["climbing", "strength", "conditioning", "mobility", "other"];
+const { sessionTypes, isRest, isRestPrescription, requiredPlannedMinutes } = require(
+  __hooks + "/training-prescription.cjs",
+);
+const trainingTypes = sessionTypes.filter((type) => type !== "rest");
 const intensityLevels = ["easy", "moderate", "hard", "maximal", "unspecified"];
 const dayMs = 86_400_000;
 const weekMs = 7 * dayMs;
 const lastDate = Date.parse("9999-12-31");
 const formatDate = (day) => new Date(day).toISOString().slice(0, 10);
 
-const optionalComponent = (component) =>
-  component?.optional === true ||
-  component?.optional === "true" ||
-  component?.recovery === true ||
-  component?.classification === "recovery" ||
-  /sauna|cold plunge|recovery extra/i.test(`${component?.name ?? ""} ${component?.key ?? ""}`);
-
-const sessionLoad = (completion, prescription = null) => {
-  if (completion?.actualDurationMin == null || completion.sessionRpe == null) return null;
-  const optionalMinutes = (prescription?.components ?? []).reduce(
-    (total, component) =>
-      optionalComponent(component)
-        ? total + (Number.isFinite(component.durationMin) ? component.durationMin : 0)
-        : total,
-    0,
-  );
-  const workoutMinutes = Math.max(0, completion.actualDurationMin - optionalMinutes);
-  return workoutMinutes * completion.sessionRpe;
+// Session duration is measured training time. Optional recovery can be logged as a component result.
+const sessionLoad = (completion, prescription) => {
+  if (
+    isRestPrescription(prescription) ||
+    completion?.actualDurationMin == null ||
+    completion.sessionRpe == null
+  ) {
+    return null;
+  }
+  return completion.actualDurationMin * completion.sessionRpe;
 };
 
 const emptyWeek = () => ({
@@ -39,23 +34,9 @@ const emptyWeek = () => ({
 });
 
 const addSession = (week, session) => {
-  if (
-    session.status === "rest" ||
-    session.prescription?.kind === "rest" ||
-    session.prescription?.rest === true ||
-    session.prescription?.sessionType === "rest"
-  )
-    return;
+  if (isRest(session)) return;
   week.scheduledSessions++;
-  const optionalMinutes = (session.prescription?.components ?? []).reduce(
-    (total, component) =>
-      optionalComponent(component)
-        ? total + (Number.isFinite(component.durationMin) ? component.durationMin : 0)
-        : total,
-    0,
-  );
-  const plannedMinutes =
-    session.plannedMinutes != null ? Math.max(0, session.plannedMinutes - optionalMinutes) : null;
+  const plannedMinutes = requiredPlannedMinutes(session.plannedMinutes, session.prescription);
   if (plannedMinutes != null) {
     week.plannedMinutes = (week.plannedMinutes ?? 0) + plannedMinutes;
   }
@@ -66,8 +47,7 @@ const addSession = (week, session) => {
   const completion = session.completion;
   if (completion?.actualDurationMin != null) {
     week.measuredDurationSessions++;
-    week.actualMinutes =
-      (week.actualMinutes ?? 0) + Math.max(0, completion.actualDurationMin - optionalMinutes);
+    week.actualMinutes = (week.actualMinutes ?? 0) + completion.actualDurationMin;
   }
   if (completion?.sessionRpe != null) {
     week.rpeSum += completion.sessionRpe;
@@ -107,7 +87,7 @@ const rollup = (sessions, startDate, weekCount) => {
       startDate: formatDate(monday),
       endDate: formatDate(Math.min(monday + 6 * dayMs, lastDate)),
       totals: Object.fromEntries(
-        ["all", ...sessionTypes].map((type) => {
+        ["all", ...trainingTypes].map((type) => {
           const { rpeSum, rpeCount, ...total } = totals?.[type] ?? emptyWeek();
           return [type, { ...total, averageRpe: rpeCount ? rpeSum / rpeCount : null }];
         }),

@@ -32,7 +32,7 @@ export const getAnnualPlan = (year: number, hours: boolean, signal: AbortSignal)
 
 export const yearKey = (year: number) => String(year).padStart(4, "0");
 
-export const yearTimeline = (year: number, quarter = 0) => {
+export const yearTimeline = (year: number, quarter = 0, month = 0) => {
   const first = yearKey(year) + "-01-01";
   const last = yearKey(year) + "-12-31";
   const start = new Date(first);
@@ -57,7 +57,11 @@ export const yearTimeline = (year: number, quarter = 0) => {
     cursor = addDays(end, 1);
   }
 
-  const visibleMonths = quarter ? months.slice((quarter - 1) * 3, quarter * 3) : months;
+  const visibleMonths = month
+    ? months.slice(month - 1, month)
+    : quarter
+      ? months.slice((quarter - 1) * 3, quarter * 3)
+      : months;
   const visibleStart = visibleMonths[0].start;
   const visibleEnd = visibleMonths[visibleMonths.length - 1].end;
   const offset = dayIndex(visibleStart);

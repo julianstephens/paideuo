@@ -38,5 +38,17 @@ const presentComponent = (component) => ({
   targets: component.targets,
 });
 
+const templateSnapshot = (record) => ({
+  name: record.getString("name"),
+  description: record.getString("description"),
+  sessionType: record.getString("session_type"),
+  plannedDurationMin: JSON.parse(record.getString("planned_duration_min") || "null"),
+  plannedDurationMax: JSON.parse(record.getString("planned_duration_max") || "null"),
+  plannedRpeMin: JSON.parse(record.getString("planned_rpe_min") || "null"),
+  plannedRpeMax: JSON.parse(record.getString("planned_rpe_max") || "null"),
+  plannedIntensity: record.getString("planned_intensity") || null,
+  components: JSON.parse(record.getString("components") || "[]"),
+});
+
 // oxlint-disable-next-line import/no-commonjs
-module.exports = { sessionFields, componentFields, presentComponent };
+module.exports = { sessionFields, componentFields, presentComponent, templateSnapshot };

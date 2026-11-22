@@ -6,7 +6,7 @@ import {
   defineSlotRecipe,
 } from "@chakra-ui/react";
 
-const fieldTextSize = { base: "md", md: "sm" };
+const fieldTextSize = "md";
 
 const color = (light: string, dark: string) => ({
   value: { base: light, _light: light, _dark: dark },
@@ -16,18 +16,30 @@ export const theme = createSystem(
   defaultConfig,
   defineConfig({
     globalCss: {
-      html: { colorPalette: "teal" },
+      html: { colorPalette: "teal", bg: "bg.canvas" },
       body: { bg: "bg.canvas", color: "fg", fontVariantNumeric: "tabular-nums" },
+      "button:focus-visible": {
+        outline: "2px solid",
+        outlineColor: "focusRing",
+        outlineOffset: "2px",
+      },
       "*": { focusRingColor: "focusRing" },
       "a:focus-visible, summary:focus-visible, [tabindex]:focus-visible": {
         outline: "2px solid",
         outlineColor: "focusRing",
         outlineOffset: "2px",
       },
-      "main a": { color: "teal.fg", minH: { base: "11", md: "0" } },
+      "main a": { color: "teal.fg", overflowWrap: "anywhere" },
     },
     theme: {
       tokens: {
+        radii: {
+          sm: { value: "0.1875rem" },
+          md: { value: "0.25rem" },
+          lg: { value: "0.3125rem" },
+          xl: { value: "0.375rem" },
+          "2xl": { value: "0.5rem" },
+        },
         fonts: {
           heading: { value: "system-ui, sans-serif" },
           body: { value: "system-ui, sans-serif" },
@@ -36,17 +48,18 @@ export const theme = createSystem(
       semanticTokens: {
         colors: {
           bg: {
-            DEFAULT: color("#ffffff", "#171f2b"),
-            canvas: color("#f1f5f9", "#101722"),
-            panel: color("#ffffff", "#171f2b"),
-            inset: color("#edf2f7", "#202b39"),
+            DEFAULT: color("#ffffff", "#111214"),
+            canvas: color("#f3f5f7", "#000000"),
+            panel: color("#ffffff", "#111214"),
+            chrome: color("#ffffff", "#0b0c0d"),
+            inset: color("#eaedf1", "#1b1d20"),
           },
           fg: {
-            DEFAULT: color("#152234", "#f0f4f8"),
-            muted: color("#4b5b70", "#b7c4d3"),
+            DEFAULT: color("#161b23", "#f2f5f7"),
+            muted: color("#4e5967", "#aebaca"),
           },
           border: {
-            DEFAULT: color("#cbd5e1", "#3b4b5e"),
+            DEFAULT: color("#dce1e7", "#30343a"),
             control: color("#64748b", "#8b9eb5"),
           },
           focusRing: color("#08756d", "#70e5ce"),
@@ -99,6 +112,7 @@ export const theme = createSystem(
         button: defineRecipe({
           base: {
             minH: { base: "11", md: "unset" },
+            fontWeight: "semibold",
             maxW: "full",
             whiteSpace: "normal",
             overflowWrap: "anywhere",
@@ -107,7 +121,7 @@ export const theme = createSystem(
             variant: {
               outline: {
                 color: "fg",
-                borderColor: "border.control",
+                borderColor: "border",
                 _hover: { bg: "bg.inset" },
               },
             },

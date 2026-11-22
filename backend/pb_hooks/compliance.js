@@ -2,28 +2,9 @@ const intensityLevels = ["easy", "moderate", "hard", "maximal", "unspecified"];
 
 const { add, longest, plannedAerobic, measuredAerobic } = require(__hooks + "/aerobic.cjs");
 
-const isRest = (session) =>
-  session?.status === "rest" ||
-  session?.kind === "rest" ||
-  session?.rest === true ||
-  session?.prescription?.kind === "rest" ||
-  session?.prescription?.type === "rest" ||
-  session?.prescription?.rest === true ||
-  session?.prescription?.sessionType === "rest";
-
-const optionalComponent = (component) =>
-  component?.optional === true ||
-  component?.optional === "true" ||
-  component?.recovery === true ||
-  component?.classification === "recovery" ||
-  /sauna|cold plunge|recovery extra/i.test(`${component?.name ?? ""} ${component?.key ?? ""}`);
-
-const optionalMinutes = (prescription) =>
-  (prescription?.components ?? []).reduce(
-    (total, component) =>
-      optionalComponent(component) ? add(total, component.durationMin) : total,
-    null,
-  );
+const { isRest, isOptional, requiredPlannedMinutes } = require(
+  __hooks + "/training-prescription.cjs",
+);
 
 const calculate = (sessions, today) => {
   const counts = { completed: 0, skipped: 0, pending: 0, unresolved: 0, shortened: 0 };
@@ -60,7 +41,7 @@ const calculate = (sessions, today) => {
     aerobicMinutes: directAerobicMinutes,
     aerobicByModality: directAerobicByModality,
   } of sessions) {
-    if (isRest({ status, kind: prescription?.kind, rest: prescription?.rest, prescription })) {
+    if (isRest({ status, prescription })) {
       continue;
     }
     scheduledCount++;
@@ -70,8 +51,7 @@ const calculate = (sessions, today) => {
 
     const level = intensity[plannedIntensity ?? "unspecified"];
     level.sessions++;
-    const optional = optionalMinutes(prescription);
-    const prescribedMinutes = planned === null ? null : Math.max(0, planned - (optional ?? 0));
+    const prescribedMinutes = requiredPlannedMinutes(planned, prescription);
     if (prescribedMinutes !== null) {
       specifiedDurations++;
       plannedMinutes = (plannedMinutes ?? 0) + prescribedMinutes;
@@ -79,11 +59,9 @@ const calculate = (sessions, today) => {
       if (status !== "planned") resolvedPlannedMinutes += prescribedMinutes;
     }
     if (status === "completed" && actual !== null) {
-      const actualWorkoutMinutes = Math.max(0, actual - (optional ?? 0));
       measuredCompletions++;
-      actualMinutes = (actualMinutes ?? 0) + actualWorkoutMinutes;
-      if (prescribedMinutes !== null && actualWorkoutMinutes < prescribedMinutes)
-        counts.shortened++;
+      actualMinutes = (actualMinutes ?? 0) + actual;
+      if (prescribedMinutes !== null && actual < prescribedMinutes) counts.shortened++;
     }
 
     let sessionAerobic = null;
@@ -91,7 +69,7 @@ const calculate = (sessions, today) => {
       (componentResults ?? []).map((result) => [result.componentKey, result]),
     );
     for (const component of prescription?.components ?? []) {
-      if (optionalComponent(component)) continue;
+      if (isOptional(component)) continue;
       if (component.classification !== "aerobic") continue;
       const target = plannedAerobic(component);
       plannedAerobicMinutes = add(plannedAerobicMinutes, target.minutes);

@@ -37,14 +37,8 @@ const todayIn = (timezone, now = new DateTime()) =>
 
 const statusFor = (row, today) => {
   const prescription = JSON.parse(row.getString("prescription_snapshot") || "{}");
-  if (
-    prescription.kind === "rest" ||
-    prescription.type === "rest" ||
-    prescription.rest === true ||
-    prescription.sessionType === "rest"
-  ) {
-    return "rest";
-  }
+  const { isRestPrescription } = require(__hooks + "/training-prescription.cjs");
+  if (isRestPrescription(prescription)) return "rest";
   const status = row.getString("status");
   return status === "planned" && row.getString("scheduled_date") < today ? "skipped" : status;
 };

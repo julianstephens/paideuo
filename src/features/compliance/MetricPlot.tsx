@@ -20,6 +20,7 @@ export type MetricPlotProps = {
   unit?: string;
   line?: boolean;
   ceiling?: number;
+  signed?: boolean;
 };
 
 const MetricPlotChart = lazy(() => import("./MetricPlotChart"));

@@ -3,10 +3,12 @@ import { Notice, PageHeader, Panel, ProgramStatusBadge } from "../../components/
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useState } from "react";
 import { Link as RouterLink, useNavigate } from "react-router";
+import { getAnnualPlan } from "../annual-plan/annualPlan";
+import { dateKey, localToday } from "../calendar/dates";
 import { useSession } from "../auth/session";
 import { ProgramActions } from "./ProgramActions";
 import { ProgramForm } from "./ProgramForm";
-import { errorMessage, programKeys, programsApi, statuses } from "./programs";
+import { blockEditorPath, errorMessage, programKeys, programsApi, statuses } from "./programs";
 import type { ProgramStatus } from "./programs";
 
 export const ProgramsPage = () => {
@@ -26,6 +28,27 @@ const ProgramList = ({ ownerId }: { ownerId: string }) => {
     queryFn: ({ signal }) => programsApi.list(signal),
     retry: false,
   });
+  const today = localToday();
+  const todayKey = dateKey(today);
+  const year = today.getUTCFullYear();
+  const hasActiveSchedule = programs.data?.some(
+    ({ status, scheduled }) => status === "active" && scheduled,
+  );
+  const plan = useQuery({
+    queryKey: [...programKeys.owner(ownerId), "annual-plan", year],
+    queryFn: ({ signal }) => getAnnualPlan(year, false, signal),
+    enabled: !!hasActiveSchedule,
+    retry: false,
+  });
+  const active = programs.data?.filter(({ status }) => status === "active") ?? [];
+  const currentBlocks =
+    plan.data?.programs.flatMap((program) =>
+      active.some(({ id }) => id === program.id)
+        ? program.blocks
+            .filter(({ start, end }) => start <= todayKey && todayKey <= end)
+            .map((block) => ({ program, block }))
+        : [],
+    ) ?? [];
   const create = useMutation({
     mutationFn: programsApi.create,
     onSuccess: ({ id }) => {
@@ -69,6 +92,49 @@ const ProgramList = ({ ownerId }: { ownerId: string }) => {
             }
           />
         </Panel>
+      )}
+      {currentBlocks.length > 0 ? (
+        <Panel as="section">
+          <Heading size="md">Current training blocks</Heading>
+          {currentBlocks.map(({ program, block }) => (
+            <Flex key={block.id} justify="space-between" align="center" gap="3" wrap="wrap">
+              <Stack gap="1">
+                <Heading as="h3" size="sm">
+                  {block.name}
+                </Heading>
+                <Text color="fg.muted" fontSize="sm">
+                  {program.name}
+                </Text>
+                {block.objective && <Text>{block.objective}</Text>}
+              </Stack>
+              <Flex gap="2" wrap="wrap">
+                <Button asChild size="sm">
+                  <RouterLink to={blockEditorPath(program.id, block.id)}>Open block</RouterLink>
+                </Button>
+                <Button asChild size="sm" variant="outline">
+                  <RouterLink
+                    to={`/metrics?${new URLSearchParams({ view: "block", program: program.id, block: block.id })}`}
+                  >
+                    Block metrics
+                  </RouterLink>
+                </Button>
+              </Flex>
+            </Flex>
+          ))}
+        </Panel>
+      ) : (
+        active.length > 0 && (
+          <Panel as="section">
+            <Heading size="md">Active programs</Heading>
+            <Flex gap="2" wrap="wrap">
+              {active.map(({ id, name }) => (
+                <Button key={id} asChild variant="outline" size="sm">
+                  <RouterLink to={`/programs/${id}`}>{name}</RouterLink>
+                </Button>
+              ))}
+            </Flex>
+          </Panel>
+        )
       )}
       <Flex gap="2" wrap="wrap" role="group" aria-label="Filter programs">
         {(["all", ...statuses] as const).map((status) => (

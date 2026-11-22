@@ -5,6 +5,8 @@ const Module = require("node:module");
 const path = require("node:path");
 const test = require("node:test");
 
+global.__hooks = __dirname;
+
 const filename = path.join(__dirname, "import-schemas.js");
 const sourceModule = new Module(filename);
 sourceModule.filename = filename;

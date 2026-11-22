@@ -1,8 +1,9 @@
 const { observationData } = require(__hooks + "/movement-observations.cjs");
 const { reconcileTrainingComponents } = require(__hooks + "/training-components.cjs");
-const { sessionFields, componentFields, presentComponent } = require(
+const { sessionFields, componentFields, presentComponent, templateSnapshot } = require(
   __hooks + "/prescription-fields.cjs",
 );
+const templateCollection = "paideuo_session_templates";
 const schema = require(__hooks + "/import-schemas.js");
 const credentials = require(__hooks + "/service-credentials.cjs");
 
@@ -58,6 +59,7 @@ const workoutKey = (...parts) => {
 const ownerFilter = (collection, alias = "") => {
   const path = {
     program: `${alias}id = {:id} && ${alias}owner = {:owner}`,
+    "session-template": `${alias}id = {:id} && ${alias}owner = {:owner}`,
     "program-block": `${alias}id = {:id} && ${alias}program.owner = {:owner}`,
     "program-week": `${alias}id = {:id} && ${alias}block.program.owner = {:owner}`,
     "session-slot": `${alias}id = {:id} && ${alias}block.program.owner = {:owner}`,
@@ -70,6 +72,7 @@ const ownerFilter = (collection, alias = "") => {
 const authorize = (db, owner) => (type, id) => {
   const collection = {
     program: "paideuo_programs",
+    "session-template": templateCollection,
     "program-block": "paideuo_blocks",
     "program-week": "paideuo_program_weeks",
     "session-slot": "paideuo_session_slots",
@@ -106,8 +109,8 @@ const chooseRecord = (db, collection, desiredId, externalId, filter, params) => 
   };
 };
 
-const itemStatus = (record, current, desired) =>
-  !record ? "create" : JSON.stringify(current) === JSON.stringify(desired) ? "skip" : "update";
+const itemStatus = (record, current, desired, stringify) =>
+  !record ? "create" : stringify(current) === stringify(desired) ? "skip" : "update";
 
 const valueFields = (values) => Object.keys(values);
 
@@ -117,24 +120,89 @@ const planRecord = (type, key, record, desired, conflict = false) => {
   const comparable = Object.fromEntries(
     Object.entries(desired).map(([field, value]) => [field.replace(/_json$/, ""), value]),
   );
+  const stringify =
+    type === "session-template" || "baseline_json" in desired
+      ? require(__hooks + "/schedule-revisions.js").serialize
+      : JSON.stringify;
   return {
     item: {
       type,
       key,
       id: record?.id ?? null,
-      status: conflict ? "conflict" : itemStatus(record, current, comparable),
+      status: conflict ? "conflict" : itemStatus(record, current, comparable, stringify),
     },
     state: { type, key, id: record?.id ?? null, current, desired },
   };
 };
 
+const templatePlan = (db, owner, template) => {
+  const chosen = chooseRecord(
+    db,
+    templateCollection,
+    template.id,
+    template.externalId,
+    "owner = {:owner}",
+    { owner },
+  );
+  const workout = template.workout;
+  const result = planRecord(
+    "session-template",
+    template.externalId,
+    chosen.record,
+    {
+      external_id: template.externalId,
+      name: workout.title,
+      description: workout.description,
+      session_type: workout.sessionType,
+      planned_duration_min_json: workout.plannedDurationMin,
+      planned_duration_max_json: workout.plannedDurationMax ?? null,
+      planned_rpe_min_json: workout.plannedRpeMin ?? null,
+      planned_rpe_max_json: workout.plannedRpeMax ?? null,
+      planned_intensity: workout.plannedIntensity ?? "",
+      components_json: workout.components
+        .map(withComponentKey)
+        .map(componentFields)
+        .map(presentComponent),
+    },
+    chosen.conflict ||
+      Boolean(
+        template.id &&
+        chosen.record.getString("external_id") &&
+        chosen.record.getString("external_id") !== template.externalId,
+      ),
+  );
+  result.item.label = workout.title;
+  if (result.item.status === "conflict") {
+    result.item.error = "The template ID and external ID must identify the same template.";
+  }
+  return result;
+};
+
+const planTemplates = (db, owner, templates) => {
+  const results = templates.map((template) => templatePlan(db, owner, template));
+  return { items: results.map(({ item }) => item), state: results.map(({ state }) => state) };
+};
+
+const slotBaseline = (db, owner, key) => {
+  if (key === undefined) return null;
+  if (key === null) return { snapshot: null };
+  const record = first(db, templateCollection, "owner = {:owner} && external_id = {:key}", {
+    owner,
+    key,
+  });
+  return record ? { id: record.id, snapshot: templateSnapshot(record) } : {};
+};
+
 const programPlan = (db, owner, data) => {
   const items = [];
   const state = [];
+  const selected = new Set(data.templateWorkoutKeys ?? []);
+  const libraryTemplates = new Map();
   const add = (type, key, record, desired, conflict = false) => {
     const result = planRecord(type, key, record, desired, conflict);
     items.push(result.item);
     state.push(result.state);
+    return result;
   };
   const program = data.program;
   const programChoice = chooseRecord(
@@ -225,7 +293,8 @@ const programPlan = (db, owner, data) => {
             candidate.id === occupiedSlot.id ||
             candidate.externalId === occupiedSlot.getString("external_id"),
         );
-      add(
+      const baseline = slotBaseline(db, owner, slot.templateExternalId);
+      const slotPlan = add(
         "slot",
         slot.externalId,
         slotChoice.record,
@@ -234,11 +303,23 @@ const programPlan = (db, owner, data) => {
           weekday: slot.weekday,
           position: slot.position,
           label: slot.label,
+          ...(baseline ? { baseline_json: baseline.snapshot ?? null } : {}),
         },
         slotChoice.conflict ||
           Boolean(slot.id && slotChoice.record.getString("block") !== blockId) ||
-          Boolean(positionConflict),
+          Boolean(positionConflict) ||
+          Boolean(baseline && !("snapshot" in baseline)),
       );
+      if (baseline) {
+        slotPlan.state.templateId = baseline.id ?? null;
+        if (!("snapshot" in baseline)) {
+          slotPlan.item.error = `Library template "${slot.templateExternalId}" was not found.`;
+        } else if (baseline.snapshot) {
+          slotPlan.item.detail = `Baseline from ${baseline.snapshot.name} (${slot.templateExternalId})`;
+        } else {
+          slotPlan.item.detail = "Clear slot baseline";
+        }
+      }
     }
     for (const week of block.weeks) {
       const weekChoice = chooseRecord(
@@ -281,12 +362,13 @@ const programPlan = (db, owner, data) => {
       );
       const weekId = weekChoice.record?.id ?? null;
       for (const prescription of week.prescriptions) {
-        const key = workoutKey(
+        const workoutPath = [
           data.program.externalId,
           block.externalId,
           week.externalId,
           prescription.slotExternalId,
-        );
+        ];
+        const key = workoutKey(...workoutPath);
         const slot = block.slots.find(
           (candidate) => candidate.externalId === prescription.slotExternalId,
         );
@@ -359,6 +441,7 @@ const programPlan = (db, owner, data) => {
                   "duration_max_specified",
                   "duration_specified",
                   "classification",
+                  "optional",
                   "targets_json",
                 ]),
               )
@@ -375,6 +458,18 @@ const programPlan = (db, owner, data) => {
         }));
         const { serialize } = require(__hooks + "/schedule-revisions.js");
         const item = items[items.length - 1];
+        item.label = workout.title;
+        if (selected.has(key)) {
+          libraryTemplates.set(
+            key,
+            libraryTemplates.has(key)
+              ? null
+              : {
+                  externalId: `program-template:${$security.sha256(JSON.stringify(workoutPath))}`,
+                  workout,
+                },
+          );
+        }
         if (
           item.status === "skip" &&
           serialize(currentComponents) !== serialize(desiredComponents)
@@ -388,7 +483,20 @@ const programPlan = (db, owner, data) => {
       }
     }
   }
-  return { items, state };
+  for (const key of selected) {
+    if (libraryTemplates.get(key)) continue;
+    items.push({
+      type: "session-template",
+      key,
+      id: null,
+      status: "conflict",
+      error: libraryTemplates.has(key)
+        ? "Multiple workouts share this key. Use distinct external IDs before saving to the Library."
+        : "The selected workout is missing from this program.",
+    });
+  }
+  const templates = planTemplates(db, owner, [...libraryTemplates.values()].filter(Boolean));
+  return { items: items.concat(templates.items), state: state.concat(templates.state) };
 };
 
 const byExternalPrescription = (db, owner, key) => {
@@ -665,17 +773,22 @@ const observationPlan = (db, owner, document, options = {}) => {
   return { items: [result.item], state };
 };
 
-const plan = (db, owner, document, options = {}) =>
-  document.kind === "program"
-    ? programPlan(db, owner, document.data)
-    : observationPlan(db, owner, document, options);
+const plan = (db, owner, document, options = {}) => {
+  if (document.kind === "program") return programPlan(db, owner, document.data);
+  if (document.kind === "session-templates")
+    return planTemplates(db, owner, document.data.templates);
+  return observationPlan(db, owner, document, options);
+};
 
 const protectedProgram = (db, document, plan) => {
   const program = plan.items[0];
   if (
     document.kind !== "program" ||
     !program?.id ||
-    !plan.items.some(({ status }) => status === "create" || status === "update")
+    !plan.items.some(
+      ({ type, status }) =>
+        type !== "session-template" && (status === "create" || status === "update"),
+    )
   )
     return null;
   const completed = plan.state[0].current.status === "completed";
@@ -814,15 +927,38 @@ const withComponentKey = (component, index) => ({
   ...component,
 });
 
+const commitTemplates = (db, owner, plan) => {
+  const states = new Map(
+    plan.state.filter(({ type }) => type === "session-template").map((state) => [state.key, state]),
+  );
+  return plan.items
+    .filter(({ type }) => type === "session-template")
+    .map(({ key, id, label, status }) => {
+      if (status === "skip") return { key, label, status: "skipped" };
+      const { desired } = states.get(key);
+      const fields = Object.fromEntries(
+        Object.entries(desired).map(([field, value]) => [field.replace(/_json$/, ""), value]),
+      );
+      if (id) update(db, db.findRecordById(templateCollection, id), fields);
+      else save(db, templateCollection, { owner, ...fields });
+      return { key, label, status: id ? "updated" : "created" };
+    });
+};
+
 const commitProgram = (db, owner, document, plan) => {
   const data = document.data;
+  const slotStates = plan.state.filter(({ type }) => type === "slot");
+  const slotItems = plan.items.filter(({ type }) => type === "slot");
+  let slotIndex = 0;
+  const templates = commitTemplates(db, owner, plan);
   const planned = new Map(plan.items.map((item) => [`${item.type}:${item.key}`, item.status]));
   const statusFor = (type, key) => planned.get(`${type}:${key}`) ?? "create";
-  if (plan.items.every((item) => item.status === "skip")) {
+  if (plan.items.every((item) => item.type === "session-template" || item.status === "skip")) {
     return {
       programId: data.program.id ?? plan.items[0]?.id,
       scheduleSynchronization: null,
       unchanged: true,
+      ...(templates.length ? { templates } : {}),
     };
   }
   let program = data.program.id
@@ -896,16 +1032,19 @@ const commitProgram = (db, owner, document, plan) => {
             block: blockRecord.id,
             externalId: slot.externalId,
           });
+      const { desired } = slotStates[slotIndex];
+      const { status } = slotItems[slotIndex++];
       const fields = {
         block: blockRecord.id,
         external_id: slot.externalId,
         weekday: slot.weekday,
         position: slot.position,
         label: slot.label,
+        ...("baseline_json" in desired ? { baseline: desired.baseline_json } : {}),
       };
       record = !record
         ? save(db, "paideuo_session_slots", fields)
-        : statusFor("slot", slot.externalId) === "skip"
+        : status === "skip"
           ? record
           : update(db, record, fields);
       slotRecords.set(slot.externalId, record);
@@ -995,6 +1134,7 @@ const commitProgram = (db, owner, document, plan) => {
   return {
     programId: program.id,
     scheduleSynchronization: scheduled ? "review-required" : null,
+    ...(templates.length ? { templates } : {}),
   };
 };
 
@@ -1241,6 +1381,7 @@ const verifyOperationPayload = (existing, hash) => {
 
 const writePrepared = (db, owner, { document, plan }, principal) => {
   if (document.kind === "program") return commitProgram(db, owner, document, plan);
+  if (document.kind === "session-templates") return commitTemplates(db, owner, plan);
   if (document.kind === "daily-check-ins") return commitDaily(db, owner, document.data, plan);
   if (document.kind === "workout-component-results")
     return commitWorkout(db, owner, document.data, plan, principal);

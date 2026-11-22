@@ -26,6 +26,7 @@ export type TemplateFields = {
 
 export type SessionTemplate = TemplateFields & {
   id: string;
+  externalId: string | null;
   updated: string;
 };
 const endpoint = "/api/paideuo/templates";

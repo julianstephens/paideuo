@@ -9,7 +9,8 @@ import { programKeys, programsApi } from "../programs/programs";
 import { RecoveryResults } from "../recovery/RecoveryResults";
 import { weeklyReviewUrl } from "../reviews/reviews";
 import { BlockComparison } from "./BlockComparison";
-import { MetricPreferences, useMetricPreferences } from "./MetricPreferences";
+import { MetricPreferences } from "./MetricPreferences";
+import { useCheckInPreferences } from "../recovery/checkInPreferences";
 import { MetricsCharts } from "./MetricsCharts";
 import { TrainingLoad } from "./TrainingLoad";
 import { metricKeys, metricLabels, metricsKey } from "./metrics";
@@ -26,6 +27,15 @@ const views = {
   settings: "Settings",
 } as const;
 
+const periods = ["weekly", "block", "program", "custom"] as const;
+const sections = {
+  overview: "Overview",
+  compare: views.compare,
+  load: views.load,
+  recovery: views.recovery,
+  settings: views.settings,
+} as const;
+
 export const MetricsPage = () => {
   const session = useSession();
   return session.status === "signed-in" ? (
@@ -40,7 +50,7 @@ const Metrics = ({ ownerId }: { ownerId: string }) => {
     queryFn: ({ signal }) => programsApi.list(signal),
     retry: false,
   });
-  const preferences = useMetricPreferences(ownerId);
+  const preferences = useCheckInPreferences(ownerId);
   const scheduled = programs.data?.filter(({ scheduled }) => scheduled) ?? [];
   const program = scheduled.find(({ id }) => id === params.get("program")) ?? scheduled[0];
   const tab = params.get("tab") ?? "";
@@ -144,14 +154,16 @@ const Metrics = ({ ownerId }: { ownerId: string }) => {
     <Stack gap="4">
       <PageHeader title="Metrics" />
       <Tabs.Root
-        value={view}
-        onValueChange={({ value }) => updateParams({ view: value, tab: null })}
+        value={dashboard ? "overview" : view}
+        onValueChange={({ value }) =>
+          updateParams({ view: value === "overview" ? "weekly" : value, tab: null })
+        }
         variant="line"
         lazyMount
         unmountOnExit
       >
         <Tabs.List aria-label="Metrics views" flexWrap="wrap">
-          {Object.entries(views).map(([key, label]) => (
+          {Object.entries(sections).map(([key, label]) => (
             <Tabs.Trigger key={key} value={key}>
               {label}
             </Tabs.Trigger>
@@ -166,9 +178,22 @@ const Metrics = ({ ownerId }: { ownerId: string }) => {
           </Stack>
         )}
         {dashboard && (
-          <Tabs.Content value={view}>
-            <Stack gap="4">
-              <Panel>
+          <Tabs.Content value="overview">
+            <Stack gap={{ base: "4", md: "6" }}>
+              <Panel gap="4">
+                <Flex gap="1" wrap="wrap" role="group" aria-label="Report period">
+                  {periods.map((period) => (
+                    <Button
+                      key={period}
+                      size="sm"
+                      variant={view === period ? "solid" : "ghost"}
+                      aria-pressed={view === period}
+                      onClick={() => updateParams({ view: period, tab: null })}
+                    >
+                      {views[period]}
+                    </Button>
+                  ))}
+                </Flex>
                 <Flex gap="3" wrap="wrap" align="end">
                   {view !== "custom" && programPicker}
                   {view === "weekly" && (

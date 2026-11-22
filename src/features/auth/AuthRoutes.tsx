@@ -1,7 +1,8 @@
-import { Button, Container, Flex, Input, Stack, Text } from "@chakra-ui/react";
+import { Button, Container, Flex, Input, Stack } from "@chakra-ui/react";
 import type { SubmitEvent } from "react";
 import { useState } from "react";
 import { Navigate, Outlet, useLocation } from "react-router";
+import { Wordmark } from "../../app/AppIcon";
 import { ColorModeControl } from "../../app/ColorModeControl";
 import { FormField, Notice, PageHeader, Panel } from "../../components/ui";
 import { signIn } from "../../lib/api/pocketbase";
@@ -78,46 +79,46 @@ export const SignInPage = () => {
   }
 
   return (
-    <Container as="main" maxW="md" py="12">
-      <Stack gap="5">
-        <Flex justify="space-between" align="center" gap="4">
-          <Text fontSize="xl" fontWeight="bold" letterSpacing="tight">
-            Paideuo
-          </Text>
-          <ColorModeControl />
-        </Flex>
-        <Panel>
-          <PageHeader title="Sign in" />
-          <form onSubmit={(event) => void submit(event)}>
-            <Stack gap="4">
-              <FormField>
-                Email
-                <Input
-                  type="email"
-                  autoComplete="username"
-                  value={email}
-                  required
-                  onChange={(event) => setEmail(event.target.value)}
-                />
-              </FormField>
-              <FormField>
-                Password
-                <Input
-                  type="password"
-                  autoComplete="current-password"
-                  value={password}
-                  required
-                  onChange={(event) => setPassword(event.target.value)}
-                />
-              </FormField>
-              {error && <Notice role="alert">{error}</Notice>}
-              <Button type="submit" loading={pending}>
-                Sign in
-              </Button>
-            </Stack>
-          </form>
-        </Panel>
-      </Stack>
-    </Container>
+    <main className="sign-in">
+      <Container maxW="md" px="0">
+        <Stack gap="5">
+          <Flex justify="space-between" align="center" wrap="wrap" gap="4">
+            <Wordmark />
+            <ColorModeControl />
+          </Flex>
+          <Panel>
+            <PageHeader title="Sign in" />
+            <form onSubmit={(event) => void submit(event)}>
+              <Stack gap="4">
+                <FormField>
+                  Email
+                  <Input
+                    type="email"
+                    autoComplete="username"
+                    value={email}
+                    required
+                    onChange={(event) => setEmail(event.target.value)}
+                  />
+                </FormField>
+                <FormField>
+                  Password
+                  <Input
+                    type="password"
+                    autoComplete="current-password"
+                    value={password}
+                    required
+                    onChange={(event) => setPassword(event.target.value)}
+                  />
+                </FormField>
+                {error && <Notice role="alert">{error}</Notice>}
+                <Button type="submit" loading={pending}>
+                  Sign in
+                </Button>
+              </Stack>
+            </form>
+          </Panel>
+        </Stack>
+      </Container>
+    </main>
   );
 };

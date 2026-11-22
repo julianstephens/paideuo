@@ -1,4 +1,6 @@
 import { Button, Flex, Heading, Stack, Text } from "@chakra-ui/react";
+import { PrescriptionChangeBadges, PrescriptionDiff } from "../prescriptions/PrescriptionDiff";
+import { prescriptionChanges } from "../prescriptions/prescriptionChanges";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useState } from "react";
 import { Disclosure, Notice, Panel } from "../../components/ui";
@@ -205,52 +207,64 @@ const changeLabel = (change: ScheduleChange) => {
   }
 };
 
-const RevisionDetails = ({ change }: { change: ScheduleChange }) => (
-  <Stack gap="1">
-    <Text fontSize="sm">
-      {change.before && fullDate(change.before.scheduledDate)}
-      {change.before &&
-        change.after &&
-        change.before.scheduledDate !== change.after.scheduledDate &&
-        " → "}
-      {change.after &&
-        change.before?.scheduledDate !== change.after.scheduledDate &&
-        fullDate(change.after.scheduledDate)}
-    </Text>
-    {change.kind === "keep-moved" && (
-      <Text color="fg.muted">
-        The source was removed. Selecting this keeps the manually moved session and its saved
-        prescription.
+const RevisionDetails = ({ change }: { change: ScheduleChange }) => {
+  const updates =
+    change.before && change.after
+      ? prescriptionChanges(change.before.prescription, change.after.prescription)
+      : null;
+  return (
+    <Stack gap="1">
+      <Text fontSize="sm">
+        {change.before && fullDate(change.before.scheduledDate)}
+        {change.before &&
+          change.after &&
+          change.before.scheduledDate !== change.after.scheduledDate &&
+          " → "}
+        {change.after &&
+          change.before?.scheduledDate !== change.after.scheduledDate &&
+          fullDate(change.after.scheduledDate)}
       </Text>
-    )}
-    {change.manuallyMoved &&
-      change.programDate &&
-      change.after?.scheduledDate !== change.programDate && (
+      {change.kind === "keep-moved" && (
         <Text color="fg.muted">
-          The manual date stays in place. Revised program date {fullDate(change.programDate)}.
+          The source was removed. Selecting this keeps the manually moved session and its saved
+          prescription.
         </Text>
       )}
-    <Disclosure label="Prescription details">
-      <Flex gap="3" wrap="wrap">
-        {[
-          { label: "Current", session: change.before },
-          { label: "Revised", session: change.after },
-        ].map(
-          ({ label, session }) =>
-            session && (
-              <Stack key={label} flex="1 1 15rem" minW="0">
-                <Heading as="h3" size="sm">
-                  {label}
-                </Heading>
-                <Text>
-                  {session.prescription.title} · {session.prescription.sessionType} · Slot{" "}
-                  {session.slotPosition}
-                </Text>
-                <PrescriptionSnapshot prescription={session.prescription} />
-              </Stack>
-            ),
+      {change.manuallyMoved &&
+        change.programDate &&
+        change.after?.scheduledDate !== change.programDate && (
+          <Text color="fg.muted">
+            The manual date stays in place. Revised program date {fullDate(change.programDate)}.
+          </Text>
         )}
-      </Flex>
-    </Disclosure>
-  </Stack>
-);
+      {updates && (updates.fields.length > 0 || updates.components.length > 0) && (
+        <>
+          <PrescriptionChangeBadges changes={updates} />
+          <PrescriptionDiff changes={updates} />
+        </>
+      )}
+      <Disclosure label="Prescription details">
+        <Flex gap="3" wrap="wrap">
+          {[
+            { label: "Current", session: change.before },
+            { label: "Revised", session: change.after },
+          ].map(
+            ({ label, session }) =>
+              session && (
+                <Stack key={label} flex="1 1 15rem" minW="0">
+                  <Heading as="h3" size="sm">
+                    {label}
+                  </Heading>
+                  <Text>
+                    {session.prescription.title} · {session.prescription.sessionType} · Slot{" "}
+                    {session.slotPosition}
+                  </Text>
+                  <PrescriptionSnapshot prescription={session.prescription} />
+                </Stack>
+              ),
+          )}
+        </Flex>
+      </Disclosure>
+    </Stack>
+  );
+};
