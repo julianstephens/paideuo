@@ -2557,19 +2557,34 @@ test("ChatGPT OAuth discovers MCP, authorizes a Paideuo user, and rotates creden
         fetch(baseUrl + oauthPath + "/authorize?" + new URLSearchParams(params), {
           redirect: "manual",
         });
-      assert.equal(
-        (await authorizeRequest({ ...authorize, redirect_uri: "https://example.org/" })).status,
-        400,
-      );
-      const start = await authorizeRequest(authorize);
+      for (const [params, code, detail] of [
+        [{ client_id: "wrong-client" }, "invalid_client", /PAIDEUO_MCP_OAUTH_CLIENT_ID/],
+        [
+          { redirect_uri: "https://example.org/" },
+          "invalid_request",
+          /PAIDEUO_MCP_OAUTH_REDIRECT_URI/,
+        ],
+        [{ scope: "openid paideuo:mcp" }, "invalid_scope", /paideuo:mcp/],
+        [{ resource: resource + "/" }, "invalid_target", /exact MCP URL/],
+        [{ code_challenge_method: "plain" }, "invalid_request", /S256/],
+      ]) {
+        const invalid = await authorizeRequest({ ...authorize, ...params });
+        assert.equal(invalid.status, 400);
+        assert.equal(invalid.headers.get("location"), null);
+        const error = await invalid.json();
+        assert.equal(error.error, code);
+        assert.match(error.error_description, detail);
+      }
+      const start = await authorizeRequest({ ...authorize, scope: "paideuo:mcp paideuo:mcp" });
       assert.equal(start.status, 302);
-      assert.equal(new URL(start.headers.get("location")).pathname, "/mcp/authorize");
+      const consentUrl = new URL(start.headers.get("location"));
+      assert.equal(consentUrl.pathname, "/mcp/authorize");
       const consent = async (approved) =>
         new URL(
           (
             await client.send(oauthPath + "/consent", {
               method: "POST",
-              body: { ...authorize, approved },
+              body: { ...Object.fromEntries(consentUrl.searchParams), approved },
             })
           ).redirect,
         );

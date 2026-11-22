@@ -330,6 +330,12 @@ are supported. Create and install the plugin, sign in to Paideuo when prompted, 
 access. In a conversation with the plugin enabled, ask it to list your Paideuo training programs.
 See [OpenAI's custom MCP server guide](https://developers.openai.com/api/docs/guides/custom-mcp-server).
 
+If `/authorize` returns HTTP 400, check the response's `error_description`. The predefined
+client ID must match the PocketBase environment, the redirect URI must match the callback shown
+in ChatGPT, and the Server URL must exactly match the metadata's `resource` value, including the
+path and its lack of a trailing slash. ChatGPT starts the flow with an S256 PKCE challenge, so
+opening the authorize endpoint directly without the OAuth parameters also returns HTTP 400.
+
 This scope grants access to the MCP tools listed below for the consenting Paideuo account. The
 authorization code expires after five minutes and is single-use. Access tokens last one hour,
 and refreshing rotates both credentials. Refresh tokens expire after 30 days of inactivity. The

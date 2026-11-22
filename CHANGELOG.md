@@ -1,3 +1,7 @@
+## v0.5.1
+
+- Fix error message specificity for MCP oauth errors
+
 ## v0.5.0
 
 - Add additional workout session types and aerobic outcome tracking

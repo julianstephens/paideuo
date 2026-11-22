@@ -68,18 +68,50 @@ const authorizationServer = (event) => {
 
 const validResource = (resource, config) => resource === undefined || resource === config.resource;
 
-const validAuthorization = (request, config) =>
-  request.client_id === config.clientId &&
-  request.redirect_uri === config.redirect &&
-  request.response_type === "code" &&
-  (request.response_mode === undefined || request.response_mode === "query") &&
-  request.code_challenge_method === "S256" &&
-  typeof request.code_challenge === "string" &&
-  /^[A-Za-z0-9_-]{43}$/.test(request.code_challenge) &&
-  (request.scope === undefined || request.scope === "" || request.scope === scope) &&
-  validResource(request.resource, config) &&
-  (request.state === undefined ||
-    (typeof request.state === "string" && request.state.length <= 2048));
+const authorizationError = (request, config) => {
+  if (request.client_id !== config.clientId) {
+    return ["invalid_client", "Use the client ID configured in PAIDEUO_MCP_OAUTH_CLIENT_ID."];
+  }
+  if (request.redirect_uri !== config.redirect) {
+    return ["invalid_request", "Set PAIDEUO_MCP_OAUTH_REDIRECT_URI to the exact ChatGPT callback."];
+  }
+  if (request.response_type !== "code") {
+    return ["unsupported_response_type", "Set response_type to code."];
+  }
+  if (request.response_mode !== undefined && request.response_mode !== "query") {
+    return ["invalid_request", "Use query response mode."];
+  }
+  if (
+    request.code_challenge_method !== "S256" ||
+    typeof request.code_challenge !== "string" ||
+    !/^[A-Za-z0-9_-]{43}$/.test(request.code_challenge)
+  ) {
+    return ["invalid_request", "Send a valid PKCE code_challenge with code_challenge_method=S256."];
+  }
+  if (
+    request.scope !== undefined &&
+    (typeof request.scope !== "string" ||
+      request.scope.split(" ").some((value) => value && value !== scope))
+  ) {
+    return ["invalid_scope", "Use paideuo:mcp as the default OAuth scope."];
+  }
+  if (!validResource(request.resource, config)) {
+    return [
+      "invalid_target",
+      "Use the exact MCP URL published in Paideuo's protected resource metadata.",
+    ];
+  }
+  if (
+    request.state !== undefined &&
+    (typeof request.state !== "string" || request.state.length > 2048)
+  ) {
+    return ["invalid_request", "Send a valid OAuth state parameter."];
+  }
+  return null;
+};
+
+const authorizationFailure = (event, [error, description]) =>
+  event.json(400, { error, error_description: description });
 
 const queryString = (values) =>
   Object.entries(values)
@@ -89,8 +121,9 @@ const queryString = (values) =>
 const authorize = (event) => {
   const config = requireConfiguration();
   const request = event.requestInfo().query;
-  if (!validAuthorization(request, config)) throw new BadRequestError("Invalid OAuth request.");
   noStore(event);
+  const error = authorizationError(request, config);
+  if (error) return authorizationFailure(event, error);
   event.response.header().set("Referrer-Policy", "no-referrer");
   const fields = [
     "client_id",
@@ -114,10 +147,12 @@ const now = () => Math.floor(Date.now() / 1000);
 const consent = (event) => {
   const config = requireConfiguration();
   const request = event.requestInfo().body;
-  if (!validAuthorization(request, config) || typeof request.approved !== "boolean") {
-    throw new BadRequestError("Invalid OAuth request.");
-  }
   noStore(event);
+  const error = authorizationError(request, config);
+  if (error) return authorizationFailure(event, error);
+  if (typeof request.approved !== "boolean") {
+    return authorizationFailure(event, ["invalid_request", "Choose whether to approve access."]);
+  }
   const result = { iss: config.origin };
   if (request.state !== undefined) result.state = request.state;
   if (request.approved) {
