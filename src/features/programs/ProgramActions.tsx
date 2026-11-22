@@ -3,20 +3,25 @@ import { Disclosure, Notice } from "../../components/ui";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { useRef } from "react";
 import { useNavigate } from "react-router";
+import { calendarKey } from "../calendar/scheduling";
+import { metricsKey } from "../compliance/metrics";
+import { reviewKey } from "../reviews/reviews";
 import { errorMessage, programKeys, programsApi } from "./programs";
 import type { ProgramSummary } from "./programs";
 
 export const ProgramActions = ({
   program,
   ownerId,
+  onDetailPage = false,
 }: {
   program: ProgramSummary;
   ownerId: string;
+  onDetailPage?: boolean;
 }) => {
   const navigate = useNavigate();
   const queryClient = useQueryClient();
   const operationId = useRef<string | undefined>(undefined);
-  type ProgramAction = "archive" | "complete" | "duplicate" | "unschedule";
+  type ProgramAction = "archive" | "complete" | "delete" | "duplicate" | "unschedule";
   const mutation = useMutation({
     mutationFn: ({
       action,
@@ -31,9 +36,24 @@ export const ProgramActions = ({
       }
       if (action === "archive") return programsApi.archive(program.id, unscheduleWorkouts);
       if (action === "complete") return programsApi.complete(program.id);
+      if (action === "delete") return programsApi.remove(program.id);
       return programsApi.unschedule(program.id);
     },
     onSuccess: async ({ id }, { action }) => {
+      if (action === "delete") {
+        if (onDetailPage) void navigate("/programs", { replace: true });
+        queryClient.setQueryData<ProgramSummary[]>(programKeys.list(ownerId), (programs) =>
+          programs?.filter((program) => program.id !== id),
+        );
+        queryClient.removeQueries({ queryKey: programKeys.detail(ownerId, id) });
+        queryClient.removeQueries({ queryKey: reviewKey(ownerId, id) });
+        await Promise.all([
+          queryClient.invalidateQueries({ queryKey: programKeys.owner(ownerId) }),
+          queryClient.invalidateQueries({ queryKey: calendarKey(ownerId) }),
+          queryClient.invalidateQueries({ queryKey: metricsKey(ownerId) }),
+        ]);
+        return;
+      }
       await queryClient.invalidateQueries({ queryKey: programKeys.owner(ownerId) });
       if (action === "duplicate") {
         operationId.current = undefined;
@@ -106,6 +126,22 @@ export const ProgramActions = ({
               Archive
             </Button>
           )}
+          <Button
+            size="sm"
+            variant="outline"
+            colorPalette="red"
+            disabled={mutation.isPending}
+            onClick={() => {
+              if (
+                window.confirm(
+                  `Permanently delete “${program.name}” and its training plan, scheduled workouts, workout history, and weekly reviews? This cannot be undone.`,
+                )
+              )
+                mutation.mutate({ action: "delete" });
+            }}
+          >
+            Delete program
+          </Button>
         </Flex>
       </Disclosure>
       {mutation.isPending && <Notice role="status">Saving…</Notice>}

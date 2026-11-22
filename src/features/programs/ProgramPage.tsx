@@ -142,7 +142,7 @@ const ProgramEditor = ({ program, ownerId }: { program: Program; ownerId: string
           </Panel>
         )}
         <ProgramScheduling program={program} ownerId={ownerId} />
-        <ProgramActions program={program} ownerId={ownerId} />
+        <ProgramActions program={program} ownerId={ownerId} onDetailPage />
       </Panel>
       {program.scheduled && <ProgramCompliance ownerId={ownerId} programId={program.id} />}
       <SavedReviews ownerId={ownerId} programId={program.id} />

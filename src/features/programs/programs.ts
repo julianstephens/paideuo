@@ -156,6 +156,7 @@ export const programsApi = {
   get: (id: string, signal: AbortSignal) =>
     send<Program>(programPath(id), "GET", undefined, signal),
   create: (fields: ProgramFields) => send<{ id: string }>("", "POST", fields),
+  remove: (id: string) => send<{ id: string }>(programPath(id), "DELETE"),
   update: (id: string, fields: ProgramFields) =>
     send<{ id: string }>(programPath(id), "PATCH", fields),
   complete: (id: string) => send<{ id: string }>(`${programPath(id)}/complete`, "POST"),

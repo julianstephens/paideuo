@@ -1,3 +1,8 @@
+## v0.5.3
+
+- Fix bug where archived programs could not be properly unscheduled
+- Add support for deleting programs and their workouts
+
 ## v0.5.2
 
 - Add `paideuo_mcp_oauth_grants` collection for MCP OAuth consent verification

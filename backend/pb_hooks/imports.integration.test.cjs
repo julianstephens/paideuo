@@ -1724,6 +1724,103 @@ test("archived programs can be unscheduled after a schedule revision", async () 
   });
 });
 
+test("program deletion removes owned data and preserves independent copies", async () => {
+  await withPocketBase(async ({ admin, baseUrl }) => {
+    const { client, userId } = await createAuthedUser(admin, baseUrl, "delete-program");
+    const { client: other } = await createAuthedUser(admin, baseUrl, "delete-program-other");
+    const document = makeProgramDocument();
+    const preview = await previewImport(client, document);
+    const { rows } = await commitImport(client, document, preview.previewToken, {
+      operationId: "delete-program-import",
+    });
+    const domainImport = await domainRequest(client, "programs", {
+      document,
+      operationId: "delete-program-domain-import",
+    });
+    assert.equal(domainImport.rows[0].programId, rows.programId);
+    const root = `/api/paideuo/programs/${rows.programId}`;
+    const post = (action, body) => client.send(root + action, { method: "POST", body });
+    const { id: copyId } = await post("/duplicate", {
+      operationId: "2f946a91-409c-4646-b62f-010c5adbcd04",
+    });
+    const start = { startDate: "2026-01-05", timezone: "UTC" };
+    const { revision } = await post("/schedule/preview", start);
+    const schedule = await post("/schedule", { ...start, revision });
+    const [session] = await admin.collection("paideuo_scheduled_sessions").getFullList({
+      filter: admin.filter("schedule = {:id}", { id: schedule.id }),
+    });
+    await admin.collection("paideuo_session_completions").create({
+      session: session.id,
+      completed_date: session.scheduled_date,
+    });
+    await admin.collection("paideuo_workout_component_results").create({
+      session: session.id,
+      component_key: "warm-up",
+      planned_position: 1,
+      name: "Warm-up",
+      completed: true,
+    });
+    await admin.collection("paideuo_heart_rate_recordings").create({
+      owner: userId,
+      session: session.id,
+      source_workout_key: "linked-workout",
+      started_at: `${session.scheduled_date}T12:00:00Z`,
+      ended_at: `${session.scheduled_date}T13:00:00Z`,
+      timezone: "UTC",
+      device: { name: "Test device" },
+      units: "bpm",
+      algorithm: { name: "Test algorithm" },
+    });
+    await admin.collection("paideuo_schedule_revision_receipts").create({
+      schedule: schedule.id,
+      operation_id: "2f946a91-409c-4646-b62f-010c5adbcd05",
+      request_hash: "a".repeat(64),
+      applied: 1,
+    });
+    const { blockId, weekId } = session.source_attribution;
+    await admin.collection("paideuo_weekly_reviews").create({
+      program: rows.programId,
+      source_block: blockId,
+      source_week: weekId,
+      week_label: "Week 1",
+      block_label: "Base",
+    });
+
+    await assert.rejects(other.send(root, { method: "DELETE" }), { status: 404 });
+    assert.equal((await client.send(root)).scheduled, true);
+    await post("/archive");
+    await client.send(root, { method: "DELETE" });
+    await assert.rejects(client.send(root), { status: 404 });
+    const copyPath = `/api/paideuo/programs/${copyId}`;
+    assert.equal((await client.send(copyPath)).blocks.length, 2);
+    await client.send(copyPath, { method: "DELETE" });
+
+    for (const collection of [
+      "programs",
+      "blocks",
+      "program_weeks",
+      "session_slots",
+      "session_prescriptions",
+      "training_components",
+      "program_schedules",
+      "scheduled_sessions",
+      "session_completions",
+      "workout_component_results",
+      "heart_rate_recordings",
+      "schedule_revision_receipts",
+      "weekly_reviews",
+      "program_duplications",
+      "import_operations",
+    ]) {
+      assert.deepEqual(
+        await admin.collection("paideuo_" + collection).getFullList(),
+        [],
+        collection,
+      );
+    }
+  });
+});
+
 test("prescription ranges survive import, editing, templates, block duplication and scheduling", async () => {
   await withPocketBase(async ({ admin, baseUrl }) => {
     const { client } = await createAuthedUser(admin, baseUrl, "prescription-ranges");

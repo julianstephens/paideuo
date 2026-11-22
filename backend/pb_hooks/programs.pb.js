@@ -1403,6 +1403,36 @@ const handlePrograms = (event) => {
   }
 
   if (blockId !== undefined || !id) throw new NotFoundError();
+  if (method === "DELETE" && action === undefined) {
+    app.runInTransaction((tx) => {
+      const program = ownProgram(tx, id);
+      if (scheduleFor(tx, id)) unscheduleProgram(tx);
+      for (const block of children(tx, "paideuo_blocks", "program", id)) {
+        deletePrescriptions(tx, blockPrescriptions(tx, block.id));
+        for (const week of children(tx, "paideuo_program_weeks", "block", block.id)) {
+          tx.delete(week);
+        }
+        for (const slot of slotsFor(tx, block.id)) tx.delete(slot);
+        tx.delete(block);
+      }
+      const duplications = find(
+        tx,
+        "paideuo_program_duplications",
+        "source = {:id} || copy = {:id}",
+        { id },
+      );
+      for (const duplication of duplications) tx.delete(duplication);
+      const imports = find(
+        tx,
+        "paideuo_import_operations",
+        "owner = {:owner} && (result_json.rows.programId = {:id} || result_json.rows.0.programId = {:id})",
+        { owner, id },
+      );
+      for (const receipt of imports) tx.delete(receipt);
+      tx.delete(program);
+    });
+    return event.json(200, { id });
+  }
   if (method === "PATCH" && action === undefined) {
     app.runInTransaction((tx) => {
       const program = ownProgram(tx, id);
