@@ -1,3 +1,7 @@
+## v0.6.0
+
+- Add support for connecting a Google Health account
+
 ## v0.5.5
 
 - Fix bug where program deletion did not skip receipt cleanup on absent collections

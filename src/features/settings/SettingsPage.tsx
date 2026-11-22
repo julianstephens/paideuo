@@ -17,6 +17,7 @@ import { useSession } from "../auth/session";
 import { FormField, Notice, PageHeader, Panel } from "../../components/ui";
 import { errorMessage } from "../../lib/api/request";
 import { CheckInFieldSettings } from "./CheckInFieldSettings";
+import { GoogleHealthSettings } from "./GoogleHealthSettings";
 import { type ServiceCredentialScope, serviceCredentialsApi } from "./serviceCredentials";
 
 const columnLayout = { base: "minmax(0, 1fr)", md: "repeat(2, minmax(0, 1fr))" };
@@ -106,6 +107,7 @@ const AccountSettings = ({ ownerId }: { ownerId: string }) => {
     <Stack gap="6">
       <PageHeader title="Settings" />
       <CheckInFieldSettings ownerId={ownerId} />
+      <GoogleHealthSettings ownerId={ownerId} />
       <Panel as="section" gap="4">
         <Stack gap="1">
           <Heading as="h2" size="md">

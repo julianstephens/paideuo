@@ -104,6 +104,33 @@ Restart PocketBase to load the hooks. In the admin dashboard, verify that
 `paideuo_users` exists and create a record there for each app user who needs
 access.
 
+## Configure Google Health
+
+Enable the Google Health API in Google Cloud and create a Web application OAuth
+client. Register the exact public Paideuo URL ending in `/settings` as an
+authorized redirect URI, for example `https://app.example.com/settings`.
+Configure the consent screen for these restricted scopes.
+
+- `https://www.googleapis.com/auth/googlehealth.activity_and_fitness.readonly`
+- `https://www.googleapis.com/auth/googlehealth.health_metrics_and_measurements.readonly`
+
+Follow
+[Google's setup and verification requirements](https://developers.google.com/health/setup)
+for your audience.
+
+Set these variables in the **PocketBase process environment** and restart PocketBase.
+
+| Variable                               | Value                                                                                                                        |
+| -------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------- |
+| `PAIDEUO_GOOGLE_HEALTH_ORIGIN`         | Public Paideuo origin, such as `https://app.example.com`, without a trailing slash. Use HTTPS outside localhost development. |
+| `PAIDEUO_GOOGLE_HEALTH_CLIENT_ID`      | Google Web application OAuth client ID                                                                                       |
+| `PAIDEUO_GOOGLE_HEALTH_CLIENT_SECRET`  | Google Web application OAuth client secret                                                                                   |
+| `PAIDEUO_GOOGLE_HEALTH_ENCRYPTION_KEY` | Persistent 32-character secret generated with `openssl rand -base64 24`                                                      |
+
+Keep the encryption key in your server's secret store and back it up separately
+from the PocketBase database. Users need an active profile in the Google Health
+app before they can connect in **Settings → Google Health**.
+
 ## Seed a test program
 
 With PocketBase running, set `TEST_EMAIL` and `TEST_PASSWORD` for an existing

@@ -221,13 +221,14 @@ const createAuthedUser = async (admin, baseUrl, suffix) => {
 
 const withPocketBase = async (
   run,
-  { pendingMigration, env, useCollectionsExport = false } = {},
+  { pendingMigration, env, prepareHooks, useCollectionsExport = false } = {},
 ) => {
   const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "paideuo-imports-it-"));
   const dataDir = path.join(tempRoot, "pb_data");
   const hooksDir = path.join(tempRoot, "pb_hooks");
   fs.mkdirSync(dataDir, { recursive: true });
   fs.cpSync(baseHooksDir, hooksDir, { recursive: true });
+  prepareHooks?.(hooksDir);
   const migrations =
     pendingMigration || useCollectionsExport ? path.join(tempRoot, "pb_migrations") : migrationsDir;
   if (useCollectionsExport) fs.mkdirSync(migrations);
@@ -2923,6 +2924,128 @@ test("ChatGPT OAuth discovers MCP, authorizes a Paideuo user, and rotates creden
         PAIDEUO_MCP_OAUTH_ORIGIN: origin,
         PAIDEUO_MCP_OAUTH_CLIENT_ID: clientId,
         PAIDEUO_MCP_OAUTH_CLIENT_SECRET: secret,
+      },
+    },
+  );
+});
+
+test("Google Health links only verified profiles and keeps credentials private", async () => {
+  const scopes = [
+    "https://www.googleapis.com/auth/googlehealth.activity_and_fitness.readonly",
+    "https://www.googleapis.com/auth/googlehealth.health_metrics_and_measurements.readonly",
+  ];
+  const origin = "https://paideuo.example.com";
+  const endpoint = "/api/paideuo/v1/google-health";
+  const collection = "paideuo_google_health_connections";
+  const key = "0123456789abcdefghijklmnopqrstuv";
+
+  await withPocketBase(
+    async ({ admin, baseUrl, restart }) => {
+      const { client, userId } = await createAuthedUser(admin, baseUrl, "health-owner");
+      const { client: other } = await createAuthedUser(admin, baseUrl, "health-other");
+      const getStatus = (account = client) => account.send(endpoint);
+      const start = () => client.send(endpoint + "/start", { method: "POST" });
+      const complete = (account, state, code) =>
+        account.send(endpoint + "/complete", { method: "POST", body: { state, code } });
+      assert.deepEqual(await getStatus(), { available: true, connected: false });
+      await assert.rejects(getStatus(new PocketBase(baseUrl)), { status: 401 });
+
+      const first = await start();
+      await assert.rejects(complete(other, first.state, "unlinked"), { status: 400 });
+      await assert.rejects(complete(client, first.state, "unlinked"), (error) => {
+        assert.match(error.response.message, /Set up your profile/);
+        return error.status === 400;
+      });
+      await assert.rejects(complete(client, first.state, "linked"), { status: 400 });
+      assert.equal((await getStatus()).connected, false);
+
+      const partial = await start();
+      await assert.rejects(complete(client, partial.state, "partial"), (error) => {
+        assert.match(error.response.message, /Allow both requested Google Health permissions/);
+        return error.status === 400;
+      });
+      assert.equal((await getStatus()).connected, false);
+
+      const second = await start();
+      const authorization = new URL(second.authorizationUrl);
+      assert.equal(authorization.origin, "https://accounts.google.com");
+      assert.equal(authorization.searchParams.get("state"), second.state);
+      assert.equal(authorization.searchParams.get("redirect_uri"), origin + "/settings");
+      assert.deepEqual(authorization.searchParams.get("scope").split(" "), scopes);
+      assert.equal(authorization.searchParams.get("access_type"), "offline");
+      assert.equal(authorization.searchParams.get("code_challenge_method"), "S256");
+      const challenge = authorization.searchParams.get("code_challenge");
+      assert.match(challenge, /^[A-Za-z0-9_-]{43}$/);
+      assert.deepEqual(await complete(client, second.state, "linked-" + challenge), {
+        connected: true,
+      });
+      await restart();
+      assert.deepEqual(await getStatus(), { available: true, connected: true });
+      assert.deepEqual(await getStatus(other), { available: true, connected: false });
+      await assert.rejects(start(), { status: 400 });
+      await assert.rejects(complete(client, second.state, "linked"), { status: 400 });
+      await assert.rejects(client.collection(collection).getList(), { status: 403 });
+      const stored = await admin.send("/api/test/google-health-storage", {
+        method: "POST",
+        body: { owner: userId },
+      });
+      assert.deepEqual(stored, { healthUserId: "health-123", encrypted: true, stateCleared: true });
+    },
+    {
+      env: {
+        PAIDEUO_GOOGLE_HEALTH_ORIGIN: origin,
+        PAIDEUO_GOOGLE_HEALTH_CLIENT_ID: "test-client",
+        PAIDEUO_GOOGLE_HEALTH_CLIENT_SECRET: "test-secret",
+        PAIDEUO_GOOGLE_HEALTH_ENCRYPTION_KEY: key,
+      },
+      prepareHooks: (hooksDir) => {
+        const integration = path.join(hooksDir, "google-health.js");
+        const source = fs.readFileSync(integration, "utf8");
+        fs.writeFileSync(
+          integration,
+          source.replace("$http.send({ ...request, timeout: 10 })", "mockGoogle(request)") +
+            `
+const mockGoogle = (request) => {
+  if (request.url === "https://oauth2.googleapis.com/token" && request.method === "POST") {
+    const fields = Object.fromEntries(request.body.split("&").map((pair) => pair.split("=").map(decodeURIComponent)));
+    if (fields.grant_type !== "authorization_code" ||
+        fields.redirect_uri !== "${origin}/settings" ||
+        fields.client_id !== "test-client" || fields.client_secret !== "test-secret" ||
+        (fields.code !== "unlinked" && fields.code !== "partial" && fields.code !== "linked-" + pkceChallenge(fields.code_verifier))) {
+      throw new Error("Invalid token request");
+    }
+    return { statusCode: 200, json: {
+      access_token: fields.code === "unlinked" ? "unlinked" : "access-token",
+      refresh_token: "refresh-token",
+      scope: fields.code === "partial" ? "${scopes[0]}" : "${scopes[1]} ${scopes[0]}",
+    } };
+  }
+  if (request.url === "https://health.googleapis.com/v4/users/me/identity") {
+    if (request.headers.Authorization === "Bearer unlinked") {
+      return { statusCode: 400, json: { error: { details: [{ reason: "ACCOUNT_NOT_LINKED" }] } } };
+    }
+    if (request.headers.Authorization === "Bearer access-token") {
+      return { statusCode: 200, json: { healthUserId: "health-123" } };
+    }
+  }
+  throw new Error("Unexpected Google request");
+};
+`,
+        );
+        fs.writeFileSync(
+          path.join(hooksDir, "zz_google_health_storage_test.pb.js"),
+          `routerAdd("POST", "/api/test/google-health-storage", (event) => {
+  const record = event.app.findFirstRecordByFilter("${collection}", "owner = {:owner}", {
+    owner: event.requestInfo().body.owner,
+  });
+  const ciphertext = record.getString("encrypted_refresh_token");
+  return event.json(200, {
+    healthUserId: record.getString("health_user_id"),
+    encrypted: ciphertext !== "refresh-token" && toString($security.decrypt(ciphertext, "${key}")) === "refresh-token",
+    stateCleared: !record.getString("state_hash") && !record.getString("code_verifier"),
+  });
+}, $apis.requireSuperuserAuth());`,
+        );
       },
     },
   );
