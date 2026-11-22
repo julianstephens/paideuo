@@ -1,3 +1,7 @@
+## v0.5.4
+
+- Fix bug where DELETE method for programs was not properly handled
+
 ## v0.5.3
 
 - Fix bug where archived programs could not be properly unscheduled

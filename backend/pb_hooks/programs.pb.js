@@ -1403,7 +1403,7 @@ const handlePrograms = (event) => {
   }
 
   if (blockId !== undefined || !id) throw new NotFoundError();
-  if (method === "DELETE" && action === undefined) {
+  if ((method === "POST" && action === "delete") || (method === "DELETE" && action === undefined)) {
     app.runInTransaction((tx) => {
       const program = ownProgram(tx, id);
       if (scheduleFor(tx, id)) unscheduleProgram(tx);
@@ -1594,3 +1594,10 @@ for (const method of ["GET", "POST", "PATCH", "DELETE"]) {
     $apis.requireAuth("paideuo_users"),
   );
 }
+
+routerAdd(
+  "DELETE",
+  "/api/paideuo/programs/{path}",
+  handlePrograms,
+  $apis.requireAuth("paideuo_users"),
+);

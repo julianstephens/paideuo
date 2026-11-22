@@ -1786,10 +1786,10 @@ test("program deletion removes owned data and preserves independent copies", asy
       block_label: "Base",
     });
 
-    await assert.rejects(other.send(root, { method: "DELETE" }), { status: 404 });
+    await assert.rejects(other.send(root + "/delete", { method: "POST" }), { status: 404 });
     assert.equal((await client.send(root)).scheduled, true);
     await post("/archive");
-    await client.send(root, { method: "DELETE" });
+    await post("/delete");
     await assert.rejects(client.send(root), { status: 404 });
     const copyPath = `/api/paideuo/programs/${copyId}`;
     assert.equal((await client.send(copyPath)).blocks.length, 2);

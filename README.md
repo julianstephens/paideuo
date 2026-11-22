@@ -42,6 +42,11 @@ existing PocketBase instance, with no trailing slash. Use a hostname and port
 reachable from inside the frontend container. Nginx serves the frontend and
 forwards `/api/` requests to that instance.
 
+The Docker image deploys the frontend and Nginx. For releases that change
+PocketBase hooks, also update the active hooks directory on the PocketBase host
+and restart PocketBase before rolling out the frontend. For example, **Delete
+program** requires the updated `programs.pb.js` hook on the backend.
+
 ## Add Paideuo to an existing PocketBase instance
 
 For a first install of Paideuo, open **Settings → Import collections** in
