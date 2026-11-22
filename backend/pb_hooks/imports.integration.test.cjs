@@ -278,6 +278,7 @@ onRecordValidate((event) => {
         `--migrationsDir=${migrations}`,
         `--hooksDir=${hooksDir}`,
         "--hooksWatch=false",
+        "--automigrate=false",
       ],
       { cwd: repoRoot, stdio: "pipe", env: { ...process.env, ...env } },
     );
