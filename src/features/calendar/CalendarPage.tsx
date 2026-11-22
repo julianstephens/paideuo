@@ -567,6 +567,13 @@ const Calendar = ({ ownerId }: { ownerId: string }) => {
         <CheckInDialog
           key={`${checkIn.date}/${checkInSection.id}`}
           date={checkIn.date}
+          isTrainingDay={
+            query.data
+              ? (byDay.get(checkIn.date) ?? []).some(
+                  ({ status }) => status === "planned" || status === "completed",
+                )
+              : undefined
+          }
           section={checkInSection}
           ownerId={ownerId}
           close={() => setCheckIn(undefined)}

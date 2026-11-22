@@ -47,6 +47,14 @@ const nutrition = {
     "not_applicable",
     "unsure",
   ]),
+  calories: numeric("calorie intake", 0, Infinity, false),
+  mealTiming: notes,
+  skippedMeals: numeric("number of skipped meals", 0, Number.MAX_SAFE_INTEGER),
+  morningWeightKg: numeric("morning body weight in kilograms", 0.01, Infinity, false),
+  hunger: numeric("hunger rating from 1 to 5", 1, 5),
+  digestion: numeric("digestion rating from 1 to 5", 1, 5),
+  energy: numeric("energy rating from 1 to 5", 1, 5),
+  trainingRecovery: numeric("training recovery rating from 1 to 5", 1, 5),
   proteinGrams: numeric("protein intake in grams", 0, Infinity, false),
   nutritionNotes: notes,
 };
@@ -181,7 +189,10 @@ const preferences = (event) => {
     return event.json(200, readPreferences(event.app.findRecordById("paideuo_users", owner)));
   }
   const { group = "disabled", key, keys = [key], enabled, durationUnit } = event.requestInfo().body;
-  const allowedKeys = group === "disabled" ? Object.keys(fields) : metricKeys;
+  const allowedKeys =
+    group === "disabled"
+      ? Object.keys(fields)
+      : [...metricKeys, ...require(__hooks + "/metrics.js").nutritionMetricKeys];
   if (group === "durationUnit") {
     if (durationUnit !== "hours" && durationUnit !== "minutes") {
       throw new BadRequestError("Choose hours or minutes.");

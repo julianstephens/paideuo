@@ -12,7 +12,7 @@ import { sessionCalendarUrl } from "../calendar/session-links";
 import { useCheckInPreferences } from "../recovery/checkInPreferences";
 import { metricValues, windowLabel } from "../compliance/MetricsCharts";
 import { averageRpe } from "../compliance/format";
-import { metricLabels } from "../compliance/metrics";
+import { metricLabels, nutritionMetricKeys } from "../compliance/metrics";
 import { formatPlannedRpe } from "../prescriptions/format";
 import type { DurationUnit } from "../recovery/recovery";
 import type { ReviewNotes, WeeklyReview } from "./reviews";
@@ -418,6 +418,11 @@ const ReviewMetrics = ({ review, unit }: { review: WeeklyReview; unit: DurationU
     },
   ];
   const nutritionCount = Object.values(total.nutrition).reduce((sum, value) => sum + value, 0);
+  const nutritionValues = nutritionMetricKeys.flatMap((metric) =>
+    metricValues(metric, total, unit)
+      .filter(({ value }) => value !== null)
+      .map(({ display, coverage }) => ({ label: metricLabels[metric], display, coverage })),
+  );
   return (
     <Stack gap="4">
       <Grid
@@ -482,6 +487,14 @@ const ReviewMetrics = ({ review, unit }: { review: WeeklyReview; unit: DurationU
             <Text color="fg.muted">Check-in dates unavailable</Text>
           )}
         </Panel>
+        {nutritionValues.length > 0 && (
+          <Panel as="article">
+            <Heading as="h3" size="md">
+              Nutrition log
+            </Heading>
+            <ReviewValues values={nutritionValues} />
+          </Panel>
+        )}
       </Grid>
     </Stack>
   );

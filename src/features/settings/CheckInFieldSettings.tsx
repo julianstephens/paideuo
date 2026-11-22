@@ -34,7 +34,7 @@ export const CheckInFieldSettings = ({ ownerId }: { ownerId: string }) => {
         Check-in and nutrition fields
       </Heading>
       <Text fontSize="sm" color="fg.muted">
-        Choose which fields appear in the pre-training check-in and nutrition log.
+        Choose which fields appear in the daily check-in and nutrition log.
       </Text>
       <Button
         type="button"

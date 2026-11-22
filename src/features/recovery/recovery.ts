@@ -45,26 +45,41 @@ export const nutritionChoices = [
   },
 ] as const;
 
-export const protein = {
-  key: "proteinGrams",
-  label: "Protein intake (grams)",
-  min: 0,
-  step: "any",
-  unit: "g",
-} as const;
+export const nutritionMetrics = [
+  { key: "calories", label: "Calories consumed (kcal)", min: 0, step: "any", unit: "kcal" },
+  { key: "proteinGrams", label: "Protein intake (grams)", min: 0, step: "any", unit: "g" },
+  { key: "skippedMeals", label: "Skipped meals", min: 0, step: 1, unit: "meals" },
+  { key: "morningWeightKg", label: "Morning body weight (kg)", min: 0.01, step: "any", unit: "kg" },
+  { key: "hunger", label: "Hunger (1–5)", min: 1, max: 5, step: 1, unit: "/ 5" },
+  { key: "digestion", label: "Digestion (1–5)", min: 1, max: 5, step: 1, unit: "/ 5" },
+  { key: "energy", label: "Energy (1–5)", min: 1, max: 5, step: 1, unit: "/ 5" },
+  {
+    key: "trainingRecovery",
+    label: "Training recovery (1–5)",
+    min: 1,
+    max: 5,
+    step: 1,
+    unit: "/ 5",
+  },
+] as const;
 
 export const checkInSections = [
   {
     id: "recovery",
     label: "Recovery",
-    title: "Pre-training check-in",
+    title: "Daily check-in",
     fields: [...recoveryMetrics, { key: "notes", label: "Recovery notes" }],
   },
   {
     id: "nutrition",
     label: "Nutrition",
     title: "Nutrition log",
-    fields: [...nutritionChoices, protein, { key: "nutritionNotes", label: "Nutrition notes" }],
+    fields: [
+      ...nutritionChoices,
+      ...nutritionMetrics,
+      { key: "mealTiming", label: "Meal timing" },
+      { key: "nutritionNotes", label: "Nutrition notes" },
+    ],
   },
 ] as const;
 
@@ -72,14 +87,14 @@ export const checkInFieldKeys = checkInSections.flatMap(({ fields }) =>
   fields.map(({ key }) => key),
 );
 
-type NumericMetric = (typeof recoveryMetrics)[number]["key"] | typeof protein.key;
+type NumericMetric = (typeof recoveryMetrics | typeof nutritionMetrics)[number]["key"];
 type ChoiceFields = {
   [Field in (typeof nutritionChoices)[number] as Field["key"]]:
     | Field["choices"][number]["value"]
     | null;
 };
 export type CheckInFields = Record<NumericMetric, number | null> &
-  ChoiceFields & { notes: string; nutritionNotes: string };
+  ChoiceFields & { notes: string; mealTiming: string; nutritionNotes: string };
 export type CheckInEntry = CheckInFields & { date: string };
 export type CheckInField = keyof CheckInFields;
 export type CheckInSection = (typeof checkInSections)[number];
@@ -135,7 +150,7 @@ export const summarize = (entries: CheckInEntry[], key: NumericMetric) => {
   let count = 0;
   for (const entry of entries) {
     const value = entry[key];
-    if (value === null) continue;
+    if (value == null) continue;
     count++;
     mean += (value - mean) / count;
   }

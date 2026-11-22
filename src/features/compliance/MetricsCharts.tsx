@@ -20,7 +20,7 @@ import { MetricBar } from "./MetricBars";
 import { MetricPlot, plotColors } from "./MetricPlot";
 import type { PlotPoint } from "./MetricPlot";
 import { hours, loadPoints, percent } from "./format";
-import { metricKeys, metricLabels } from "./metrics";
+import { isCheckInMetric, isNutritionMeasurement, metricKeys, metricLabels } from "./metrics";
 import type { Metric, MetricsPeriod, MetricsReport, MetricsTotal } from "./metrics";
 
 const number = new Intl.NumberFormat(undefined, { maximumFractionDigits: 2 });
@@ -34,7 +34,59 @@ const shortDate = (value: string) =>
 export const windowLabel = ({ start, end }: NonNullable<MetricsPeriod["window"]>) =>
   start === end ? shortDate(start) : `${shortDate(start)} – ${shortDate(end)}`;
 
-const descriptions: Record<Metric, string> = {
+const nutritionDetails = {
+  calories: {
+    unit: "kcal",
+    label: "Daily average",
+    description: "Average calorie intake across days with a recorded value.",
+  },
+  proteinGrams: {
+    unit: "g",
+    label: "Daily average",
+    description: "Average protein intake across days with a recorded value.",
+  },
+  morningWeightKg: {
+    unit: "kg",
+    label: "Average reading",
+    description: "Average of recorded morning weigh-ins.",
+  },
+  mealTiming: {
+    unit: "days",
+    label: "Days logged",
+    description: "Number of days with meal timing recorded.",
+  },
+  skippedMeals: {
+    unit: "meals",
+    label: "Total",
+    description:
+      "Sum of skipped meals across days with a recorded count. An explicit zero counts as a measurement.",
+  },
+  hunger: {
+    unit: "/ 5",
+    label: "Daily average",
+    description: "Average hunger rating across days with a recorded value.",
+  },
+  digestion: {
+    unit: "/ 5",
+    label: "Daily average",
+    description: "Average digestion rating across days with a recorded value.",
+  },
+  energy: {
+    unit: "/ 5",
+    label: "Daily average",
+    description: "Average energy rating across days with a recorded value.",
+  },
+  trainingRecovery: {
+    unit: "/ 5",
+    label: "Daily average",
+    description: "Average training recovery rating across days with a recorded value.",
+  },
+} satisfies Record<
+  keyof MetricsTotal["nutritionMeasurements"],
+  { unit: string; label: string; description: string }
+>;
+
+const descriptions: Record<Exclude<Metric, keyof typeof nutritionDetails>, string> = {
   duration:
     "Training duration sums planned session durations and actual durations from completed sessions. Aerobic plans use classified components across scheduled sessions. Recorded aerobic duration and coverage use completed sessions.",
   load: "Sum of actual minutes × session RPE for completed sessions with both measurements.",
@@ -56,6 +108,28 @@ type Value = {
 };
 export const metricValues = (metric: Metric, total: MetricsTotal, unit: DurationUnit): Value[] => {
   const { compliance, recovery, nutrition, load, measuredLoad } = total;
+  if (isNutritionMeasurement(metric)) {
+    const { value, count: recorded } = total.nutritionMeasurements?.[metric] ?? {
+      value: null,
+      count: 0,
+    };
+    const details = nutritionDetails[metric];
+    const unit =
+      value === 1 && (metric === "mealTiming" || metric === "skippedMeals")
+        ? details.unit.slice(0, -1)
+        : details.unit;
+    return [
+      {
+        label: details.label,
+        value,
+        display: value === null ? noData : `${count(value)} ${unit}`,
+        coverage:
+          metric === "mealTiming"
+            ? undefined
+            : `${recorded} ${recorded === 1 ? "day" : "days"} recorded`,
+      },
+    ];
+  }
   switch (metric) {
     case "duration":
       const aerobicDuration = (label: string, value: number | null, detailOnly = false) => ({
@@ -160,9 +234,6 @@ export const metricValues = (metric: Metric, total: MetricsTotal, unit: Duration
   }
 };
 
-const isRecovery = (metric: Metric) =>
-  ["sleep", "fatigue", "soreness", "nutrition"].includes(metric);
-
 export const plotMetricValue = (metric: Metric, value: number | null, unit: DurationUnit) => {
   if (value === null) return null;
   if (metric === "duration" && unit === "hours") return value / 60;
@@ -173,6 +244,7 @@ export const plotMetricValue = (metric: Metric, value: number | null, unit: Dura
 export const plotMetricUnit = (metric: Metric, unit: DurationUnit) => {
   if (metric === "duration" || metric === "sleep") return unit === "hours" ? "hr" : "min";
   if (metric === "load") return "load points";
+  if (isNutritionMeasurement(metric)) return nutritionDetails[metric].unit;
   if (metric === "fatigue" || metric === "soreness") return "/ 5";
 };
 
@@ -201,7 +273,11 @@ const SummaryCard = ({
   unit: DurationUnit;
 }) => {
   const values = metricValues(metric, total, unit);
-  const primary = values.find(({ label }) => label === highlights[metric]);
+  const primary = values.find(
+    ({ label }) =>
+      label ===
+      (isNutritionMeasurement(metric) ? nutritionDetails[metric].label : highlights[metric]),
+  );
   const supporting = values.filter((value) => !value.detailOnly && value !== primary);
   const distribution = metric === "intensity" || metric === "nutrition";
   const population = distribution
@@ -287,16 +363,23 @@ export const MetricsCharts = ({
   reviewUrl?: (weekId: string) => string;
 }) => {
   const [comparison, setComparison] = useState<Metric>("duration");
-  const [showTotals, setShowTotals] = useState(false);
+  const [showTotalsOverride, setShowTotals] = useState<boolean>();
   const { durationUnit, hiddenSummary, hiddenCharts } = preferences;
   const shown = metricKeys.filter((metric) => !hiddenCharts.includes(metric));
   const chart = selected ?? shown.find((metric) => metric === comparison) ?? shown[0];
-  const summaries = metricKeys.filter((metric) =>
-    weekly
+  const summaries = metricKeys.filter((metric) => {
+    const visible = weekly
       ? !hiddenSummary.includes(metric)
-      : shown.includes(metric) && (!selected || metric === selected),
-  );
-  const periods = chart && weekly && isRecovery(chart) ? report.days : report.periods;
+      : shown.includes(metric) && (!selected || metric === selected);
+    return (
+      visible &&
+      (!isNutritionMeasurement(metric) ||
+        selected === metric ||
+        !!report.total.nutritionMeasurements?.[metric]?.count)
+    );
+  });
+  const showTotals = showTotalsOverride ?? (!!chart && isNutritionMeasurement(chart));
+  const periods = chart && weekly && isCheckInMetric(chart) ? report.days : report.periods;
   const rows = chart
     ? periods.map((period) => ({ period, measurements: metricValues(chart, period, durationUnit) }))
     : [];
@@ -348,8 +431,8 @@ export const MetricsCharts = ({
         ),
       }))
     : plotData;
-  const training = summaries.filter((metric) => !isRecovery(metric));
-  const recovery = summaries.filter(isRecovery);
+  const training = summaries.filter((metric) => !isCheckInMetric(metric));
+  const recovery = summaries.filter(isCheckInMetric);
   const coverage = summaries.flatMap((metric) =>
     metricValues(metric, report.total, durationUnit).flatMap(({ label, coverage }) =>
       coverage ? [{ metric, label, coverage }] : [],
@@ -381,7 +464,7 @@ export const MetricsCharts = ({
             gap="3"
           >
             <Heading as="h2" size="md">
-              {weekly && isRecovery(chart) ? "Daily breakdown" : "Period comparison"}
+              {weekly && isCheckInMetric(chart) ? "Daily breakdown" : "Period comparison"}
             </Heading>
             {!selected && shown.length > 1 && (
               <FormField as="div" w="full" maxW="sm">
@@ -440,9 +523,13 @@ export const MetricsCharts = ({
                 signed={showChanges}
                 series={series}
                 unit={plotMetricUnit(chart, durationUnit)}
-                line={!showChanges && isRecovery(chart) && chart !== "nutrition"}
+                line={
+                  !showChanges &&
+                  isCheckInMetric(chart) &&
+                  !["nutrition", "mealTiming", "skippedMeals"].includes(chart)
+                }
                 ceiling={
-                  !showChanges && (chart === "fatigue" || chart === "soreness") ? 5 : undefined
+                  !showChanges && plotMetricUnit(chart, durationUnit) === "/ 5" ? 5 : undefined
                 }
               />
               {chart === "completion" && (
@@ -475,7 +562,7 @@ export const MetricsCharts = ({
                         </Heading>
                         {period.label && period.window && (
                           <Text fontSize="xs" color="fg.muted">
-                            {isRecovery(chart) ? "Check-in dates " : ""}
+                            {isCheckInMetric(chart) ? "Check-in dates " : ""}
                             {windowLabel(period.window)}
                           </Text>
                         )}
@@ -514,7 +601,9 @@ export const MetricsCharts = ({
           )}
           <Disclosure label="How this metric is calculated">
             <Text fontSize="sm" color="fg.muted">
-              {descriptions[chart]}
+              {isNutritionMeasurement(chart)
+                ? nutritionDetails[chart].description
+                : descriptions[chart]}
             </Text>
           </Disclosure>
         </Panel>

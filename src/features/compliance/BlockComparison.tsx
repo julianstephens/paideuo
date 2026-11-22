@@ -8,7 +8,13 @@ import type { ProgramSummary } from "../programs/programs";
 import type { DurationUnit } from "../recovery/recovery";
 import { MetricPlot } from "./MetricPlot";
 import { metricValues, plotMetricUnit, plotMetricValue, windowLabel } from "./MetricsCharts";
-import { metricKeys, metricLabels, metricsKey } from "./metrics";
+import {
+  isCheckInMetric,
+  isNutritionMeasurement,
+  metricKeys,
+  metricLabels,
+  metricsKey,
+} from "./metrics";
 import type { ComparedBlock, Metric, MetricsPeriod, MetricsReport } from "./metrics";
 
 type UpdateParams = (changes: Record<string, string | null>) => void;
@@ -107,19 +113,18 @@ const PickBlock = ({
 const PeriodMetrics = ({ period, unit }: { period: MetricsPeriod; unit: DurationUnit }) => (
   <Stack gap="3" as="dl">
     {metricKeys
-      .filter((metric) => metric !== "intensity")
+      .filter(
+        (metric) =>
+          metric !== "intensity" &&
+          (!isNutritionMeasurement(metric) || !!period.nutritionMeasurements?.[metric]?.count),
+      )
       .map((metric) => {
-        const dateBased =
-          metric === "sleep" ||
-          metric === "fatigue" ||
-          metric === "soreness" ||
-          metric === "nutrition";
         return (
           <Stack key={metric} gap="1">
             <Text as="dt" fontWeight="semibold">
               {metricLabels[metric]}
             </Text>
-            {dateBased && !period.window ? (
+            {isCheckInMetric(metric) && !period.window ? (
               <Text as="dd">Date window unavailable</Text>
             ) : (
               metricValues(metric, period, unit).map(({ label, display, coverage }) => (
@@ -143,8 +148,6 @@ const PeriodMetrics = ({ period, unit }: { period: MetricsPeriod; unit: Duration
 
 const columns = { base: "minmax(0, 1fr)", md: "repeat(2, minmax(0, 1fr))" };
 const comparisonMetrics = metricKeys.filter((metric) => metric !== "intensity");
-const isRecoveryMetric = (metric: Metric) =>
-  metric === "sleep" || metric === "fatigue" || metric === "soreness" || metric === "nutrition";
 
 const ComparisonCharts = ({
   blocks,
@@ -158,7 +161,7 @@ const ComparisonCharts = ({
   const id = useId();
   const [metric, setMetric] = useState<Metric>("duration");
   const measurements = (period: MetricsPeriod) => {
-    if (isRecoveryMetric(metric) && !period.window) return [];
+    if (isCheckInMetric(metric) && !period.window) return [];
     return metricValues(metric, period, unit).flatMap(({ label, value, detailOnly }) =>
       detailOnly || label === "Recorded responses"
         ? []

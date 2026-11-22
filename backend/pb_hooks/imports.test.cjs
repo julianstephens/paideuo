@@ -106,7 +106,7 @@ const database = () => {
   const cache = new Map();
   return {
     store: () => ({
-      keys: () => cache.keys(),
+      getAll: () => Object.fromEntries(cache),
       get: (key) => cache.get(key),
       set: (key, value) => cache.set(key, value),
       remove: (key) => cache.delete(key),

@@ -9,6 +9,29 @@ const windowFor = (start, end) => ({
 });
 const weekWindow = (start) => windowFor(start, start + 6 * day);
 
+const averageNutritionFields = [
+  "calories",
+  "proteinGrams",
+  "morningWeightKg",
+  "hunger",
+  "digestion",
+  "energy",
+  "trainingRecovery",
+];
+const nutritionMetricKeys = [...averageNutritionFields, "skippedMeals", "mealTiming"];
+
+const summarizeValues = (entries, read, average = true) => {
+  let sum = 0;
+  let count = 0;
+  for (const entry of entries) {
+    const value = read(entry);
+    if (!Number.isFinite(value)) continue;
+    sum += value;
+    count++;
+  }
+  return { value: count ? (average ? sum / count : sum) : null, count };
+};
+
 const summarize = (sessions, entries, window) => {
   const { calculate } = require(__hooks + "/compliance.js");
   const { sessionLoad } = require(__hooks + "/training-load.js");
@@ -33,16 +56,22 @@ const summarize = (sessions, entries, window) => {
   }
   const recovery = {};
   for (const key of ["sleepHours", "fatigue", "soreness"]) {
-    let sum = 0;
-    let count = 0;
-    for (const entry of checkIns) {
-      const value = entry[key];
-      if (value == null) continue;
-      sum += value;
-      count++;
-    }
-    recovery[key] = { mean: count ? sum / count : null, count };
+    const { value: mean, count } = summarizeValues(checkIns, (entry) => entry[key]);
+    recovery[key] = { mean, count };
   }
+  const nutritionMeasurements = Object.fromEntries(
+    averageNutritionFields.map((key) => [key, summarizeValues(checkIns, (entry) => entry[key])]),
+  );
+  nutritionMeasurements.skippedMeals = summarizeValues(
+    checkIns,
+    (entry) => entry.skippedMeals,
+    false,
+  );
+  nutritionMeasurements.mealTiming = summarizeValues(
+    checkIns,
+    (entry) => (entry.mealTiming?.trim() ? 1 : null),
+    false,
+  );
   const nutrition = { adequate: 0, likely_insufficient: 0, unsure: 0 };
   for (const { nutritionAdequacy } of checkIns) {
     if (Object.hasOwn(nutrition, nutritionAdequacy)) nutrition[nutritionAdequacy]++;
@@ -53,6 +82,7 @@ const summarize = (sessions, entries, window) => {
     measuredLoad,
     recovery,
     nutrition,
+    nutritionMeasurements,
     averageRpe: measuredRpe ? rpeSum / measuredRpe : null,
     measuredRpe,
   };
@@ -409,4 +439,12 @@ const report = (event) => {
 };
 
 // oxlint-disable-next-line import/no-commonjs
-module.exports = { report, readSessions, readCheckIns, sourceGroups, summarize, dailyBreakdown };
+module.exports = {
+  report,
+  readSessions,
+  readCheckIns,
+  sourceGroups,
+  summarize,
+  dailyBreakdown,
+  nutritionMetricKeys,
+};

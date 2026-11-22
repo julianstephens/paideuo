@@ -47,6 +47,18 @@ PocketBase hooks, also update the active hooks directory on the PocketBase host
 and restart PocketBase before rolling out the frontend. For example, **Delete
 program** requires the updated `programs.pb.js` hook on the backend.
 
+### Timezone data for PocketBase
+
+If scheduling reports **Choose a valid IANA timezone.** for a name such as
+`America/New_York`, check that `/usr/share/zoneinfo/America/New_York` exists
+inside the PocketBase container. The scheduling hook uses PocketBase's timezone
+lookup, so the timezone database must be available to the backend process.
+
+If the database is missing, add `tzdata` to the PocketBase image build. For
+an Alpine-based image, use `RUN apk add --no-cache tzdata`. For a Debian-based
+image, use `RUN apt-get update && apt-get install -y --no-install-recommends tzdata`.
+Rebuild and redeploy the PocketBase container, then retry the schedule preview.
+
 ## Add Paideuo to an existing PocketBase instance
 
 For a first install of Paideuo, open **Settings → Import collections** in
@@ -59,6 +71,10 @@ in `paideuo_users` from the admin dashboard.
 
 If you import the JSON, skip the initial migrations below. The JSON already
 contains the final collection schema.
+
+If an earlier collections export left out `paideuo_import_operations`, re-import
+the current JSON with deletion of missing collections and fields disabled.
+MCP program writes use this collection to store import receipts.
 
 ### Install using migrations
 

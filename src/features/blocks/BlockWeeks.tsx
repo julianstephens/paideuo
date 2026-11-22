@@ -6,6 +6,8 @@ import {
   Heading,
   Link,
   NativeSelect,
+  Popover,
+  Portal,
   Stack,
   Table,
   Text,
@@ -300,15 +302,44 @@ export const BlockWeeks = ({
             {compare ? "Back to week grid" : "Compare weeks"}
           </Button>
         )}
-        <Button
-          size="sm"
-          variant="outline"
-          loading={initialization.isPending}
-          disabled={!block.slots.some((slot) => slot.baselineName)}
-          onClick={() => initialization.mutate()}
-        >
-          Initialize weeks
-        </Button>
+        <Flex gap="1" align="center">
+          <Button
+            size="sm"
+            variant="outline"
+            loading={initialization.isPending}
+            disabled={!block.slots.some((slot) => slot.baselineName)}
+            onClick={() => initialization.mutate()}
+          >
+            Initialize weeks
+          </Button>
+          <Popover.Root positioning={{ placement: "bottom-end" }}>
+            <Popover.Trigger asChild>
+              <Button size="sm" variant="ghost" aria-label="Help for Initialize weeks">
+                ?
+              </Button>
+            </Popover.Trigger>
+            <Portal>
+              <Popover.Positioner>
+                <Popover.Content>
+                  <Popover.Body>
+                    <Popover.Title>Initialize weeks</Popover.Title>
+                    <Stack gap="2" mt="2" fontSize="sm">
+                      <Text>
+                        Fill empty session cells across all existing weeks with copies of each
+                        slot’s assigned baseline, including its session details and components.
+                        Existing prescriptions and the number of weeks stay the same.
+                      </Text>
+                      <Text>
+                        Slots without a baseline are skipped. Assign a baseline to at least one slot
+                        to enable the button.
+                      </Text>
+                    </Stack>
+                  </Popover.Body>
+                </Popover.Content>
+              </Popover.Positioner>
+            </Portal>
+          </Popover.Root>
+        </Flex>
       </Flex>
       {initialization.isError && (
         <Notice role="alert">

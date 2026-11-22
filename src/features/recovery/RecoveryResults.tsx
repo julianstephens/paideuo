@@ -24,7 +24,8 @@ import {
   checkInKey,
   checkInSections,
   nutritionChoices,
-  protein,
+  hasCheckInResponse,
+  nutritionMetrics,
   recoveryMetrics,
   summarize,
 } from "./recovery";
@@ -33,7 +34,7 @@ const metricNumber = new Intl.NumberFormat(undefined, { maximumFractionDigits: 2
 const shortDate = (date: Date) =>
   formatDate(date, { month: "short", day: "numeric", year: "numeric" });
 
-const numericTrends = [...recoveryMetrics, protein];
+const numericTrends = [...recoveryMetrics, ...nutritionMetrics];
 const trendOptions = [...numericTrends, ...nutritionChoices];
 type Trend = (typeof trendOptions)[number]["key"];
 
@@ -216,12 +217,8 @@ export const RecoveryResults = ({
               const weekStart = dateKey(week);
               const weekEnd = addDays(week, 6);
               const totals = trainingWeeks.get(weekStart);
-              const nutritionDays = entries.filter(
-                ({ nutritionAdequacy, trainingFueling, proteinGrams, nutritionNotes }) =>
-                  nutritionAdequacy !== null ||
-                  trainingFueling !== null ||
-                  proteinGrams !== null ||
-                  nutritionNotes !== "",
+              const nutritionDays = entries.filter((entry) =>
+                hasCheckInResponse(entry, checkInSections[1]),
               ).length;
               return (
                 <Stack
@@ -242,7 +239,7 @@ export const RecoveryResults = ({
                   </Flex>
                   <Disclosure label={`View breakdown for ${shortDate(week)}`}>
                     <Stack as="dl" gap="1" fontSize="sm">
-                      {[...recoveryMetrics, protein].map(({ key, label, unit }) => {
+                      {numericTrends.map(({ key, label, unit }) => {
                         const { mean, count } = summarize(entries, key);
                         return (
                           <Flex as="div" key={key} justify="space-between" gap="2" wrap="wrap">

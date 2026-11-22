@@ -1,3 +1,10 @@
+## v0.5.5
+
+- Fix bug where program deletion did not skip receipt cleanup on absent collections
+- Fix issue where MCP preview did not work
+- Improve session drawer UI
+- Add additional nutrition tracking
+
 ## v0.5.4
 
 - Fix bug where DELETE method for programs was not properly handled

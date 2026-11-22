@@ -1,5 +1,6 @@
 import {
   Button,
+  CloseButton,
   Dialog,
   Drawer,
   Flex,
@@ -11,7 +12,7 @@ import {
   Textarea,
 } from "@chakra-ui/react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { useId, useRef, useState } from "react";
+import { useId, useRef, useState, type ReactNode } from "react";
 import { FormField, Notice, Panel } from "../../components/ui";
 import { errorMessage } from "../../lib/api/request";
 import { plannedIntensities } from "../programs/programs";
@@ -75,12 +76,7 @@ export const WeekProgramming = ({ selection, ...props }: Props) => {
           <Drawer.Backdrop />
           <Drawer.Positioner>
             <Drawer.Content>
-              <Drawer.Header>
-                <Drawer.Title>{title}</Drawer.Title>
-              </Drawer.Header>
-              <Drawer.Body pb="6">
-                <CellEditor {...props} week={week} slot={selection.slot} />
-              </Drawer.Body>
+              <CellEditor {...props} title={title} week={week} slot={selection.slot} />
             </Drawer.Content>
           </Drawer.Positioner>
         </Portal>
@@ -197,8 +193,30 @@ const WeekForm = ({ week, api, sync, close, copy, weeks }: WeekProps) => {
   );
 };
 
-const CellEditor = (props: WeekProps & { slot: Slot }) => {
-  const { api, cacheKey, week, slot, close } = props;
+type CellProps = WeekProps & { slot: Slot; title: string };
+
+const SessionDrawerContent = ({
+  title,
+  close,
+  closeDisabled,
+  children,
+}: {
+  title: string;
+  close: () => void;
+  closeDisabled?: boolean;
+  children: ReactNode;
+}) => (
+  <>
+    <Drawer.Header alignItems="center" justifyContent="space-between">
+      <Drawer.Title>{title}</Drawer.Title>
+      <CloseButton aria-label="Close session drawer" disabled={closeDisabled} onClick={close} />
+    </Drawer.Header>
+    <Drawer.Body pb="6">{children}</Drawer.Body>
+  </>
+);
+
+const CellEditor = (props: CellProps) => {
+  const { api, cacheKey, week, slot, title, close } = props;
   const cell = useQuery({
     queryKey: [...cacheKey, "weeks", week.id, "cells", slot.id],
     queryFn: ({ signal }) => api.getCell(week.id, slot.id, signal),
@@ -207,24 +225,18 @@ const CellEditor = (props: WeekProps & { slot: Slot }) => {
   });
   if (cell.isPending)
     return (
-      <Stack gap="3">
+      <SessionDrawerContent title={title} close={close}>
         <Notice role="status">Loading session…</Notice>
-        <Button alignSelf="start" variant="outline" onClick={close}>
-          Cancel
-        </Button>
-      </Stack>
+      </SessionDrawerContent>
     );
   if (cell.isError)
     return (
-      <Stack gap="3">
-        <Notice role="alert">{errorMessage(cell.error, "Unable to load the session.")}</Notice>
-        <Flex gap="2">
+      <SessionDrawerContent title={title} close={close}>
+        <Stack gap="3" align="start">
+          <Notice role="alert">{errorMessage(cell.error, "Unable to load the session.")}</Notice>
           <Button onClick={() => void cell.refetch()}>Retry</Button>
-          <Button variant="outline" onClick={close}>
-            Cancel
-          </Button>
-        </Flex>
-      </Stack>
+        </Stack>
+      </SessionDrawerContent>
     );
   return <CellForm {...props} cell={cell.data} />;
 };
@@ -236,10 +248,11 @@ const CellForm = ({
   api,
   sync,
   close,
+  title,
   copy,
   weeks,
   slots,
-}: WeekProps & { cell: PrescriptionCell; slot: Slot }) => {
+}: CellProps & { cell: PrescriptionCell }) => {
   const fieldId = useId();
   const [cell] = useState(loadedCell);
   const [originalComponents] = useState(
@@ -335,277 +348,292 @@ const CellForm = ({
   };
 
   return (
-    <form
-      onSubmit={(event) => {
-        event.preventDefault();
-        if (!action && !pending) save.mutate();
-      }}
+    <SessionDrawerContent
+      title={title}
+      close={close}
+      closeDisabled={pending || action !== undefined}
     >
-      <Stack gap="4">
-        <FormField>
-          Session title
-          <Input
-            required
-            maxLength={200}
-            value={fields.title}
-            onChange={(event) => field("title", event.target.value)}
-          />
-        </FormField>
-        <FormField>
-          Session type
-          <NativeSelect.Root>
-            <NativeSelect.Field
-              aria-label="Session type"
-              value={fields.sessionType}
-              onChange={(event) => field("sessionType", event.target.value as SessionType)}
-            >
-              {sessionTypes.map((type) => (
-                <option key={type} value={type}>
-                  {type[0].toUpperCase() + type.slice(1)}
-                </option>
-              ))}
-            </NativeSelect.Field>
-            <NativeSelect.Indicator />
-          </NativeSelect.Root>
-        </FormField>
-        <Stack gap="1.5">
-          <FormField htmlFor={`${fieldId}-description`}>Description</FormField>
-          <Textarea
-            id={`${fieldId}-description`}
-            maxLength={10000}
-            value={fields.description}
-            onChange={(event) => field("description", event.target.value)}
-          />
-        </Stack>
-        <Stack gap="1.5">
-          <FormField htmlFor={`${fieldId}-notes`}>Notes</FormField>
-          <Textarea
-            id={`${fieldId}-notes`}
-            maxLength={10000}
-            value={fields.notes}
-            onChange={(event) => field("notes", event.target.value)}
-          />
-        </Stack>
-        <FormField>
-          Planned duration in minutes
-          <Flex gap="2">
+      <form
+        onSubmit={(event) => {
+          event.preventDefault();
+          if (!action && !pending) save.mutate();
+        }}
+      >
+        <Stack gap="4">
+          <FormField>
+            Session title
             <Input
-              aria-label="Minimum planned duration in minutes"
-              type="number"
-              min={0}
-              step={1}
-              value={fields.plannedDurationMin ?? ""}
-              onChange={(event) =>
-                field(
-                  "plannedDurationMin",
-                  event.target.value === "" ? null : Number(event.target.value),
-                )
-              }
+              required
+              maxLength={200}
+              value={fields.title}
+              onChange={(event) => field("title", event.target.value)}
             />
-            <Input
-              aria-label="Maximum planned duration in minutes"
-              type="number"
-              min={fields.plannedDurationMin ?? 0}
-              step={1}
-              value={fields.plannedDurationMax ?? ""}
-              onChange={(event) =>
-                field(
-                  "plannedDurationMax",
-                  event.target.value === "" ? null : Number(event.target.value),
-                )
-              }
+          </FormField>
+          <FormField>
+            Session type
+            <NativeSelect.Root>
+              <NativeSelect.Field
+                aria-label="Session type"
+                value={fields.sessionType}
+                onChange={(event) => field("sessionType", event.target.value as SessionType)}
+              >
+                {sessionTypes.map((type) => (
+                  <option key={type} value={type}>
+                    {type[0].toUpperCase() + type.slice(1)}
+                  </option>
+                ))}
+              </NativeSelect.Field>
+              <NativeSelect.Indicator />
+            </NativeSelect.Root>
+          </FormField>
+          <Stack gap="1.5">
+            <FormField htmlFor={`${fieldId}-description`}>Description</FormField>
+            <Textarea
+              id={`${fieldId}-description`}
+              maxLength={10000}
+              value={fields.description}
+              onChange={(event) => field("description", event.target.value)}
             />
-          </Flex>
-        </FormField>
-        <FormField>
-          Planned RPE
-          <Flex gap="2">
-            <Input
-              aria-label="Minimum planned RPE"
-              type="number"
-              min={1}
-              max={10}
-              step="any"
-              value={fields.plannedRpeMin ?? ""}
-              onChange={(event) =>
-                field(
-                  "plannedRpeMin",
-                  event.target.value === "" ? null : Number(event.target.value),
-                )
-              }
+          </Stack>
+          <Stack gap="1.5">
+            <FormField htmlFor={`${fieldId}-notes`}>Notes</FormField>
+            <Textarea
+              id={`${fieldId}-notes`}
+              maxLength={10000}
+              value={fields.notes}
+              onChange={(event) => field("notes", event.target.value)}
             />
-            <Input
-              aria-label="Maximum planned RPE"
-              type="number"
-              min={fields.plannedRpeMin ?? 1}
-              max={10}
-              step="any"
-              value={fields.plannedRpeMax ?? ""}
-              onChange={(event) =>
-                field(
-                  "plannedRpeMax",
-                  event.target.value === "" ? null : Number(event.target.value),
-                )
-              }
-            />
-          </Flex>
-        </FormField>
-        <FormField>
-          Planned intensity
-          <NativeSelect.Root>
-            <NativeSelect.Field
-              aria-label="Planned intensity"
-              value={fields.plannedIntensity ?? ""}
-              onChange={(event) =>
-                field("plannedIntensity", (event.target.value || null) as PlannedIntensity | null)
-              }
-            >
-              <option value="">Unspecified</option>
-              {plannedIntensities.map((level) => (
-                <option key={level} value={level}>
-                  {level[0].toUpperCase() + level.slice(1)}
-                </option>
-              ))}
-            </NativeSelect.Field>
-            <NativeSelect.Indicator />
-          </NativeSelect.Root>
-        </FormField>
-        <PrescriptionComponents
-          components={components}
-          change={setComponents}
-          nextKey={nextKey}
-          disabled={pending || action !== undefined}
-        />
-        {action === "insert" && session.status === "signed-in" && (
-          <PrescriptionTemplatePicker
-            ownerId={session.ownerId}
-            populated={
-              cell.prescription !== null ||
-              components.length > 0 ||
-              fields.title !== slot.label ||
-              fields.description !== "" ||
-              fields.plannedDurationMin !== null ||
-              fields.plannedIntensity !== null ||
-              fields.sessionType !== "climbing"
-            }
-            insert={insert}
-            close={() => setPanel()}
-          />
-        )}
-        {action === "template" && (
-          <Panel role="group" aria-label="Save as template" bg="bg.inset">
-            <FormField>
-              Template name
+          </Stack>
+          <FormField>
+            Planned duration in minutes
+            <Flex gap="2">
               <Input
-                maxLength={200}
-                disabled={pending}
-                value={templateName}
-                onChange={(event) => setTemplateName(event.target.value)}
-              />
-            </FormField>
-            <Flex wrap="wrap" gap="2">
-              <Button
-                type="button"
-                loading={libraryOrDelete.isPending}
-                disabled={!templateName.trim()}
-                onClick={() => libraryOrDelete.mutate("template")}
-              >
-                Create template
-              </Button>
-              <Button type="button" variant="outline" disabled={pending} onClick={() => setPanel()}>
-                Cancel template save
-              </Button>
-            </Flex>
-          </Panel>
-        )}
-        {action === "delete" && (
-          <Panel role="group" aria-label="Confirm prescription deletion" bg="orange.subtle">
-            <Text>
-              Delete this prescription and all its components? The weekly slot and its baseline will
-              remain available.
-            </Text>
-            <Flex wrap="wrap" gap="2">
-              <Button
-                type="button"
-                colorPalette="red"
-                loading={libraryOrDelete.isPending}
-                onClick={() => libraryOrDelete.mutate("delete")}
-              >
-                Confirm deletion
-              </Button>
-              <Button type="button" variant="outline" disabled={pending} onClick={() => setPanel()}>
-                Cancel deletion
-              </Button>
-            </Flex>
-          </Panel>
-        )}
-        {libraryOrDelete.isError && (
-          <Notice role="alert">
-            {errorMessage(libraryOrDelete.error, "Unable to apply the change.")}
-          </Notice>
-        )}
-        {templateSaved && <Notice role="status">Template saved to Library.</Notice>}
-        {save.isError && (
-          <Notice role="alert">{errorMessage(save.error, "Unable to save the session.")}</Notice>
-        )}
-        <Flex wrap="wrap" gap="2">
-          <Button type="submit" loading={save.isPending} disabled={action !== undefined || pending}>
-            Save session
-          </Button>
-          <Button
-            type="button"
-            variant="outline"
-            disabled={pending || action !== undefined}
-            onClick={() => setPanel("insert")}
-          >
-            Insert template
-          </Button>
-          {cell.prescription && (
-            <>
-              <Button
-                type="button"
-                variant="outline"
-                disabled={
-                  pending || action !== undefined || dirty || (weeks.length < 2 && slots.length < 2)
+                aria-label="Minimum planned duration in minutes"
+                type="number"
+                min={0}
+                step={1}
+                value={fields.plannedDurationMin ?? ""}
+                onChange={(event) =>
+                  field(
+                    "plannedDurationMin",
+                    event.target.value === "" ? null : Number(event.target.value),
+                  )
                 }
-                onClick={() => copy(week, slot)}
+              />
+              <Input
+                aria-label="Maximum planned duration in minutes"
+                type="number"
+                min={fields.plannedDurationMin ?? 0}
+                step={1}
+                value={fields.plannedDurationMax ?? ""}
+                onChange={(event) =>
+                  field(
+                    "plannedDurationMax",
+                    event.target.value === "" ? null : Number(event.target.value),
+                  )
+                }
+              />
+            </Flex>
+          </FormField>
+          <FormField>
+            Planned RPE
+            <Flex gap="2">
+              <Input
+                aria-label="Minimum planned RPE"
+                type="number"
+                min={1}
+                max={10}
+                step="any"
+                value={fields.plannedRpeMin ?? ""}
+                onChange={(event) =>
+                  field(
+                    "plannedRpeMin",
+                    event.target.value === "" ? null : Number(event.target.value),
+                  )
+                }
+              />
+              <Input
+                aria-label="Maximum planned RPE"
+                type="number"
+                min={fields.plannedRpeMin ?? 1}
+                max={10}
+                step="any"
+                value={fields.plannedRpeMax ?? ""}
+                onChange={(event) =>
+                  field(
+                    "plannedRpeMax",
+                    event.target.value === "" ? null : Number(event.target.value),
+                  )
+                }
+              />
+            </Flex>
+          </FormField>
+          <FormField>
+            Planned intensity
+            <NativeSelect.Root>
+              <NativeSelect.Field
+                aria-label="Planned intensity"
+                value={fields.plannedIntensity ?? ""}
+                onChange={(event) =>
+                  field("plannedIntensity", (event.target.value || null) as PlannedIntensity | null)
+                }
               >
-                Duplicate prescription
-              </Button>
-              <Button
-                type="button"
-                variant="outline"
-                disabled={pending || action !== undefined || dirty}
-                onClick={() => setPanel("template")}
-              >
-                Save as template
-              </Button>
-              <Button
-                type="button"
-                variant="outline"
-                disabled={pending || action !== undefined}
-                onClick={() => setPanel("delete")}
-              >
-                Delete prescription
-              </Button>
-            </>
-          )}
-          <Button
-            type="button"
-            variant="outline"
+                <option value="">Unspecified</option>
+                {plannedIntensities.map((level) => (
+                  <option key={level} value={level}>
+                    {level[0].toUpperCase() + level.slice(1)}
+                  </option>
+                ))}
+              </NativeSelect.Field>
+              <NativeSelect.Indicator />
+            </NativeSelect.Root>
+          </FormField>
+          <PrescriptionComponents
+            components={components}
+            change={setComponents}
+            nextKey={nextKey}
             disabled={pending || action !== undefined}
-            onClick={close}
-          >
-            Cancel
-          </Button>
-        </Flex>
-        {cell.prescription && dirty && (
-          <Text fontSize="sm" color="fg.muted">
-            Save changes to duplicate this prescription or save it as a template.
-          </Text>
-        )}
-      </Stack>
-    </form>
+          />
+          {action === "insert" && session.status === "signed-in" && (
+            <PrescriptionTemplatePicker
+              ownerId={session.ownerId}
+              populated={
+                cell.prescription !== null ||
+                components.length > 0 ||
+                fields.title !== slot.label ||
+                fields.description !== "" ||
+                fields.plannedDurationMin !== null ||
+                fields.plannedIntensity !== null ||
+                fields.sessionType !== "climbing"
+              }
+              insert={insert}
+              close={() => setPanel()}
+            />
+          )}
+          {action === "template" && (
+            <Panel role="group" aria-label="Save as template" bg="bg.inset">
+              <FormField>
+                Template name
+                <Input
+                  maxLength={200}
+                  disabled={pending}
+                  value={templateName}
+                  onChange={(event) => setTemplateName(event.target.value)}
+                />
+              </FormField>
+              <Flex wrap="wrap" gap="2">
+                <Button
+                  type="button"
+                  loading={libraryOrDelete.isPending}
+                  disabled={!templateName.trim()}
+                  onClick={() => libraryOrDelete.mutate("template")}
+                >
+                  Create template
+                </Button>
+                <Button
+                  type="button"
+                  variant="outline"
+                  disabled={pending}
+                  onClick={() => setPanel()}
+                >
+                  Cancel template save
+                </Button>
+              </Flex>
+            </Panel>
+          )}
+          {action === "delete" && (
+            <Panel role="group" aria-label="Confirm prescription deletion" bg="orange.subtle">
+              <Text>
+                Delete this prescription and all its components? The weekly slot and its baseline
+                will remain available.
+              </Text>
+              <Flex wrap="wrap" gap="2">
+                <Button
+                  type="button"
+                  colorPalette="red"
+                  loading={libraryOrDelete.isPending}
+                  onClick={() => libraryOrDelete.mutate("delete")}
+                >
+                  Confirm deletion
+                </Button>
+                <Button
+                  type="button"
+                  variant="outline"
+                  disabled={pending}
+                  onClick={() => setPanel()}
+                >
+                  Cancel deletion
+                </Button>
+              </Flex>
+            </Panel>
+          )}
+          {libraryOrDelete.isError && (
+            <Notice role="alert">
+              {errorMessage(libraryOrDelete.error, "Unable to apply the change.")}
+            </Notice>
+          )}
+          {templateSaved && <Notice role="status">Template saved to Library.</Notice>}
+          {save.isError && (
+            <Notice role="alert">{errorMessage(save.error, "Unable to save the session.")}</Notice>
+          )}
+          <Flex wrap="wrap" gap="2">
+            <Button
+              type="submit"
+              loading={save.isPending}
+              disabled={action !== undefined || pending}
+            >
+              Save session
+            </Button>
+            <Button
+              type="button"
+              variant="outline"
+              disabled={pending || action !== undefined}
+              onClick={() => setPanel("insert")}
+            >
+              Insert template
+            </Button>
+            {cell.prescription && (
+              <>
+                <Button
+                  type="button"
+                  variant="outline"
+                  disabled={
+                    pending ||
+                    action !== undefined ||
+                    dirty ||
+                    (weeks.length < 2 && slots.length < 2)
+                  }
+                  onClick={() => copy(week, slot)}
+                >
+                  Duplicate prescription
+                </Button>
+                <Button
+                  type="button"
+                  variant="outline"
+                  disabled={pending || action !== undefined || dirty}
+                  onClick={() => setPanel("template")}
+                >
+                  Save as template
+                </Button>
+                <Button
+                  type="button"
+                  variant="outline"
+                  disabled={pending || action !== undefined}
+                  onClick={() => setPanel("delete")}
+                >
+                  Delete prescription
+                </Button>
+              </>
+            )}
+          </Flex>
+          {cell.prescription && dirty && (
+            <Text fontSize="sm" color="fg.muted">
+              Save changes to duplicate this prescription or save it as a template.
+            </Text>
+          )}
+        </Stack>
+      </form>
+    </SessionDrawerContent>
   );
 };
 

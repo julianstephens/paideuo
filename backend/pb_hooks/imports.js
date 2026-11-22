@@ -522,10 +522,10 @@ const findResultSession = (db, owner, sourceSessionId, sourceWorkoutKey, date) =
   return rows.length === 1 ? rows[0] : null;
 };
 
-const dailyDesired = (entry) => ({
+const dailyDesired = (entry, record) => ({
   date: entry.date,
   measurements_json: { ...entry.recovery },
-  nutrition_json: { ...entry.nutrition },
+  nutrition_json: { ...JSON.parse(record?.getString("nutrition") || "null"), ...entry.nutrition },
 });
 
 const observationPlan = (db, owner, document, options = {}) => {
@@ -538,7 +538,7 @@ const observationPlan = (db, owner, document, options = {}) => {
         owner,
         date: entry.date,
       });
-      const desired = dailyDesired(entry);
+      const desired = dailyDesired(entry, record);
       const result = planRecord("daily-check-in", entry.date, record, desired);
       items.push(result.item);
       state.push({ ...result.state, entry });
@@ -827,9 +827,10 @@ const preview = (db, owner, document, options = {}) => {
   const now = Date.now();
   const store = db.store();
   const active = [];
-  for (const key of store.keys()) {
+  // PocketBase versions before 0.40 do not expose Store.keys().
+  for (const [key, value] of Object.entries(store.getAll())) {
     if (!key.startsWith(previewStorePrefix)) continue;
-    const issued = JSON.parse(store.get(key) ?? "null");
+    const issued = JSON.parse(value ?? "null");
     if (!issued) continue;
     if (issued.expiresAt <= now) store.remove(key);
     else active.push({ key, expiresAt: issued.expiresAt });
@@ -1154,7 +1155,7 @@ const commitDaily = (db, owner, data, plan) => {
     saved.set("owner", owner);
     saved.set("date", entry.date);
     saved.set("measurements", entry.recovery);
-    saved.set("nutrition", entry.nutrition);
+    saved.set("nutrition", dailyDesired(entry, record).nutrition_json);
     db.save(saved);
     statuses.push({ key: entry.date, status: record ? "updated" : "created" });
   }

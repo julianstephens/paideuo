@@ -124,11 +124,16 @@ export const WorkoutDialog = ({
       closeOnInteractOutside={!save.isPending}
       initialFocusEl={() => titleInput.current}
       finalFocusEl={trigger}
+      placement="center"
       scrollBehavior="inside"
     >
       <Portal>
         <Dialog.Backdrop />
-        <Dialog.Positioner p={{ base: "3", md: "6" }}>
+        <Dialog.Positioner
+          p={{ base: "3", md: "6" }}
+          pt={{ base: "max(0.75rem, env(safe-area-inset-top))", md: "6" }}
+          pb={{ base: "max(0.75rem, env(safe-area-inset-bottom))", md: "6" }}
+        >
           <Dialog.Content maxH={{ base: "100%", md: "calc(100dvh - 4rem)" }}>
             <Dialog.Header borderBottomWidth="1px">
               <Stack gap="1">
@@ -313,13 +318,19 @@ export const WorkoutDialog = ({
                 </chakra.fieldset>
               </form>
             </Dialog.Body>
-            <Dialog.Footer borderTopWidth="1px" flexDirection="column" alignItems="stretch" gap="3">
+            <Dialog.Footer
+              borderTopWidth="1px"
+              flexShrink="0"
+              flexDirection="column"
+              alignItems="stretch"
+              gap="3"
+            >
               {save.isError && (
                 <Notice role="alert">
                   {errorMessage(save.error, "Unable to save the workout.")}
                 </Notice>
               )}
-              <Stack direction="row" justify="end">
+              <Stack direction="row" justify="end" wrap="wrap">
                 <Button variant="outline" onClick={close} disabled={save.isPending}>
                   Cancel
                 </Button>

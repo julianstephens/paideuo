@@ -39,6 +39,16 @@ const fieldHelp: Record<CheckInField, string> = {
     "Whether you felt you ate enough over the whole day to support your activity and recovery.",
   trainingFueling:
     "Whether what you ate or drank around training supported the session. Choose Not applicable if you didn’t train.",
+  calories: "Your total calorie intake for the day. An estimate is fine.",
+  mealTiming: "Record what time you ate each meal or snack, such as breakfast at 8 am.",
+  skippedMeals: "How many usual meals you skipped today. Enter 0 if you skipped none.",
+  morningWeightKg:
+    "Record your morning weight in kilograms two or three times a week, under similar conditions.",
+  hunger: "How hungry you felt overall today. 1 = very little hunger, 5 = very hungry.",
+  digestion: "How comfortable your digestion felt. 1 = very uncomfortable, 5 = very comfortable.",
+  energy: "Your overall energy today. 1 = very low, 5 = very high.",
+  trainingRecovery:
+    "How recovered you feel from recent training. 1 = poorly recovered, 5 = fully recovered.",
   proteinGrams:
     "Your total protein intake for the day, in grams. An estimate is fine if you didn’t track it precisely.",
   notes:
@@ -407,12 +417,14 @@ const CheckInForm = ({
 
 export const CheckInDialog = ({
   date,
+  isTrainingDay,
   ownerId,
   section = checkInSections[0],
   close,
   trigger,
 }: {
   date: string;
+  isTrainingDay: boolean | undefined;
   ownerId: string;
   section: CheckInSection;
   close: () => void;
@@ -425,6 +437,12 @@ export const CheckInDialog = ({
     retry: false,
   });
   const entry = query.data?.find((item) => item.date === date);
+  const instructions =
+    isTrainingDay === undefined
+      ? "On training days, answer based on how you feel before your first session. On rest days, answer based on how you feel around your usual training time, if you can."
+      : isTrainingDay
+        ? "Fill this out before your first session. Answer each question based on how you feel before training."
+        : "Fill this out around the time you usually train, if you can. Answer each question based on how you feel at the time.";
   return (
     <Dialog.Root
       open
@@ -491,6 +509,11 @@ export const CheckInDialog = ({
               )}
               {query.data && (
                 <Stack gap="3">
+                  {section.id === "recovery" && (
+                    <Text color="fg.muted" fontSize="sm">
+                      {instructions}
+                    </Text>
+                  )}
                   <Text color="fg.muted" fontSize="sm">
                     All fields are optional.
                   </Text>

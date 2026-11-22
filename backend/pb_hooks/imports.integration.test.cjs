@@ -219,13 +219,18 @@ const createAuthedUser = async (admin, baseUrl, suffix) => {
   return { client, userId: client.authStore.record.id };
 };
 
-const withPocketBase = async (run, { pendingMigration, env } = {}) => {
+const withPocketBase = async (
+  run,
+  { pendingMigration, env, useCollectionsExport = false } = {},
+) => {
   const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "paideuo-imports-it-"));
   const dataDir = path.join(tempRoot, "pb_data");
   const hooksDir = path.join(tempRoot, "pb_hooks");
   fs.mkdirSync(dataDir, { recursive: true });
   fs.cpSync(baseHooksDir, hooksDir, { recursive: true });
-  const migrations = pendingMigration ? path.join(tempRoot, "pb_migrations") : migrationsDir;
+  const migrations =
+    pendingMigration || useCollectionsExport ? path.join(tempRoot, "pb_migrations") : migrationsDir;
+  if (useCollectionsExport) fs.mkdirSync(migrations);
   if (pendingMigration) {
     fs.cpSync(migrationsDir, migrations, {
       recursive: true,
@@ -299,6 +304,10 @@ onRecordValidate((event) => {
 
     const admin = new PocketBase(baseUrl);
     await admin.collection("_superusers").authWithPassword(superuserEmail, superuserPassword);
+    if (useCollectionsExport) {
+      const exportPath = path.join(repoRoot, "backend", "paideuo-collections.json");
+      await admin.collections.import(JSON.parse(fs.readFileSync(exportPath, "utf8")), false);
+    }
 
     const restart = async () => {
       await stopServer(server);
@@ -864,6 +873,26 @@ test("PocketBase-backed hierarchy imports are transactional and schedule-safe", 
       },
       "domain-check-in-create",
     );
+    const nutritionPath = `/api/paideuo/check-ins/${checkInDate}`;
+    const preferencesPath = "/api/paideuo/check-in-preferences";
+    const nutritionFields = {
+      calories: 2100,
+      mealTiming: "Breakfast at 8 am",
+      skippedMeals: 0,
+      morningWeightKg: 72.5,
+      hunger: 2,
+      digestion: 4,
+      energy: 5,
+      trainingRecovery: 3,
+    };
+    const writeNutrition = (body) => owner.client.send(nutritionPath, { method: "PUT", body });
+    await writeNutrition(nutritionFields);
+    const toggleCalories = (enabled) =>
+      owner.client.send(preferencesPath, { method: "PUT", body: { key: "calories", enabled } });
+    assert.ok((await toggleCalories(false)).disabled.includes("calories"));
+    assert.equal((await writeNutrition({ calories: null })).calories, 2100);
+    assert.ok(!(await toggleCalories(true)).disabled.includes("calories"));
+    await assert.rejects(() => writeNutrition({ energy: 6 }), { status: 400 });
     const checkInPatch = { recovery: { sleepHours: null } };
     const patched = await submitCheckIn(checkInPatch, "domain-check-in-patch");
     assert.equal(patched.updated, 1);
@@ -876,6 +905,35 @@ test("PocketBase-backed hierarchy imports are transactional and schedule-safe", 
     assert.equal(checkIn.measurements.sleepHours, null);
     assert.equal(checkIn.measurements.notes, "Keep notes");
     assert.equal(checkIn.nutrition.proteinGrams, 140);
+    const [logged] = await owner.client.send(
+      `/api/paideuo/check-ins?start=${checkInDate}&end=${checkInDate}`,
+    );
+    for (const [key, value] of Object.entries(nutritionFields)) assert.equal(logged[key], value);
+    await owner.client.send("/api/paideuo/check-ins/2026-10-10", {
+      method: "PUT",
+      body: { calories: 1900, skippedMeals: 2 },
+    });
+    const metrics = await owner.client.send(
+      `/api/paideuo/metrics?view=weekly&start=${checkInDate}`,
+    );
+    const measurements = metrics.total.nutritionMeasurements;
+    assert.deepEqual(measurements.calories, { value: 2000, count: 2 });
+    assert.deepEqual(measurements.skippedMeals, { value: 2, count: 2 });
+    assert.deepEqual(measurements.mealTiming, { value: 1, count: 1 });
+    assert.deepEqual(measurements.morningWeightKg, { value: 72.5, count: 1 });
+    assert.deepEqual(measurements.proteinGrams, { value: 140, count: 1 });
+    assert.deepEqual(measurements.trainingRecovery, { value: 3, count: 1 });
+    assert.deepEqual(metrics.days[0].nutritionMeasurements.calories, { value: null, count: 0 });
+    assert.deepEqual(metrics.days.at(-1).nutritionMeasurements.skippedMeals, {
+      value: 0,
+      count: 1,
+    });
+    const chartPreference = await owner.client.send(preferencesPath, {
+      method: "PUT",
+      body: { group: "hiddenCharts", key: "morningWeightKg", enabled: false },
+    });
+    assert.ok(chartPreference.hiddenCharts.includes("morningWeightKg"));
+
     await assert.rejects(
       () => submitCheckIn({ recovery: {} }, "domain-check-in-patch"),
       (error) => error?.status === 409,
@@ -1818,6 +1876,24 @@ test("program deletion removes owned data and preserves independent copies", asy
         collection,
       );
     }
+  });
+});
+
+test("program deletion works on installations without import receipt storage", async () => {
+  await withPocketBase(async ({ admin, baseUrl }) => {
+    const { client, userId } = await createAuthedUser(admin, baseUrl, "delete-without-receipts");
+    const program = await admin.collection("paideuo_programs").create({
+      owner: userId,
+      name: "Program without import receipts",
+      status: "draft",
+    });
+    await admin.collections.delete("paideuo_import_operations");
+
+    const root = `/api/paideuo/programs/${program.id}`;
+    assert.deepEqual(await client.send(root + "/delete", { method: "POST" }), {
+      id: program.id,
+    });
+    await assert.rejects(client.send(root), { status: 404 });
   });
 });
 
@@ -2765,6 +2841,37 @@ test("ChatGPT OAuth discovers MCP, authorizes a Paideuo user, and rotates creden
         catalog.result.tools.find(({ name }) => name === "list_programs").annotations.readOnlyHint,
         true,
       );
+      const document = {
+        schema: "paideuo",
+        version: 1,
+        kind: "program",
+        data: {
+          program: { name: "OAuth imported program", externalId: "oauth-import", status: "draft" },
+          blocks: [],
+        },
+      };
+      const previewResponse = await rpc(
+        "tools/call",
+        {
+          name: "preview_import",
+          arguments: { document },
+        },
+        authorization,
+      );
+      assert.equal(previewResponse.status, 200);
+      const preview = await previewResponse.json();
+      assert.equal(preview.result.isError, false, JSON.stringify(preview));
+      const { previewToken } = preview.result.structuredContent;
+      const commit = await (
+        await rpc(
+          "tools/call",
+          { name: "commit_import", arguments: { document, previewToken } },
+          authorization,
+        )
+      ).json();
+      assert.equal(commit.result.isError, false, JSON.stringify(commit));
+      assert.equal(commit.result.structuredContent.committed, true);
+
       const create = await (
         await rpc(
           "tools/call",
@@ -2779,13 +2886,12 @@ test("ChatGPT OAuth discovers MCP, authorizes a Paideuo user, and rotates creden
       const list = (auth) => rpc("tools/call", { name: "list_programs" }, auth);
       const own = await (await list(authorization)).json();
       assert.match(JSON.stringify(own.result.structuredContent), /OAuth draft/);
+      assert.match(JSON.stringify(own.result.structuredContent), /OAuth imported program/);
       const foreign = await (await list(other.authStore.token)).json();
       assert.doesNotMatch(JSON.stringify(foreign.result.structuredContent), /OAuth draft/);
       assert.equal((await list(client.authStore.token)).status, 200);
-      assert.equal(
-        (await rpc("tools/list", {}, authorization, "/api/paideuo/v1/service/mcp")).status,
-        401,
-      );
+      const legacyMcp = await rpc("tools/list", {}, authorization, "/api/paideuo/v1/service/mcp");
+      assert.equal(legacyMcp.status, 404); // The export omits the legacy service credential store.
 
       await restart();
       const refresh = { grant_type: "refresh_token", refresh_token: tokens.refresh_token };
@@ -2812,6 +2918,7 @@ test("ChatGPT OAuth discovers MCP, authorizes a Paideuo user, and rotates creden
       );
     },
     {
+      useCollectionsExport: true,
       env: {
         PAIDEUO_MCP_OAUTH_ORIGIN: origin,
         PAIDEUO_MCP_OAUTH_CLIENT_ID: clientId,
