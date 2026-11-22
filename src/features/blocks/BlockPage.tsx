@@ -81,7 +81,7 @@ const BlockEditor = ({
           <Grid
             gap="5"
             alignItems="start"
-            templateColumns={{ base: "minmax(0, 1fr)", xl: "minmax(0, 1fr) 19rem" }}
+            templateColumns={{ base: "minmax(0, 1fr)", "2xl": "minmax(0, 1fr) 19rem" }}
           >
             <BlockWeeks
               block={block.data}

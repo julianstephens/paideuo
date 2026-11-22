@@ -1,4 +1,6 @@
 import { Box, Button, Flex, Grid, Heading, Link, Stack, Text, Textarea } from "@chakra-ui/react";
+import { NumericChange } from "../../components/ComparisonChange";
+import { DurationComparison } from "../compliance/MetricBars";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useState } from "react";
 import { Link as RouterLink, useParams } from "react-router";
@@ -7,7 +9,7 @@ import { errorMessage } from "../../lib/api/request";
 import { useSession } from "../auth/session";
 import { observationCategory, observationSeverity } from "../calendar/movement-observations";
 import { sessionCalendarUrl } from "../calendar/session-links";
-import { useMetricPreferences } from "../compliance/MetricPreferences";
+import { useCheckInPreferences } from "../recovery/checkInPreferences";
 import { metricValues, windowLabel } from "../compliance/MetricsCharts";
 import { averageRpe } from "../compliance/format";
 import { metricLabels } from "../compliance/metrics";
@@ -56,7 +58,7 @@ const Review = ({
     queryFn: ({ signal }) => reviewsApi.get(programId, weekId, signal),
     retry: false,
   });
-  const preferences = useMetricPreferences(ownerId);
+  const preferences = useCheckInPreferences(ownerId);
   const [draft, setDraft] = useState<ReviewNotes | null>(null);
   const save = useMutation({
     mutationFn: (notes: ReviewNotes) => reviewsApi.save(programId, weekId, notes),
@@ -202,8 +204,9 @@ const missing = "Missing";
 const GppProgression = ({ review, unit }: { review: WeeklyReview; unit: DurationUnit }) => {
   const { progression, dataCoverage, total } = review;
   const number = new Intl.NumberFormat(undefined, { maximumFractionDigits: 2 });
-  const durationValue = (minutes: number) =>
-    unit === "hours" ? number.format(minutes / 60) : number.format(minutes);
+  const convertedDuration = (minutes: number | null) =>
+    minutes === null ? null : unit === "hours" ? minutes / 60 : minutes;
+  const durationValue = (minutes: number) => number.format(convertedDuration(minutes)!);
   const unitLabel = unit === "hours" ? "hr" : "min";
   const duration = (minutes: number | null) =>
     minutes === null ? missing : `${durationValue(minutes)} ${unitLabel}`;
@@ -231,22 +234,9 @@ const GppProgression = ({ review, unit }: { review: WeeklyReview; unit: Duration
       <Grid gap="3" templateColumns={{ base: "minmax(0, 1fr)", md: "repeat(2, minmax(0, 1fr))" }}>
         <Panel as="article">
           <Heading as="h3" size="sm">
-            Planned and actual hours
+            Training duration
           </Heading>
-          <Grid templateColumns="1fr 1fr" gap="3" mt="3">
-            <Stack gap="1">
-              <Text color="fg.muted" fontSize="sm">
-                Planned
-              </Text>
-              <Text fontWeight="semibold">{duration(total.compliance.plannedMinutes)}</Text>
-            </Stack>
-            <Stack gap="1">
-              <Text color="fg.muted" fontSize="sm">
-                Actual
-              </Text>
-              <Text fontWeight="semibold">{duration(total.compliance.actualMinutes)}</Text>
-            </Stack>
-          </Grid>
+          <DurationComparison total={total.compliance} unit={unit} />
         </Panel>
         <Panel as="article">
           <Heading as="h3" size="sm">
@@ -295,16 +285,13 @@ const GppProgression = ({ review, unit }: { review: WeeklyReview; unit: Duration
           {progression.jogging.length ? (
             <Stack gap="2" mt="3">
               {progression.jogging.map((item) => (
-                <Grid key={`${item.sessionId}-${item.title}`} templateColumns="1fr 1fr" gap="3">
-                  <Stack gap="1">
-                    <Text fontSize="sm">Planned · {item.title}</Text>
-                    <Text fontWeight="semibold">{duration(item.plannedBoutMin)}</Text>
-                  </Stack>
-                  <Stack gap="1">
-                    <Text fontSize="sm">Actual · {item.status}</Text>
-                    <Text fontWeight="semibold">{duration(item.actualBoutMin)}</Text>
-                  </Stack>
-                </Grid>
+                <NumericChange
+                  key={`${item.sessionId}-${item.title}`}
+                  label={`${item.title} · ${item.status}`}
+                  first={convertedDuration(item.plannedBoutMin)}
+                  second={convertedDuration(item.actualBoutMin)}
+                  unit={unitLabel}
+                />
               ))}
             </Stack>
           ) : (
@@ -357,16 +344,13 @@ const GppProgression = ({ review, unit }: { review: WeeklyReview; unit: Duration
           {progression.circuits.length ? (
             <Stack gap="2" mt="3">
               {progression.circuits.map((item) => (
-                <Grid key={`${item.sessionId}-${item.title}`} templateColumns="1fr 1fr" gap="3">
-                  <Stack gap="1">
-                    <Text fontSize="sm">Planned</Text>
-                    <Text fontWeight="semibold">{item.plannedRounds ?? missing}</Text>
-                  </Stack>
-                  <Stack gap="1">
-                    <Text fontSize="sm">Actual · {item.status}</Text>
-                    <Text fontWeight="semibold">{item.actualRounds ?? missing}</Text>
-                  </Stack>
-                </Grid>
+                <NumericChange
+                  key={`${item.sessionId}-${item.title}`}
+                  label={`${item.title} · ${item.status}`}
+                  first={item.plannedRounds}
+                  second={item.actualRounds}
+                  unit="rounds"
+                />
               ))}
             </Stack>
           ) : (

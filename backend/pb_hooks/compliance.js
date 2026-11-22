@@ -2,6 +2,10 @@ const intensityLevels = ["easy", "moderate", "hard", "maximal", "unspecified"];
 
 const { add, longest, plannedAerobic, measuredAerobic } = require(__hooks + "/aerobic.cjs");
 
+const { isRest, isOptional, requiredPlannedMinutes } = require(
+  __hooks + "/training-prescription.cjs",
+);
+
 const calculate = (sessions, today) => {
   const counts = { completed: 0, skipped: 0, pending: 0, unresolved: 0, shortened: 0 };
   const intensity = Object.fromEntries(
@@ -23,6 +27,7 @@ const calculate = (sessions, today) => {
   let actualRunningMinutes = null;
   let actualWalkingMinutes = null;
   let actualContinuousBoutMinutes = null;
+  let scheduledCount = 0;
 
   for (const {
     status,
@@ -36,22 +41,27 @@ const calculate = (sessions, today) => {
     aerobicMinutes: directAerobicMinutes,
     aerobicByModality: directAerobicByModality,
   } of sessions) {
+    if (isRest({ status, prescription })) {
+      continue;
+    }
+    scheduledCount++;
     if (status === "planned")
       counts[scheduledDate < (sessionToday ?? today) ? "unresolved" : "pending"]++;
     else counts[status]++;
 
     const level = intensity[plannedIntensity ?? "unspecified"];
     level.sessions++;
-    if (planned !== null) {
+    const prescribedMinutes = requiredPlannedMinutes(planned, prescription);
+    if (prescribedMinutes !== null) {
       specifiedDurations++;
-      plannedMinutes = (plannedMinutes ?? 0) + planned;
-      level.plannedMinutes = (level.plannedMinutes ?? 0) + planned;
-      if (status !== "planned") resolvedPlannedMinutes += planned;
+      plannedMinutes = (plannedMinutes ?? 0) + prescribedMinutes;
+      level.plannedMinutes = (level.plannedMinutes ?? 0) + prescribedMinutes;
+      if (status !== "planned") resolvedPlannedMinutes += prescribedMinutes;
     }
     if (status === "completed" && actual !== null) {
       measuredCompletions++;
       actualMinutes = (actualMinutes ?? 0) + actual;
-      if (planned !== null && actual < planned) counts.shortened++;
+      if (prescribedMinutes !== null && actual < prescribedMinutes) counts.shortened++;
     }
 
     let sessionAerobic = null;
@@ -59,6 +69,7 @@ const calculate = (sessions, today) => {
       (componentResults ?? []).map((result) => [result.componentKey, result]),
     );
     for (const component of prescription?.components ?? []) {
+      if (isOptional(component)) continue;
       if (component.classification !== "aerobic") continue;
       const target = plannedAerobic(component);
       plannedAerobicMinutes = add(plannedAerobicMinutes, target.minutes);
@@ -93,7 +104,7 @@ const calculate = (sessions, today) => {
   const resolved = counts.completed + counts.skipped;
   return {
     ...counts,
-    scheduled: sessions.length,
+    scheduled: scheduledCount,
     adherence: resolved ? counts.completed / resolved : null,
     plannedMinutes,
     actualMinutes,

@@ -1,0 +1,29 @@
+{
+  "schema": "paideuo",
+  "version": 1,
+  "kind": "session-templates",
+  "data": {
+    "templates": [
+      {
+        "externalId": "easy-run",
+        "name": "Easy run",
+        "description": "Keep the effort conversational.",
+        "sessionType": "conditioning",
+        "plannedDurationMin": 30,
+        "plannedDurationMax": 40,
+        "plannedRpeMin": 3,
+        "plannedRpeMax": 4,
+        "plannedIntensity": "easy",
+        "components": [
+          {
+            "key": "easy-running",
+            "name": "Easy running",
+            "classification": "aerobic",
+            "durationMin": 30,
+            "durationMax": 40
+          }
+        ]
+      }
+    ]
+  }
+}

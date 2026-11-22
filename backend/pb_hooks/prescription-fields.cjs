@@ -22,6 +22,7 @@ const componentFields = (component, index) => ({
   duration_max: component.durationMax ?? 0,
   duration_max_specified: component.durationMax != null,
   classification: component.classification ?? null,
+  optional: component.optional === true,
   targets: component.targets ?? null,
 });
 
@@ -33,8 +34,21 @@ const presentComponent = (component) => ({
     component.duration_specified || component.duration_min > 0 ? component.duration_min : null,
   durationMax: component.duration_max_specified ? component.duration_max : null,
   classification: component.classification || null,
+  optional: component.optional === true,
   targets: component.targets,
 });
 
+const templateSnapshot = (record) => ({
+  name: record.getString("name"),
+  description: record.getString("description"),
+  sessionType: record.getString("session_type"),
+  plannedDurationMin: JSON.parse(record.getString("planned_duration_min") || "null"),
+  plannedDurationMax: JSON.parse(record.getString("planned_duration_max") || "null"),
+  plannedRpeMin: JSON.parse(record.getString("planned_rpe_min") || "null"),
+  plannedRpeMax: JSON.parse(record.getString("planned_rpe_max") || "null"),
+  plannedIntensity: record.getString("planned_intensity") || null,
+  components: JSON.parse(record.getString("components") || "[]"),
+});
+
 // oxlint-disable-next-line import/no-commonjs
-module.exports = { sessionFields, componentFields, presentComponent };
+module.exports = { sessionFields, componentFields, presentComponent, templateSnapshot };

@@ -1,14 +1,24 @@
-const sessionTypes = ["climbing", "strength", "conditioning", "mobility", "other"];
+const { sessionTypes, isRest, isRestPrescription, requiredPlannedMinutes } = require(
+  __hooks + "/training-prescription.cjs",
+);
+const trainingTypes = sessionTypes.filter((type) => type !== "rest");
 const intensityLevels = ["easy", "moderate", "hard", "maximal", "unspecified"];
 const dayMs = 86_400_000;
 const weekMs = 7 * dayMs;
 const lastDate = Date.parse("9999-12-31");
 const formatDate = (day) => new Date(day).toISOString().slice(0, 10);
 
-const sessionLoad = (completion) =>
-  completion?.actualDurationMin != null && completion.sessionRpe != null
-    ? completion.actualDurationMin * completion.sessionRpe
-    : null;
+// Session duration is measured training time. Optional recovery can be logged as a component result.
+const sessionLoad = (completion, prescription) => {
+  if (
+    isRestPrescription(prescription) ||
+    completion?.actualDurationMin == null ||
+    completion.sessionRpe == null
+  ) {
+    return null;
+  }
+  return completion.actualDurationMin * completion.sessionRpe;
+};
 
 const emptyWeek = () => ({
   load: null,
@@ -24,9 +34,11 @@ const emptyWeek = () => ({
 });
 
 const addSession = (week, session) => {
+  if (isRest(session)) return;
   week.scheduledSessions++;
-  if (session.plannedMinutes != null) {
-    week.plannedMinutes = (week.plannedMinutes ?? 0) + session.plannedMinutes;
+  const plannedMinutes = requiredPlannedMinutes(session.plannedMinutes, session.prescription);
+  if (plannedMinutes != null) {
+    week.plannedMinutes = (week.plannedMinutes ?? 0) + plannedMinutes;
   }
   week.intensity[session.plannedIntensity ?? "unspecified"]++;
   if (!session.completed) return;
@@ -41,7 +53,7 @@ const addSession = (week, session) => {
     week.rpeSum += completion.sessionRpe;
     week.rpeCount++;
   }
-  const load = sessionLoad(completion);
+  const load = sessionLoad(completion, session.prescription);
   if (load !== null) {
     week.load = (week.load ?? 0) + load;
     week.measuredLoadSessions++;
@@ -75,7 +87,7 @@ const rollup = (sessions, startDate, weekCount) => {
       startDate: formatDate(monday),
       endDate: formatDate(Math.min(monday + 6 * dayMs, lastDate)),
       totals: Object.fromEntries(
-        ["all", ...sessionTypes].map((type) => {
+        ["all", ...trainingTypes].map((type) => {
           const { rpeSum, rpeCount, ...total } = totals?.[type] ?? emptyWeek();
           return [type, { ...total, averageRpe: rpeCount ? rpeSum / rpeCount : null }];
         }),

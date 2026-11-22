@@ -158,6 +158,15 @@ const ComponentFields = ({
           <NativeSelect.Indicator />
         </NativeSelect.Root>
       </FormField>
+      <label>
+        <input
+          type="checkbox"
+          checked={component.optional === true}
+          disabled={disabled}
+          onChange={(event) => change({ ...component, optional: event.target.checked })}
+        />{" "}
+        Optional recovery extra
+      </label>
       <Stack gap="1.5">
         <FormField htmlFor={instructionsId}>Component instructions</FormField>
         <Textarea

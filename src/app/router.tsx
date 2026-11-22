@@ -1,3 +1,4 @@
+import { McpConsentPage } from "../features/auth/McpConsentPage";
 import { RequireSession, SignInPage } from "../features/auth/AuthRoutes";
 import { BlockPage } from "../features/blocks/BlockPage";
 import { ProgramPage } from "../features/programs/ProgramPage";
@@ -19,6 +20,7 @@ export const router = createBrowserRouter([
   {
     Component: RequireSession,
     children: [
+      { path: "mcp/authorize", Component: McpConsentPage },
       {
         Component: AppLayout,
         children: [

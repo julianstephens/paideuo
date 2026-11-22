@@ -1,11 +1,12 @@
 import { Button, Flex, Grid, Heading, NativeSelect, Stack, Text } from "@chakra-ui/react";
 import { useQuery } from "@tanstack/react-query";
 import { useId, useState } from "react";
+import { NumericChange, comparisonDelta } from "../../components/ComparisonChange";
 import { Disclosure, FormField, Notice, Panel } from "../../components/ui";
 import { apiRequest, errorMessage } from "../../lib/api/request";
 import type { ProgramSummary } from "../programs/programs";
 import type { DurationUnit } from "../recovery/recovery";
-import { MetricPlot, plotColors } from "./MetricPlot";
+import { MetricPlot } from "./MetricPlot";
 import { metricValues, plotMetricUnit, plotMetricValue, windowLabel } from "./MetricsCharts";
 import { metricKeys, metricLabels, metricsKey } from "./metrics";
 import type { ComparedBlock, Metric, MetricsPeriod, MetricsReport } from "./metrics";
@@ -183,11 +184,6 @@ const ComparisonCharts = ({
       return week ? measurements(week) : [];
     }),
   }));
-  const series = blocks.map(({ label }, index) => ({
-    name: index === 0 ? "first" : "second",
-    label: `${index === 0 ? "First" : "Second"} · ${label}`,
-    color: plotColors[index],
-  }));
   const labels = [
     ...new Set(
       [...totals, ...weeks.flatMap(({ values }) => values)].flatMap((values) =>
@@ -197,14 +193,23 @@ const ComparisonCharts = ({
   ];
   const valueFor = (values: ReturnType<typeof measurements> | undefined, label: string) =>
     values?.find((measurement) => measurement.label === label)?.value ?? null;
-  const measures = labels.filter((label) => label !== "Adherence");
+  const changes = labels.map((label) => ({
+    label,
+    first: valueFor(totals[0], label),
+    second: valueFor(totals[1], label),
+  }));
+  const changed = changes.filter(
+    ({ first, second }) => first !== null && second !== null && first !== second,
+  );
+  const other = changes.filter((change) => !changed.includes(change));
+  const series = [{ name: "change", label: "Change", color: "teal.solid" }];
   const measureUnit = plotMetricUnit(metric, unit);
   return (
     <Stack gap="4">
       <Panel as="section">
         <Flex justify="space-between" align="end" wrap="wrap" gap="3">
           <Heading as="h2" size="md">
-            Block totals
+            Change between blocks
           </Heading>
           <FormField as="div" maxW="sm" flex="1 1 15rem">
             <label htmlFor={id}>Compare metric</label>
@@ -227,57 +232,63 @@ const ComparisonCharts = ({
             </NativeSelect.Root>
           </FormField>
         </Flex>
-        <MetricPlot
-          title={`${metricLabels[metric]} block totals`}
-          data={measures.map((label) => ({
-            label,
-            first: valueFor(totals[0], label),
-            second: valueFor(totals[1], label),
-          }))}
-          series={series}
-          unit={measureUnit}
-        />
-        {metric === "completion" && (
-          <MetricPlot
-            title="Block adherence"
-            data={[
-              {
-                label: "Adherence",
-                first: valueFor(totals[0], "Adherence"),
-                second: valueFor(totals[1], "Adherence"),
-              },
-            ]}
-            series={series}
-            unit="%"
-            ceiling={100}
+        <Text color="fg.muted" fontSize="sm">
+          {blocks[0].label} → {blocks[1].label}
+        </Text>
+        {changed.length === 0 && <Notice>No measured changes for this metric.</Notice>}
+        {changed.map((change) => (
+          <NumericChange
+            key={change.label}
+            {...change}
+            unit={change.label === "Adherence" ? "%" : measureUnit}
+            deltaUnit={change.label === "Adherence" ? "pp" : undefined}
           />
+        ))}
+        {other.length > 0 && (
+          <Disclosure label="Unchanged and unavailable values">
+            <Stack gap="2">
+              {other.map((change) => (
+                <NumericChange
+                  key={change.label}
+                  {...change}
+                  unit={change.label === "Adherence" ? "%" : measureUnit}
+                  deltaUnit={change.label === "Adherence" ? "pp" : undefined}
+                />
+              ))}
+            </Stack>
+          </Disclosure>
         )}
       </Panel>
       {weeks.length > 0 && (
         <Panel as="section">
           <Heading as="h2" size="md">
-            Week-by-week comparison
+            Week-by-week changes
           </Heading>
-          {labels.length === 0 && <Notice>No measurements to chart.</Notice>}
-          {labels.map((label) => (
-            <Stack key={label} gap="2">
-              <Heading as="h3" size="sm">
-                {label}
-              </Heading>
-              <MetricPlot
-                title={`Weekly ${label} by block`}
-                data={weeks.map(({ label: week, values }) => ({
-                  label: week,
-                  first: valueFor(values[0], label),
-                  second: valueFor(values[1], label),
-                }))}
-                series={series}
-                unit={label === "Adherence" ? "%" : measureUnit}
-                ceiling={label === "Adherence" ? 100 : undefined}
-                line={isRecoveryMetric(metric) && metric !== "nutrition"}
-              />
+          <Disclosure label="Show weekly changes">
+            <Stack gap="4">
+              {labels.length === 0 && <Notice>No measurements to chart.</Notice>}
+              {labels.map((label) => (
+                <Stack key={label} gap="2">
+                  <Heading as="h3" size="sm">
+                    {label}
+                  </Heading>
+                  <MetricPlot
+                    title={`Weekly change in ${label}`}
+                    data={weeks.map(({ label: week, values }) => ({
+                      label: week,
+                      change: comparisonDelta(
+                        valueFor(values[0], label),
+                        valueFor(values[1], label),
+                      ),
+                    }))}
+                    series={series}
+                    unit={label === "Adherence" ? "percentage points" : measureUnit}
+                    signed
+                  />
+                </Stack>
+              ))}
             </Stack>
-          ))}
+          </Disclosure>
         </Panel>
       )}
     </Stack>

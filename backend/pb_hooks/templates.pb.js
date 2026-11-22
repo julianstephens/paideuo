@@ -51,7 +51,8 @@ const handleTemplates = (event) => {
     const componentValues = require(__hooks + "/prescription-components.js");
     const { presentComponent } = require(__hooks + "/prescription-fields.cjs");
     const body = event.requestInfo().body;
-    if (!["climbing", "strength", "conditioning", "mobility", "other"].includes(body.sessionType)) {
+    const { sessionTypes } = require(__hooks + "/training-prescription.cjs");
+    if (!sessionTypes.includes(body.sessionType)) {
       throw new BadRequestError("Choose a session type.");
     }
     if (!Array.isArray(body.components)) throw new BadRequestError("Enter a valid component list.");
@@ -109,6 +110,7 @@ const handleTemplates = (event) => {
     const data = fields(record);
     return {
       id: record.id,
+      externalId: record.getString("external_id") || null,
       name: data.name,
       description: data.description,
       sessionType: data.session_type,

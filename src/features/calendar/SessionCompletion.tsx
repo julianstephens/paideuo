@@ -1,7 +1,9 @@
 import { loadPoints } from "../compliance/format";
 import { Box, Button, Flex, Grid, Heading, Input, Stack, Text, Textarea } from "@chakra-ui/react";
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { Disclosure, FormField, Notice } from "../../components/ui";
+import { componentDraft, targetDefinitions } from "../prescriptions/components";
+import { formatPlannedDuration, formatPlannedRpe } from "../prescriptions/format";
 import { fullDate, todayInTimezone } from "./dates";
 import {
   observationCategory,
@@ -49,36 +51,94 @@ const resultDraft = (componentKey: string, result?: ComponentResult): ComponentR
 
 const nullableNumber = (value: string) => (value === "" ? null : Number(value));
 
+type CompletionDraft = {
+  completedDate: string;
+  duration: string;
+  rpe: string;
+  notes: string;
+  componentResults: ComponentResultDraft[];
+};
+
+export const completionDraftKey = (ownerId: string, sessionId: string, revision: string) =>
+  `paideuo-completion-draft:${ownerId}:${sessionId}:${revision}`;
+
+export const clearCompletionDraft = (key: string) => {
+  try {
+    sessionStorage.removeItem(key);
+  } catch {
+    // Browser storage may be disabled.
+  }
+};
+
+const readDraft = (key: string): CompletionDraft | undefined => {
+  try {
+    const value = sessionStorage.getItem(key);
+    return value ? (JSON.parse(value) as CompletionDraft) : undefined;
+  } catch {
+    return undefined;
+  }
+};
+
 export const CompletionForm = ({
   session,
+  draftKey,
   pending,
   canSave,
   save,
+  skip,
   cancel,
 }: {
   session: CalendarSession;
+  draftKey: string;
   pending: boolean;
   canSave: boolean;
   save: (values: SessionCompletion & { componentResults: ComponentResult[] }) => void;
+  skip?: () => void;
   cancel: () => void;
 }) => {
   const today = todayInTimezone(session.timezone);
   const initialDate = session.scheduledDate < today ? session.scheduledDate : today;
-  const [completedDate, setDate] = useState(session.completion?.completedDate ?? initialDate);
-  const [duration, setDuration] = useState(String(session.completion?.actualDurationMin ?? ""));
-  const [rpe, setRpe] = useState(String(session.completion?.sessionRpe ?? ""));
-  const [notes, setNotes] = useState(session.completion?.notes ?? "");
-  const [componentResults, setComponentResults] = useState<ComponentResultDraft[]>(() =>
-    session.prescription.components.flatMap((component) => {
-      if (!component.key) return [];
-      return [
-        resultDraft(
-          component.key,
-          session.componentResults.find((result) => result.componentKey === component.key),
-        ),
-      ];
-    }),
+  const [draft] = useState(() => readDraft(draftKey));
+  const [completedDate, setDate] = useState(
+    draft?.completedDate ?? session.completion?.completedDate ?? initialDate,
   );
+  const [duration, setDuration] = useState(
+    draft?.duration ?? String(session.completion?.actualDurationMin ?? ""),
+  );
+  const [rpe, setRpe] = useState(draft?.rpe ?? String(session.completion?.sessionRpe ?? ""));
+  const [notes, setNotes] = useState(draft?.notes ?? session.completion?.notes ?? "");
+  const [componentResults, setComponentResults] = useState<ComponentResultDraft[]>(
+    () =>
+      draft?.componentResults ??
+      session.prescription.components.flatMap((component) => {
+        if (!component.key) return [];
+        return [
+          resultDraft(
+            component.key,
+            session.componentResults.find((result) => result.componentKey === component.key),
+          ),
+        ];
+      }),
+  );
+  useEffect(() => {
+    try {
+      sessionStorage.setItem(
+        draftKey,
+        JSON.stringify({ completedDate, duration, rpe, notes, componentResults }),
+      );
+    } catch {
+      // The form remains usable when browser storage is disabled.
+    }
+  }, [draftKey, completedDate, duration, rpe, notes, componentResults]);
+  const { prescription } = session;
+  const timeTarget = formatPlannedDuration(
+    prescription.plannedDurationMin,
+    prescription.plannedDurationMax,
+  );
+  const effortTarget =
+    formatPlannedRpe(prescription.plannedRpeMin, prescription.plannedRpeMax) ??
+    prescription.plannedIntensity;
+
   const updateResult = (componentKey: string, patch: Partial<ComponentResultDraft>) =>
     setComponentResults((current) =>
       current.map((result) =>
@@ -139,299 +199,13 @@ export const CompletionForm = ({
               onChange={(event) => setDate(event.target.value)}
             />
           </FormField>
-          {session.prescription.components.length > 0 && (
-            <Disclosure
-              label={`Component results (${componentResults.filter(({ active }) => active).length})`}
-            >
-              <Stack gap="3">
-                {session.prescription.components.map((component) => {
-                  const result = component.key
-                    ? componentResults.find(({ componentKey }) => componentKey === component.key)
-                    : undefined;
-                  if (!result) return null;
-                  return (
-                    <Box key={result.componentKey} borderWidth="1px" borderRadius="md" p="3">
-                      <Stack gap="3">
-                        <Flex align="center" justify="space-between" gap="2" wrap="wrap">
-                          <Heading as="h3" size="sm">
-                            {component.name}
-                          </Heading>
-                          <Button
-                            type="button"
-                            size="sm"
-                            variant={result.active ? "outline" : "subtle"}
-                            disabled={pending}
-                            onClick={() =>
-                              updateResult(result.componentKey, {
-                                ...(result.active ? {} : { ...resultDraft(result.componentKey) }),
-                                active: !result.active,
-                              })
-                            }
-                          >
-                            {result.active ? "Remove result" : "Add result"}
-                          </Button>
-                        </Flex>
-                        {result.active && (
-                          <>
-                            <Grid gap="3" templateColumns={{ base: "1fr", sm: "repeat(2, 1fr)" }}>
-                              <FormField>
-                                Load
-                                <Input
-                                  type="number"
-                                  min={0}
-                                  step="any"
-                                  value={result.load}
-                                  disabled={pending}
-                                  onChange={(event) =>
-                                    updateResult(result.componentKey, { load: event.target.value })
-                                  }
-                                />
-                              </FormField>
-                              <FormField>
-                                Load unit
-                                <Input
-                                  maxLength={32}
-                                  placeholder="kg, lb, bodyweight…"
-                                  value={result.unit}
-                                  disabled={pending}
-                                  onChange={(event) =>
-                                    updateResult(result.componentKey, { unit: event.target.value })
-                                  }
-                                />
-                              </FormField>
-                              <FormField>
-                                Sets
-                                <Input
-                                  type="number"
-                                  min={0}
-                                  step={1}
-                                  value={result.sets}
-                                  disabled={pending}
-                                  onChange={(event) =>
-                                    updateResult(result.componentKey, { sets: event.target.value })
-                                  }
-                                />
-                              </FormField>
-                              <FormField>
-                                Reps
-                                <Input
-                                  maxLength={200}
-                                  value={result.reps}
-                                  disabled={pending}
-                                  onChange={(event) =>
-                                    updateResult(result.componentKey, { reps: event.target.value })
-                                  }
-                                />
-                              </FormField>
-                              <FormField>
-                                RPE (1–10)
-                                <Input
-                                  type="number"
-                                  min={1}
-                                  max={10}
-                                  step="any"
-                                  value={result.rpe}
-                                  disabled={pending}
-                                  onChange={(event) =>
-                                    updateResult(result.componentKey, { rpe: event.target.value })
-                                  }
-                                />
-                              </FormField>
-                              <FormField>
-                                Elapsed component duration (minutes)
-                                <Input
-                                  type="number"
-                                  min={0}
-                                  step={1}
-                                  value={result.durationMin}
-                                  disabled={pending}
-                                  onChange={(event) =>
-                                    updateResult(result.componentKey, {
-                                      durationMin: event.target.value,
-                                    })
-                                  }
-                                />
-                              </FormField>
-                              <FormField>
-                                Rounds
-                                <Input
-                                  type="number"
-                                  min={0}
-                                  step={1}
-                                  value={result.rounds}
-                                  disabled={pending}
-                                  onChange={(event) =>
-                                    updateResult(result.componentKey, {
-                                      rounds: event.target.value,
-                                    })
-                                  }
-                                />
-                              </FormField>
-                              <FormField>
-                                Running minutes
-                                <Input
-                                  type="number"
-                                  min={0}
-                                  step={1}
-                                  value={result.runningMin}
-                                  disabled={pending}
-                                  onChange={(event) =>
-                                    updateResult(result.componentKey, {
-                                      runningMin: event.target.value,
-                                    })
-                                  }
-                                />
-                              </FormField>
-                              <FormField>
-                                Walking minutes
-                                <Input
-                                  type="number"
-                                  min={0}
-                                  step={1}
-                                  value={result.walkingMin}
-                                  disabled={pending}
-                                  onChange={(event) =>
-                                    updateResult(result.componentKey, {
-                                      walkingMin: event.target.value,
-                                    })
-                                  }
-                                />
-                              </FormField>
-                              <FormField>
-                                Longest continuous bout (minutes)
-                                <Input
-                                  type="number"
-                                  min={0}
-                                  step={1}
-                                  value={result.continuousBoutMin}
-                                  disabled={pending}
-                                  onChange={(event) =>
-                                    updateResult(result.componentKey, {
-                                      continuousBoutMin: event.target.value,
-                                    })
-                                  }
-                                />
-                              </FormField>
-                              <FormField>
-                                Aerobic modality
-                                <Input
-                                  maxLength={64}
-                                  placeholder="run, walk, cycle…"
-                                  value={result.aerobicModality}
-                                  disabled={pending}
-                                  onChange={(event) =>
-                                    updateResult(result.componentKey, {
-                                      aerobicModality: event.target.value,
-                                    })
-                                  }
-                                />
-                              </FormField>
-                              {(result.observation ||
-                                component.name
-                                  .toLowerCase()
-                                  .replace(/[-_]/g, " ")
-                                  .includes("front squat") ||
-                                result.componentKey.toLowerCase().includes("front-squat")) && (
-                                <>
-                                  <FormField>
-                                    {observationCategory(
-                                      result.observation?.category ?? "knee_tracking",
-                                    )}{" "}
-                                    observation
-                                    <select
-                                      disabled={pending}
-                                      value={result.observation?.severity ?? ""}
-                                      onChange={(event) => {
-                                        const severity = observationSeverities.find(
-                                          (value) => value === event.target.value,
-                                        );
-                                        updateResult(result.componentKey, {
-                                          observation:
-                                            severity === undefined
-                                              ? null
-                                              : {
-                                                  category:
-                                                    result.observation?.category ?? "knee_tracking",
-                                                  severity,
-                                                  context: result.observation?.context ?? "",
-                                                  notes: result.observation?.notes ?? "",
-                                                },
-                                        });
-                                      }}
-                                      style={{ width: "100%", minHeight: "40px" }}
-                                    >
-                                      <option value="">No observation recorded</option>
-                                      {observationSeverities.map((severity) => (
-                                        <option key={severity} value={severity}>
-                                          {observationSeverity(
-                                            result.observation?.category ?? "knee_tracking",
-                                            severity,
-                                          )}
-                                        </option>
-                                      ))}
-                                    </select>
-                                  </FormField>
-                                  {result.observation && (
-                                    <>
-                                      <FormField>
-                                        Conditions / context
-                                        <Input
-                                          maxLength={200}
-                                          value={result.observation.context}
-                                          disabled={pending}
-                                          onChange={(event) =>
-                                            updateResult(result.componentKey, {
-                                              observation: {
-                                                ...result.observation!,
-                                                context: event.target.value,
-                                              },
-                                            })
-                                          }
-                                        />
-                                      </FormField>
-                                      <FormField>
-                                        Observation notes
-                                        <Textarea
-                                          maxLength={10000}
-                                          value={result.observation.notes}
-                                          disabled={pending}
-                                          onChange={(event) =>
-                                            updateResult(result.componentKey, {
-                                              observation: {
-                                                ...result.observation!,
-                                                notes: event.target.value,
-                                              },
-                                            })
-                                          }
-                                        />
-                                      </FormField>
-                                    </>
-                                  )}
-                                </>
-                              )}
-                            </Grid>
-                            <FormField>
-                              Component notes
-                              <Textarea
-                                maxLength={10000}
-                                value={result.notes}
-                                disabled={pending}
-                                onChange={(event) =>
-                                  updateResult(result.componentKey, { notes: event.target.value })
-                                }
-                              />
-                            </FormField>
-                          </>
-                        )}
-                      </Stack>
-                    </Box>
-                  );
-                })}
-              </Stack>
-            </Disclosure>
-          )}
           <FormField>
-            Actual duration (minutes)
+            Training duration (minutes)
+            {timeTarget && (
+              <Text as="span" color="fg.muted" fontSize="sm">
+                Target: {timeTarget}
+              </Text>
+            )}
             <Input
               type="number"
               min={0}
@@ -443,6 +217,11 @@ export const CompletionForm = ({
           </FormField>
           <FormField>
             Session RPE (1–10)
+            {effortTarget && (
+              <Text as="span" color="fg.muted" fontSize="sm">
+                Target: {effortTarget}
+              </Text>
+            )}
             <Input
               type="number"
               min={1}
@@ -454,6 +233,322 @@ export const CompletionForm = ({
             />
           </FormField>
         </Flex>
+        <Text fontSize="sm" color="fg.muted">
+          Exclude optional recovery from training duration.
+        </Text>
+        {session.prescription.components.length > 0 && (
+          <Disclosure
+            label={`Component results (${componentResults.filter(({ active }) => active).length})`}
+          >
+            <Stack gap="3">
+              {session.prescription.components.map((component) => {
+                const result = component.key
+                  ? componentResults.find(({ componentKey }) => componentKey === component.key)
+                  : undefined;
+                if (!result) return null;
+                const targets = componentDraft(0, component).targets;
+                return (
+                  <Box key={result.componentKey} borderWidth="1px" borderRadius="md" p="3">
+                    <Stack gap="3">
+                      <Flex align="center" justify="space-between" gap="2" wrap="wrap">
+                        <Heading as="h3" size="sm">
+                          {component.name}
+                        </Heading>
+                        <Button
+                          type="button"
+                          size="sm"
+                          variant={result.active ? "outline" : "subtle"}
+                          disabled={pending}
+                          onClick={() =>
+                            updateResult(result.componentKey, {
+                              ...(result.active ? {} : { ...resultDraft(result.componentKey) }),
+                              active: !result.active,
+                            })
+                          }
+                        >
+                          {result.active ? "Remove result" : "Add result"}
+                        </Button>
+                      </Flex>
+                      <Flex wrap="wrap" gapX="3" gapY="1" fontSize="sm" color="fg.muted">
+                        {targetDefinitions
+                          .filter(({ key }) => key !== "segments" && targets[key])
+                          .map(({ key, label }) => (
+                            <Text key={key}>
+                              {label}:{" "}
+                              {targets[key]
+                                ?.filter(Boolean)
+                                .join(
+                                  key === "duration" || key === "intensity" || key === "grade"
+                                    ? "–"
+                                    : " ",
+                                )}
+                            </Text>
+                          ))}
+                      </Flex>
+                      {component.instructions && (
+                        <Disclosure label="Workout instructions">
+                          <Text whiteSpace="pre-wrap">{component.instructions}</Text>
+                        </Disclosure>
+                      )}
+                      {result.active && (
+                        <>
+                          <Grid gap="3" templateColumns={{ base: "1fr", sm: "repeat(2, 1fr)" }}>
+                            <FormField>
+                              Load
+                              <Input
+                                type="number"
+                                min={0}
+                                step="any"
+                                value={result.load}
+                                disabled={pending}
+                                onChange={(event) =>
+                                  updateResult(result.componentKey, { load: event.target.value })
+                                }
+                              />
+                            </FormField>
+                            <FormField>
+                              Load unit
+                              <Input
+                                maxLength={32}
+                                placeholder="kg, lb, bodyweight…"
+                                value={result.unit}
+                                disabled={pending}
+                                onChange={(event) =>
+                                  updateResult(result.componentKey, { unit: event.target.value })
+                                }
+                              />
+                            </FormField>
+                            <FormField>
+                              Sets
+                              <Input
+                                type="number"
+                                min={0}
+                                step={1}
+                                value={result.sets}
+                                disabled={pending}
+                                onChange={(event) =>
+                                  updateResult(result.componentKey, { sets: event.target.value })
+                                }
+                              />
+                            </FormField>
+                            <FormField>
+                              Reps
+                              <Input
+                                maxLength={200}
+                                value={result.reps}
+                                disabled={pending}
+                                onChange={(event) =>
+                                  updateResult(result.componentKey, { reps: event.target.value })
+                                }
+                              />
+                            </FormField>
+                            <FormField>
+                              RPE (1–10)
+                              <Input
+                                type="number"
+                                min={1}
+                                max={10}
+                                step="any"
+                                value={result.rpe}
+                                disabled={pending}
+                                onChange={(event) =>
+                                  updateResult(result.componentKey, { rpe: event.target.value })
+                                }
+                              />
+                            </FormField>
+                            <FormField>
+                              Elapsed component duration (minutes)
+                              <Input
+                                type="number"
+                                min={0}
+                                step={1}
+                                value={result.durationMin}
+                                disabled={pending}
+                                onChange={(event) =>
+                                  updateResult(result.componentKey, {
+                                    durationMin: event.target.value,
+                                  })
+                                }
+                              />
+                            </FormField>
+                            <FormField>
+                              Rounds
+                              <Input
+                                type="number"
+                                min={0}
+                                step={1}
+                                value={result.rounds}
+                                disabled={pending}
+                                onChange={(event) =>
+                                  updateResult(result.componentKey, {
+                                    rounds: event.target.value,
+                                  })
+                                }
+                              />
+                            </FormField>
+                            <FormField>
+                              Running minutes
+                              <Input
+                                type="number"
+                                min={0}
+                                step={1}
+                                value={result.runningMin}
+                                disabled={pending}
+                                onChange={(event) =>
+                                  updateResult(result.componentKey, {
+                                    runningMin: event.target.value,
+                                  })
+                                }
+                              />
+                            </FormField>
+                            <FormField>
+                              Walking minutes
+                              <Input
+                                type="number"
+                                min={0}
+                                step={1}
+                                value={result.walkingMin}
+                                disabled={pending}
+                                onChange={(event) =>
+                                  updateResult(result.componentKey, {
+                                    walkingMin: event.target.value,
+                                  })
+                                }
+                              />
+                            </FormField>
+                            <FormField>
+                              Longest continuous bout (minutes)
+                              <Input
+                                type="number"
+                                min={0}
+                                step={1}
+                                value={result.continuousBoutMin}
+                                disabled={pending}
+                                onChange={(event) =>
+                                  updateResult(result.componentKey, {
+                                    continuousBoutMin: event.target.value,
+                                  })
+                                }
+                              />
+                            </FormField>
+                            <FormField>
+                              Aerobic modality
+                              <Input
+                                maxLength={64}
+                                placeholder="run, walk, cycle…"
+                                value={result.aerobicModality}
+                                disabled={pending}
+                                onChange={(event) =>
+                                  updateResult(result.componentKey, {
+                                    aerobicModality: event.target.value,
+                                  })
+                                }
+                              />
+                            </FormField>
+                            {(result.observation ||
+                              component.name
+                                .toLowerCase()
+                                .replace(/[-_]/g, " ")
+                                .includes("front squat") ||
+                              result.componentKey.toLowerCase().includes("front-squat")) && (
+                              <>
+                                <FormField>
+                                  {observationCategory(
+                                    result.observation?.category ?? "knee_tracking",
+                                  )}{" "}
+                                  observation
+                                  <select
+                                    disabled={pending}
+                                    value={result.observation?.severity ?? ""}
+                                    onChange={(event) => {
+                                      const severity = observationSeverities.find(
+                                        (value) => value === event.target.value,
+                                      );
+                                      updateResult(result.componentKey, {
+                                        observation:
+                                          severity === undefined
+                                            ? null
+                                            : {
+                                                category:
+                                                  result.observation?.category ?? "knee_tracking",
+                                                severity,
+                                                context: result.observation?.context ?? "",
+                                                notes: result.observation?.notes ?? "",
+                                              },
+                                      });
+                                    }}
+                                    style={{ width: "100%", minHeight: "40px" }}
+                                  >
+                                    <option value="">No observation recorded</option>
+                                    {observationSeverities.map((severity) => (
+                                      <option key={severity} value={severity}>
+                                        {observationSeverity(
+                                          result.observation?.category ?? "knee_tracking",
+                                          severity,
+                                        )}
+                                      </option>
+                                    ))}
+                                  </select>
+                                </FormField>
+                                {result.observation && (
+                                  <>
+                                    <FormField>
+                                      Conditions / context
+                                      <Input
+                                        maxLength={200}
+                                        value={result.observation.context}
+                                        disabled={pending}
+                                        onChange={(event) =>
+                                          updateResult(result.componentKey, {
+                                            observation: {
+                                              ...result.observation!,
+                                              context: event.target.value,
+                                            },
+                                          })
+                                        }
+                                      />
+                                    </FormField>
+                                    <FormField>
+                                      Observation notes
+                                      <Textarea
+                                        maxLength={10000}
+                                        value={result.observation.notes}
+                                        disabled={pending}
+                                        onChange={(event) =>
+                                          updateResult(result.componentKey, {
+                                            observation: {
+                                              ...result.observation!,
+                                              notes: event.target.value,
+                                            },
+                                          })
+                                        }
+                                      />
+                                    </FormField>
+                                  </>
+                                )}
+                              </>
+                            )}
+                          </Grid>
+                          <FormField>
+                            Component notes
+                            <Textarea
+                              maxLength={10000}
+                              value={result.notes}
+                              disabled={pending}
+                              onChange={(event) =>
+                                updateResult(result.componentKey, { notes: event.target.value })
+                              }
+                            />
+                          </FormField>
+                        </>
+                      )}
+                    </Stack>
+                  </Box>
+                );
+              })}
+            </Stack>
+          </Disclosure>
+        )}
         <FormField>
           Completion notes
           <Textarea
@@ -471,8 +566,13 @@ export const CompletionForm = ({
             {session.status === "completed" ? "Save completion details" : "Save completion"}
           </Button>
           <Button type="button" variant="outline" disabled={pending} onClick={cancel}>
-            Cancel completion edit
+            Workout details
           </Button>
+          {skip && (
+            <Button type="button" variant="ghost" disabled={pending || !canSave} onClick={skip}>
+              Mark skipped
+            </Button>
+          )}
         </Flex>
       </Stack>
     </form>

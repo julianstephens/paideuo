@@ -14,6 +14,8 @@ import {
   Text,
   Textarea,
 } from "@chakra-ui/react";
+import { useQueryClient } from "@tanstack/react-query";
+import { Link as RouterLink, useSearchParams } from "react-router";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { Disclosure, FormField, Notice, PageHeader, Panel } from "../../components/ui";
 import { errorMessage } from "../../lib/api/request";
@@ -24,6 +26,8 @@ import {
   type ProgramDraftConversion,
   importsApi,
 } from "./imports";
+import { useSession } from "../auth/session";
+import { templateKey } from "../templates/templates";
 import { MarkdownDraftReview } from "./MarkdownDraftReview";
 
 type CsvKind = "daily-check-ins" | "workout-component-results";
@@ -107,7 +111,7 @@ const workoutColumns: CsvColumn[] = [
   { key: "sourceSessionId", label: "Source session ID" },
   { key: "sourceWorkoutKey", label: "Source workout key", required: true },
   { key: "completedDate", label: "Completed date", required: true },
-  { key: "actualDurationMin", label: "Actual duration min", integer: true, min: 0 },
+  { key: "actualDurationMin", label: "Training duration (min)", integer: true, min: 0 },
   { key: "sessionRpe", label: "Session RPE", numeric: true, min: 1, max: 10 },
   { key: "notes", label: "Workout notes" },
   { key: "componentKey", label: "Component key", required: true },
@@ -627,7 +631,14 @@ const mapCsv = (
     : mapWorkoutCsv(headers, rows, mapping);
 };
 
+const templateExample = [
+  "Session templates",
+  "import-v1-session-templates.json",
+  new URL("../../../docs/examples/import-v1-session-templates.json", import.meta.url).href,
+] as const;
+
 const jsonExamples = [
+  templateExample,
   [
     "Training program",
     "import-v1-program.json",
@@ -675,6 +686,11 @@ const previewLabels: Record<ImportItem["status"], string> = {
 };
 
 export const ImportsPage = () => {
+  const [searchParams] = useSearchParams();
+  const templateEntry = searchParams.get("kind") === "session-templates";
+  const session = useSession();
+  const queryClient = useQueryClient();
+  const [selectedWorkouts, setSelectedWorkouts] = useState<string[]>([]);
   const [formatOverride, setFormatOverride] = useState<SourceKind | null>(null);
   const [csvKind, setCsvKind] = useState<CsvKind>("daily-check-ins");
   const [fileName, setFileName] = useState("");
@@ -694,7 +710,7 @@ export const ImportsPage = () => {
 
   const firstCharacter = rawText.trimStart()[0];
   const sourceKind =
-    formatOverride ??
+    (templateEntry ? "json" : formatOverride) ??
     (firstCharacter === "{" || firstCharacter === "["
       ? "json"
       : firstCharacter === "#" || markdownFile.test(fileName)
@@ -710,12 +726,19 @@ export const ImportsPage = () => {
   const missingColumns = mappingColumns.filter((column) => column.required && !mapping[column.key]);
   const rowIssues = preview?.mapped.rowIssues ?? [];
   const blockingIssues = rowIssues.filter((issue) => issue.level === "error");
+  const programPreview = preview?.prepared.find(({ document }) => document.kind === "program");
+  const reviewedSelection = programPreview?.document.data.templateWorkoutKeys;
+  const reviewedKeys = Array.isArray(reviewedSelection) ? reviewedSelection : [];
+  const selectionChanged =
+    selectedWorkouts.length !== reviewedKeys.length ||
+    selectedWorkouts.some((key) => !reviewedKeys.includes(key));
   const hasConflicts = preview?.previewItems.some((item) => item.status === "conflict");
   const canCommit = Boolean(
     preview?.previewItems.length &&
     !preview.previewErrors.length &&
     !blockingIssues.length &&
-    !hasConflicts,
+    !hasConflicts &&
+    !selectionChanged,
   );
 
   useEffect(() => {
@@ -732,6 +755,7 @@ export const ImportsPage = () => {
 
   const resetPreview = () => {
     setPreview(null);
+    setSelectedWorkouts([]);
     setCommit(null);
     setConfirmCommit(false);
   };
@@ -798,6 +822,9 @@ export const ImportsPage = () => {
               : "Use a Paideuo JSON import with schema, version, kind, and data fields. See the examples above.",
         };
       }
+      if (templateEntry && document.kind !== "session-templates") {
+        return { error: "Use a Paideuo JSON document with the session-templates kind." };
+      }
       return { documents: [document], rowIssues: [] };
     }
     if (!csv?.headers.length || !csv.rows.length) {
@@ -806,7 +833,7 @@ export const ImportsPage = () => {
     return mapCsv(csvKind, csv.headers, csv.rows, mapping);
   };
 
-  const previewImport = async () => {
+  const previewImport = async (workoutKeys?: string[]) => {
     if (busy || !rawText.trim() || (sourceKind === "markdown" && !markdownDraft)) return;
     setOperation("preview");
     setParseError(null);
@@ -826,10 +853,16 @@ export const ImportsPage = () => {
       const previewItems: PreviewState["previewItems"] = [];
       const previewErrors: PreviewState["previewErrors"] = [];
 
-      for (const document of mapped.documents) {
+      for (const source of mapped.documents) {
+        const document =
+          source.kind === "program" && workoutKeys
+            ? { ...source, data: { ...source.data, templateWorkoutKeys: workoutKeys } }
+            : source;
         const label = sourceLabel(document);
         try {
           const result = await importsApi.preview(document);
+          const selected = document.data.templateWorkoutKeys;
+          if (document.kind === "program" && Array.isArray(selected)) setSelectedWorkouts(selected);
           prepared.push({ document, previewToken: result.previewToken, items: result.items });
           previewItems.push(...result.items.map((item) => ({ ...item, source: label })));
         } catch (error) {
@@ -856,11 +889,22 @@ export const ImportsPage = () => {
         const source = sourceLabel(prepared.document);
         try {
           const result = await importsApi.commit(prepared.previewToken, prepared.document);
+          const libraryRows = Array.isArray(result.rows)
+            ? prepared.document.kind === "session-templates"
+              ? result.rows
+              : []
+            : (result.rows.templates ?? []);
+          if (
+            libraryRows.some(({ status }) => status === "created" || status === "updated") &&
+            session.status === "signed-in"
+          ) {
+            void queryClient.invalidateQueries({ queryKey: templateKey(session.ownerId) });
+          }
           if (Array.isArray(result.rows)) {
             rows.push(
               ...result.rows.map((row) => ({
                 source,
-                key: "key" in row ? row.key : prepared.document.kind,
+                key: row.label ?? row.key,
                 status: "status" in row ? row.status : "committed",
               })),
             );
@@ -869,8 +913,15 @@ export const ImportsPage = () => {
             rows.push({
               source,
               key: result.rows.programId,
-              status: "committed",
+              status: result.rows.unchanged ? "skipped" : "committed",
             });
+            rows.push(
+              ...libraryRows.map(({ key, label, status }) => ({
+                source: "Library",
+                key: label ?? key,
+                status,
+              })),
+            );
           }
         } catch (error) {
           rows.push({
@@ -917,14 +968,26 @@ export const ImportsPage = () => {
   const columnLayout = { base: "minmax(0, 1fr)", md: "repeat(2, minmax(0, 1fr))" };
   return (
     <Stack gap="6">
-      <PageHeader title="Bulk imports" />
+      <PageHeader title={templateEntry ? "Import session templates" : "Bulk imports"} />
+      {templateEntry && (
+        <Flex gap="4" wrap="wrap">
+          <Link asChild variant="underline">
+            <RouterLink to="/library">Back to Library</RouterLink>
+          </Link>
+          <Link href={templateExample[2]} download={templateExample[1]} variant="underline">
+            Download template JSON example
+          </Link>
+        </Flex>
+      )}
       <Panel as="section" gap="5">
         <Stack gap="1">
           <Heading as="h2" size="md">
             Add import data
           </Heading>
           <Text color="fg.muted" fontSize="sm">
-            Upload or paste JSON, CSV, or a Markdown training menu.
+            {templateEntry
+              ? "Upload or paste Paideuo session template JSON."
+              : "Upload or paste JSON, CSV, or a Markdown training menu."}
           </Text>
         </Stack>
 
@@ -938,7 +1001,11 @@ export const ImportsPage = () => {
               type="file"
               hidden
               disabled={busy}
-              accept=".json,.csv,.md,.markdown,text/markdown,application/json,text/csv"
+              accept={
+                templateEntry
+                  ? ".json,application/json"
+                  : ".json,.csv,.md,.markdown,text/markdown,application/json,text/csv"
+              }
               onChange={(event) => {
                 const file = event.currentTarget.files?.[0];
                 event.currentTarget.value = "";
@@ -946,7 +1013,9 @@ export const ImportsPage = () => {
               }}
             />
             <Text fontSize="sm" color="fg.muted" role="status">
-              {operation === "read" ? "Reading file…" : fileName || "JSON, CSV, or Markdown"}
+              {operation === "read"
+                ? "Reading file…"
+                : fileName || (templateEntry ? "JSON" : "JSON, CSV, or Markdown")}
             </Text>
             {(fileName || rawText) && (
               <Button
@@ -970,7 +1039,9 @@ export const ImportsPage = () => {
                 rows={6}
                 fontFamily="mono"
                 spellCheck={false}
-                placeholder="Paste JSON, CSV, or Markdown here"
+                placeholder={
+                  templateEntry ? "Paste template JSON here" : "Paste JSON, CSV, or Markdown here"
+                }
                 value={rawText}
                 disabled={busy}
                 onChange={(event) => {
@@ -983,37 +1054,39 @@ export const ImportsPage = () => {
           </Disclosure>
         </Stack>
 
-        <Disclosure label="Supported formats and examples">
-          <Stack gap="3" fontSize="sm">
-            <Text color="fg.muted">
-              Download a Paideuo JSON example for the dataset you want to import.
-            </Text>
-            <Flex gapX="4" gapY="2" wrap="wrap">
-              {jsonExamples.map(([label, filename, href]) => (
-                <Link
-                  key={label}
-                  color="teal.fg"
-                  textDecoration="underline"
-                  href={href}
-                  download={filename}
-                >
-                  {label}
-                </Link>
-              ))}
-            </Flex>
-            <Text color="fg.muted">
-              CSV supports daily check-ins and workout results. Put column names on the first row
-              and use YYYY-MM-DD dates. For workout results, use one row per workout component.
-            </Text>
-            <Text color="fg.muted">
-              Markdown supports assisted program drafts. Use an H1 title, H2 block headings, H3 week
-              headings, and H4 or bulleted session names. The draft is never committed until
-              previewed and explicitly confirmed.
-            </Text>
-          </Stack>
-        </Disclosure>
+        {!templateEntry && (
+          <Disclosure label="Supported formats and examples">
+            <Stack gap="3" fontSize="sm">
+              <Text color="fg.muted">
+                Download a Paideuo JSON example for the dataset you want to import.
+              </Text>
+              <Flex gapX="4" gapY="2" wrap="wrap">
+                {jsonExamples.map(([label, filename, href]) => (
+                  <Link
+                    key={label}
+                    color="teal.fg"
+                    textDecoration="underline"
+                    href={href}
+                    download={filename}
+                  >
+                    {label}
+                  </Link>
+                ))}
+              </Flex>
+              <Text color="fg.muted">
+                CSV supports daily check-ins and workout results. Put column names on the first row
+                and use YYYY-MM-DD dates. For workout results, use one row per workout component.
+              </Text>
+              <Text color="fg.muted">
+                Markdown supports assisted program drafts. Use an H1 title, H2 block headings, H3
+                week headings, and H4 or bulleted session names. The draft is never committed until
+                previewed and explicitly confirmed.
+              </Text>
+            </Stack>
+          </Disclosure>
+        )}
 
-        {rawText.trim() && (
+        {!templateEntry && rawText.trim() && (
           <Grid templateColumns={columnLayout} gap="3">
             <FormField>
               File format
@@ -1121,7 +1194,13 @@ export const ImportsPage = () => {
           error={parseError}
           busy={busy}
           validating={operation === "preview"}
-          saved={commit?.rows.some((row) => row.status === "committed") ?? false}
+          saved={
+            commit?.rows.some(
+              (row) =>
+                row.source !== "Library" &&
+                (row.status === "committed" || row.status === "skipped"),
+            ) ?? false
+          }
           onEdit={(value) => {
             setDraftText(value);
             setParseError(null);
@@ -1196,6 +1275,7 @@ export const ImportsPage = () => {
                     <Table.ColumnHeader>Key</Table.ColumnHeader>
                     <Table.ColumnHeader>Status</Table.ColumnHeader>
                     <Table.ColumnHeader>Details</Table.ColumnHeader>
+                    {programPreview && <Table.ColumnHeader>Save to Library</Table.ColumnHeader>}
                   </Table.Row>
                 </Table.Header>
                 <Table.Body>
@@ -1203,13 +1283,44 @@ export const ImportsPage = () => {
                     <Table.Row key={`${item.source}:${item.type}:${item.key}`}>
                       <Table.Cell>{item.source}</Table.Cell>
                       <Table.Cell>{item.type}</Table.Cell>
-                      <Table.Cell>{item.key}</Table.Cell>
+                      <Table.Cell>
+                        {item.label && <Text fontWeight="medium">{item.label}</Text>}
+                        {item.key}
+                      </Table.Cell>
                       <Table.Cell>
                         <Badge colorPalette={statusPalette[item.status] ?? "gray"}>
                           {formatStatus(item.status)}
                         </Badge>
                       </Table.Cell>
-                      <Table.Cell>{item.error || ""}</Table.Cell>
+                      <Table.Cell>{item.error ?? item.detail}</Table.Cell>
+                      {programPreview && (
+                        <Table.Cell>
+                          {item.type === "prescription" && (
+                            <Checkbox.Root
+                              checked={selectedWorkouts.includes(item.key)}
+                              disabled={
+                                busy ||
+                                !!commit ||
+                                (selectedWorkouts.length >= 100 &&
+                                  !selectedWorkouts.includes(item.key))
+                              }
+                              onCheckedChange={({ checked }) => {
+                                setConfirmCommit(false);
+                                setSelectedWorkouts((current) =>
+                                  checked === true
+                                    ? [...current, item.key]
+                                    : current.filter((key) => key !== item.key),
+                                );
+                              }}
+                            >
+                              <Checkbox.HiddenInput
+                                aria-label={`Save ${item.label ?? item.key} to Library`}
+                              />
+                              <Checkbox.Control />
+                            </Checkbox.Root>
+                          )}
+                        </Table.Cell>
+                      )}
                     </Table.Row>
                   ))}
                 </Table.Body>
@@ -1217,6 +1328,20 @@ export const ImportsPage = () => {
             </Box>
           )}
 
+          {programPreview && selectedWorkouts.length === 100 && (
+            <Text fontSize="sm" color="fg.muted">
+              You can save up to 100 workouts per import.
+            </Text>
+          )}
+          {programPreview && selectionChanged && (
+            <Button
+              alignSelf="start"
+              disabled={busy}
+              onClick={() => void previewImport(selectedWorkouts)}
+            >
+              Preview Library selection
+            </Button>
+          )}
           {hasConflicts && (
             <Notice role="alert">Resolve the conflicts above and preview again.</Notice>
           )}

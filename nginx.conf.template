@@ -2,7 +2,7 @@ server {
     listen 80;
     root /usr/share/nginx/html;
 
-    location /api/ {
+    location ~ ^/(?:api/|\.well-known/oauth-(?:authorization-server$|protected-resource/)) {
         resolver ${NGINX_LOCAL_RESOLVERS} valid=30s;
         resolver_timeout 5s;
         set $pocketbase_upstream "${POCKETBASE_URL}";

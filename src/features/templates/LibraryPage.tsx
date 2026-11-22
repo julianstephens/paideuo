@@ -1,6 +1,7 @@
 import { Button, Flex, Heading, Input, Stack, Text } from "@chakra-ui/react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useState } from "react";
+import { Link as RouterLink } from "react-router";
 import { FormField, Notice, PageHeader, Panel } from "../../components/ui";
 import { errorMessage } from "../../lib/api/request";
 import { useSession } from "../auth/session";
@@ -69,9 +70,14 @@ const Library = ({ ownerId }: { ownerId: string }) => {
       <PageHeader
         title="Library"
         action={
-          <Button onClick={() => open()} disabled={locked}>
-            New template
-          </Button>
+          <Flex gap="2" wrap="wrap">
+            <Button variant="outline" asChild>
+              <RouterLink to="/imports?kind=session-templates">Import templates</RouterLink>
+            </Button>
+            <Button onClick={() => open()} disabled={locked}>
+              New template
+            </Button>
+          </Flex>
         }
       />
       {editor && (
@@ -145,6 +151,11 @@ const Library = ({ ownerId }: { ownerId: string }) => {
               {template.components.length === 1 ? "component" : "components"}
             </Text>
           </Flex>
+          {template.externalId && (
+            <Text fontSize="sm" color="fg.muted">
+              Import ID <code>{template.externalId}</code>
+            </Text>
+          )}
           {template.description && <Text whiteSpace="pre-wrap">{template.description}</Text>}
           <Flex gap="2" wrap="wrap">
             <Button

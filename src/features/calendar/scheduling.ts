@@ -59,7 +59,7 @@ export type SessionExecution =
   | { action: "skip" | "restore" };
 export type SessionExecutionState = {
   revision: string;
-  status: "planned" | "completed" | "skipped";
+  status: "planned" | "completed" | "skipped" | "rest";
   completion: SessionCompletion | null;
   componentResults: ComponentResult[];
   sessionLoad: number | null;

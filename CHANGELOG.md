@@ -2,6 +2,10 @@
 
 - Add additional workout session types and aerobic outcome tracking
 - Add support for range values in planned duration and intensity
+- Add support for rest days and recovery protocols
+- Add support for template management via import
+- Add oauth support for mcp integration
+- Improve site UI/UX
 
 ## v0.4.1
 

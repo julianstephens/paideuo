@@ -1,9 +1,11 @@
-import { Button, Grid, Heading, NativeSelect, Stack, Text } from "@chakra-ui/react";
+import { Badge, Button, Flex, Grid, Heading, NativeSelect, Stack, Text } from "@chakra-ui/react";
 import { useQuery } from "@tanstack/react-query";
 import { useId } from "react";
-import { FormField, Notice, Panel } from "../../components/ui";
+import { Disclosure, FormField, Notice, Panel } from "../../components/ui";
 import { errorMessage } from "../../lib/api/request";
 import { PrescriptionSnapshot } from "../calendar/PrescriptionSnapshot";
+import { PrescriptionChangeBadges, PrescriptionDiff } from "../prescriptions/PrescriptionDiff";
+import { prescriptionChanges } from "../prescriptions/prescriptionChanges";
 import type { BlockDetail, ProgramWeek, Slot, blocksApi } from "../programs/programs";
 import { weekTitle } from "./WeekProgramming";
 
@@ -41,6 +43,80 @@ export const WeekComparison = ({
     report.data?.map((session) => [`${session.weekId}/${session.slotId}`, session]),
   );
 
+  const entries = block.slots.map((slot) => {
+    const first = sessions.get(`${left.id}/${slot.id}`);
+    const second = sessions.get(`${right.id}/${slot.id}`);
+    const changes =
+      first && second ? prescriptionChanges(first, second) : { fields: [], components: [] };
+    const status =
+      first && second
+        ? changes.fields.length || changes.components.length
+          ? "Changed"
+          : "Unchanged"
+        : first
+          ? "Removed"
+          : second
+            ? "Added"
+            : "Empty";
+    return { slot, first, second, changes, status };
+  });
+  const changed = entries.filter(({ status }) => status !== "Unchanged" && status !== "Empty");
+  const unchanged = entries.filter(({ status }) => status === "Unchanged" || status === "Empty");
+  const slotCard = ({ slot, first, second, changes, status }: (typeof entries)[number]) => (
+    <Panel key={slot.id}>
+      <Flex justify="space-between" gap="2" wrap="wrap" align="baseline">
+        <Heading size="sm">
+          {weekdays[slot.weekday - 1]} · {slot.label}
+        </Heading>
+        {status === "Changed" ? (
+          <PrescriptionChangeBadges changes={changes} />
+        ) : (
+          <Badge
+            colorPalette={status === "Removed" ? "red" : status === "Added" ? "green" : "gray"}
+          >
+            {status === "Added" || status === "Removed"
+              ? `Workout ${status.toLowerCase()}`
+              : status}
+          </Badge>
+        )}
+      </Flex>
+      {(!first || !second) && (first || second) && (
+        <Text fontWeight="semibold">{(second ?? first)?.title}</Text>
+      )}
+      {status === "Changed" && <PrescriptionDiff changes={changes} />}
+      <Disclosure label="View full prescriptions">
+        <Grid templateColumns={columns} gap="3">
+          {weeks.map((week, index) => {
+            const session = index === 0 ? first : second;
+            return (
+              <Stack key={week.id} bg="bg.inset" p="3" borderRadius="md" minW="0">
+                <Heading size="xs">{weekTitle(week)}</Heading>
+                {session ? (
+                  <>
+                    <Text fontWeight="semibold">{session.title}</Text>
+                    <Text textTransform="capitalize">{session.sessionType}</Text>
+                    <PrescriptionSnapshot prescription={session} />
+                  </>
+                ) : (
+                  <Text>No prescription</Text>
+                )}
+                <Button
+                  alignSelf="start"
+                  size="sm"
+                  variant="outline"
+                  onClick={() => openCell(week, slot)}
+                  aria-label={`${session ? "Edit" : "Create"} ${slot.label} in ${weekTitle(week)}`}
+                >
+                  {session ? "Edit prescription" : "Create prescription"}
+                </Button>
+              </Stack>
+            );
+          })}
+        </Grid>
+      </Disclosure>
+    </Panel>
+  );
+
   return (
     <Stack gap="3" aria-label="Week comparison">
       <Grid templateColumns={columns} gap="3">
@@ -69,12 +145,6 @@ export const WeekComparison = ({
                 <NativeSelect.Indicator />
               </NativeSelect.Root>
             </FormField>
-            <Text textTransform="capitalize">{week.weekType} week</Text>
-            {week.focus && (
-              <Text whiteSpace="pre-wrap" overflowWrap="anywhere">
-                {week.focus}
-              </Text>
-            )}
           </Panel>
         ))}
       </Grid>
@@ -87,51 +157,41 @@ export const WeekComparison = ({
           </Button>
         </Stack>
       )}
-      {report.data &&
-        block.slots.map((slot) => (
-          <Panel key={slot.id}>
-            <Heading size="sm">
-              {weekdays[slot.weekday - 1]}
-              {" · "}
-              {slot.label}
-            </Heading>
-            <Grid templateColumns={columns} gap="3">
-              {weeks.map((week) => {
-                const session = sessions.get(`${week.id}/${slot.id}`);
-                return (
-                  <Stack
-                    key={week.id}
-                    bg="bg.inset"
-                    p="3"
-                    borderRadius="md"
-                    minW="0"
-                    overflowWrap="anywhere"
-                  >
+      {(left.weekType !== right.weekType || left.focus !== right.focus) && (
+        <Panel>
+          <Heading size="sm">Week context changes</Heading>
+          {left.weekType !== right.weekType && (
+            <Text textTransform="capitalize">
+              {left.weekType} → {right.weekType} week
+            </Text>
+          )}
+          {left.focus !== right.focus && (
+            <Disclosure label="Training focus changed">
+              <Grid templateColumns={columns} gap="3">
+                {weeks.map((week) => (
+                  <Stack key={week.id} gap="1">
                     <Heading size="xs">{weekTitle(week)}</Heading>
-                    {session ? (
-                      <>
-                        <Text fontWeight="semibold">{session.title}</Text>
-                        <Text textTransform="capitalize">{session.sessionType}</Text>
-                        <PrescriptionSnapshot prescription={session} />
-                      </>
-                    ) : (
-                      <Text>No prescription</Text>
-                    )}
-                    <Button
-                      alignSelf="start"
-                      size="sm"
-                      variant="outline"
-                      onClick={() => openCell(week, slot)}
-                      aria-label={`${session ? "Edit" : "Create"} ${slot.label} in ${weekTitle(week)}`}
-                    >
-                      {session ? "Edit prescription" : "Create prescription"}
-                    </Button>
+                    <Text whiteSpace="pre-wrap">{week.focus || "No focus specified"}</Text>
                   </Stack>
-                );
-              })}
-            </Grid>
-          </Panel>
-        ))}
+                ))}
+              </Grid>
+            </Disclosure>
+          )}
+        </Panel>
+      )}
+      {report.data && (
+        <>
+          <Heading as="h3" size="sm">
+            {changed.length} {changed.length === 1 ? "changed slot" : "changed slots"}
+          </Heading>
+          {changed.map(slotCard)}
+          {unchanged.length > 0 && (
+            <Disclosure label={`Unchanged and empty slots (${unchanged.length})`}>
+              <Stack gap="3">{unchanged.map(slotCard)}</Stack>
+            </Disclosure>
+          )}
+        </>
+      )}
     </Stack>
   );
 };

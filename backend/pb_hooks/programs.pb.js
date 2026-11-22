@@ -160,6 +160,7 @@ const handlePrograms = (event) => {
       "external_key",
       "classification",
     ]),
+    optional: component.getBool("optional"),
     targets: JSON.parse(component.getString("targets") || "null"),
   });
 
@@ -187,6 +188,7 @@ const handlePrograms = (event) => {
     weekId: record.getString("program_week"),
     slotId: record.getString("slot"),
     title: record.getString("title"),
+    sessionType: record.getString("session_type"),
     plannedDurationMin:
       record.getBool("duration_specified") || record.getInt("planned_duration_min") > 0
         ? record.getInt("planned_duration_min")
@@ -201,7 +203,6 @@ const handlePrograms = (event) => {
 
   const presentPrescription = (record, components) => ({
     ...sessionSummary(record),
-    sessionType: record.getString("session_type"),
     description: record.getString("description"),
     notes: record.getString("notes"),
     components: components.map((component) => ({
@@ -745,11 +746,8 @@ const handlePrograms = (event) => {
           if (intensity !== null && !["easy", "moderate", "hard", "maximal"].includes(intensity)) {
             throw new BadRequestError("Choose a planned intensity.");
           }
-          if (
-            !["climbing", "strength", "conditioning", "mobility", "other"].includes(
-              body.sessionType,
-            )
-          ) {
+          const { sessionTypes } = require(__hooks + "/training-prescription.cjs");
+          if (!sessionTypes.includes(body.sessionType)) {
             throw new BadRequestError("Choose a session type.");
           }
           const values = sessionFields({
@@ -1053,17 +1051,8 @@ const handlePrograms = (event) => {
             { templateId, owner },
           );
           if (!template) throw new NotFoundError("Template not found.");
-          baseline = {
-            name: template.getString("name"),
-            description: template.getString("description"),
-            sessionType: template.getString("session_type"),
-            plannedDurationMin: JSON.parse(template.getString("planned_duration_min") || "null"),
-            plannedDurationMax: JSON.parse(template.getString("planned_duration_max") || "null"),
-            plannedRpeMin: JSON.parse(template.getString("planned_rpe_min") || "null"),
-            plannedRpeMax: JSON.parse(template.getString("planned_rpe_max") || "null"),
-            plannedIntensity: template.getString("planned_intensity") || null,
-            components: JSON.parse(template.getString("components") || "[]"),
-          };
+          const { templateSnapshot } = require(__hooks + "/prescription-fields.cjs");
+          baseline = templateSnapshot(template);
         }
         slot.set("baseline", baseline);
         tx.save(slot);
@@ -1137,6 +1126,7 @@ const handlePrograms = (event) => {
           completed: row.getString("status") === "completed",
           plannedMinutes: snapshot.plannedDurationMin ?? null,
           sessionType: snapshot.sessionType,
+          prescription: snapshot,
           plannedIntensity: snapshot.plannedIntensity,
           completion: completions.get(row.id),
         };
@@ -1176,6 +1166,7 @@ const handlePrograms = (event) => {
           planned: snapshot.plannedDurationMin ?? null,
           plannedIntensity: snapshot.plannedIntensity ?? null,
           actual: measured.get(row.id) ?? null,
+          prescription: snapshot,
         };
       });
       const weeksByBlock = new Map();

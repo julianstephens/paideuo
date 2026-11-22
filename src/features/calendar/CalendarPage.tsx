@@ -7,6 +7,7 @@ import {
   Grid,
   Heading,
   Input,
+  Link,
   Menu,
   Portal,
   Stack,
@@ -18,7 +19,8 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { ClientResponseError } from "pocketbase";
 import { useEffect, useRef, useState } from "react";
 import { Link as RouterLink, useSearchParams } from "react-router";
-import { FormField, Notice, PageHeader, Panel } from "../../components/ui";
+import { AppIcon } from "../../app/AppIcon";
+import { Disclosure, FormField, Notice, PageHeader, Panel } from "../../components/ui";
 import { errorMessage } from "../../lib/api/request";
 import { CalendarCompliance } from "../compliance/CalendarCompliance";
 import { formatPlannedDuration, formatPlannedRpe } from "../prescriptions/format";
@@ -26,10 +28,19 @@ import { metricsKey } from "../compliance/metrics";
 import { useSession } from "../auth/session";
 import { programKeys } from "../programs/programs";
 import { CheckInDialog } from "../recovery/CheckInDialog";
+import { checkInApi, checkInKey, checkInSections, hasCheckInResponse } from "../recovery/recovery";
+import type { CheckInSection } from "../recovery/recovery";
 import { reviewKey } from "../reviews/reviews";
 import { PrescriptionSnapshot } from "./PrescriptionSnapshot";
-import { CompletionForm, CompletionResults } from "./SessionCompletion";
+import {
+  CompletionForm,
+  CompletionResults,
+  clearCompletionDraft,
+  completionDraftKey,
+} from "./SessionCompletion";
 import { WorkoutDialog } from "./WorkoutDialog";
+import { workoutTypes } from "../prescriptions/workoutTypes";
+import type { SessionType } from "../templates/templates";
 import {
   addDays,
   dateKey,
@@ -54,7 +65,9 @@ type View = "month" | "week";
 const weekdays = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
 const monthSessionLimit = 2;
 const dayOptions = { month: "short", day: "numeric" } as const;
-const palettes = { planned: "gray", completed: "green", skipped: "orange" };
+const palettes = { completed: "green", skipped: "orange", rest: "blue" };
+const sessionPalette = (type: SessionType, status: CalendarSession["status"]) =>
+  status === "completed" ? palettes.completed : workoutTypes[type].palette;
 
 const calendarRange = (date: Date, view: View) => {
   const first = monday(view === "month" ? monthStart(date) : date);
@@ -64,11 +77,12 @@ const calendarRange = (date: Date, view: View) => {
   return { first, last: addDays(monday(lastInMonth), 6) };
 };
 
-const StatusBadge = ({ status }: { status: CalendarSession["status"] }) => (
-  <Badge colorPalette={palettes[status]} variant="subtle" textTransform="capitalize">
-    {status}
-  </Badge>
-);
+const StatusBadge = ({ status }: { status: CalendarSession["status"] }) =>
+  status === "planned" ? null : (
+    <Badge colorPalette={palettes[status]} variant="subtle" textTransform="capitalize">
+      {status}
+    </Badge>
+  );
 
 export const CalendarPage = () => {
   const session = useSession();
@@ -79,13 +93,16 @@ export const CalendarPage = () => {
 
 const Calendar = ({ ownerId }: { ownerId: string }) => {
   const [params, setParams] = useSearchParams();
-  const selectSession = (id?: string) => {
+  const selectSession = (id?: string, log = false) => {
     const next = new URLSearchParams(params);
     if (id) next.set("session", id);
     else next.delete("session");
+    if (id && log) next.set("log", "true");
+    else next.delete("log");
     setParams(next, { replace: true });
   };
-  const [checkInDate, setCheckInDate] = useState<string>();
+  const [checkIn, setCheckIn] = useState<{ date: string; section: CheckInSection }>();
+  const checkInSection = checkIn?.section ?? checkInSections[0];
   const [workoutDate, setWorkoutDate] = useState<string>();
   const workoutTrigger = useRef<HTMLButtonElement>(null);
   const addWorkoutButton = (date: string) => (
@@ -101,26 +118,11 @@ const Calendar = ({ ownerId }: { ownerId: string }) => {
         setWorkoutDate(date);
       }}
     >
+      <AppIcon name="plus" size={15} />
       Add workout
     </Button>
   );
   const checkInTrigger = useRef<HTMLButtonElement>(null);
-  const checkInButton = (date: string) => (
-    <Button
-      type="button"
-      variant="ghost"
-      size="xs"
-      alignSelf="start"
-      maxW="100%"
-      aria-label={`Check in for ${fullDate(date)}`}
-      onClick={(event) => {
-        checkInTrigger.current = event.currentTarget;
-        setCheckInDate(date);
-      }}
-    >
-      Check in
-    </Button>
-  );
   const desktop = useBreakpointValue({ base: false, md: true });
   const requestedView = params.get("view");
   const view: View = requestedView === "month" ? "month" : "week";
@@ -137,6 +139,46 @@ const Calendar = ({ ownerId }: { ownerId: string }) => {
     refetchInterval: 60_000,
     retry: false,
   });
+  const checkIns = useQuery({
+    queryKey: [...checkInKey(ownerId), start, end],
+    queryFn: ({ signal }) => checkInApi.list(start, end, signal),
+    retry: false,
+  });
+  const checkInsByDate = new Map(checkIns.data?.map((entry) => [entry.date, entry]));
+  const checkInButtons = (date: string) =>
+    checkInSections.map((section) => {
+      const complete = hasCheckInResponse(checkInsByDate.get(date), section);
+      const nutrition = section.id === "nutrition";
+      return (
+        <Button
+          key={section.id}
+          type="button"
+          variant={complete ? "subtle" : "ghost"}
+          colorPalette={complete ? "green" : undefined}
+          size="xs"
+          alignSelf="start"
+          maxW="100%"
+          aria-label={
+            complete
+              ? `${section.title} complete for ${fullDate(date)}. Edit entry`
+              : `${section.title} for ${fullDate(date)}`
+          }
+          onClick={(event) => {
+            checkInTrigger.current = event.currentTarget;
+            setCheckIn({ date, section });
+          }}
+        >
+          <AppIcon name={complete ? "check" : nutrition ? "nutrition" : "checkIn"} size={15} />
+          {nutrition
+            ? complete
+              ? "Nutrition logged"
+              : "Log nutrition"
+            : complete
+              ? "Check-in complete"
+              : section.title}
+        </Button>
+      );
+    });
   const days = Array.from(
     { length: Math.round((last.getTime() - first.getTime()) / 86400000) + 1 },
     (_, index) => addDays(first, index),
@@ -146,9 +188,16 @@ const Calendar = ({ ownerId }: { ownerId: string }) => {
     if (!byDay.has(session.scheduledDate)) byDay.set(session.scheduledDate, []);
     byDay.get(session.scheduledDate)?.push(session);
   }
+  const todayKey = dateKey(today);
+  const todaySessions = byDay.get(todayKey) ?? [];
+  const leadSession = todaySessions.find(({ status }) => status === "planned") ?? todaySessions[0];
+  const unresolved = (query.data?.sessions ?? []).filter(
+    ({ status, scheduledDate, timezone }) =>
+      status === "planned" && scheduledDate < todayInTimezone(timezone),
+  );
   const selected = selectedCalendarSession(query.data?.sessions, params);
   const navigate = (nextDate: Date, nextView: View) => {
-    setCheckInDate(undefined);
+    setCheckIn(undefined);
     setWorkoutDate(undefined);
     setParams({ date: dateKey(nextDate), view: nextView });
   };
@@ -163,42 +212,137 @@ const Calendar = ({ ownerId }: { ownerId: string }) => {
   const desktopMonth = isMonth && desktop;
 
   return (
-    <Stack gap="3">
+    <Stack gap={{ base: "4", md: "5" }}>
       <PageHeader title="Calendar" />
-      <Flex justify="space-between" wrap="wrap" gap="2" align="center">
-        <Heading as="h2" size="lg" aria-live="polite" me="auto">
-          {period}
-        </Heading>
-        <Flex gap="2" wrap="wrap" aria-label="Calendar navigation" role="group">
-          <Button size="sm" variant="outline" onClick={() => move(-1)}>
-            Previous
-          </Button>
-          <Button size="sm" variant="outline" onClick={() => navigate(today, view)}>
-            Today
-          </Button>
-          <Button size="sm" variant="outline" onClick={() => move(1)}>
-            Next
-          </Button>
+      {query.isSuccess && start <= todayKey && todayKey <= end && (
+        <Panel as="section" gap="3">
+          <Flex justify="space-between" align="baseline" gap="2" wrap="wrap">
+            <Heading as="h2" size="md">
+              Today
+            </Heading>
+            <Text fontSize="sm" color="fg.muted">
+              {fullDate(todayKey)}
+            </Text>
+          </Flex>
+          {leadSession ? (
+            <Flex
+              justify="space-between"
+              gap="3"
+              align={{ base: "start", sm: "center" }}
+              wrap="wrap"
+            >
+              <Stack gap="1">
+                <Flex align="baseline" gap="2" wrap="wrap">
+                  <Heading as="h3" size="lg">
+                    {leadSession.prescription.title}
+                  </Heading>
+                  <StatusBadge status={leadSession.status} />
+                </Flex>
+                <Text fontSize="sm" color="fg.muted">
+                  {[
+                    workoutTypes[leadSession.prescription.sessionType].label,
+                    formatPlannedDuration(
+                      leadSession.prescription.plannedDurationMin,
+                      leadSession.prescription.plannedDurationMax,
+                    ),
+                    formatPlannedRpe(
+                      leadSession.prescription.plannedRpeMin,
+                      leadSession.prescription.plannedRpeMax,
+                    ) ?? leadSession.prescription.plannedIntensity,
+                  ]
+                    .filter(Boolean)
+                    .join(" · ")}
+                </Text>
+              </Stack>
+              <Flex gap="2" wrap="wrap">
+                {leadSession.status === "planned" && (
+                  <Button size="sm" onClick={() => selectSession(leadSession.id, true)}>
+                    Log workout
+                  </Button>
+                )}
+                <Button size="sm" variant="outline" onClick={() => selectSession(leadSession.id)}>
+                  View workout
+                </Button>
+              </Flex>
+            </Flex>
+          ) : (
+            <Text color="fg.muted">No workouts scheduled today.</Text>
+          )}
+          {todaySessions.length > 1 && (
+            <Disclosure label={`Other workouts today (${todaySessions.length - 1})`}>
+              <SessionButtons
+                sessions={todaySessions.filter(({ id }) => id !== leadSession?.id)}
+                select={selectSession}
+              />
+            </Disclosure>
+          )}
+          <Flex gap="2" wrap="wrap">
+            {checkInButtons(todayKey)}
+            {!leadSession && addWorkoutButton(todayKey)}
+          </Flex>
+        </Panel>
+      )}
+      {unresolved.length > 0 && (
+        <Panel py="3">
+          <Disclosure label={`Past workouts to log (${unresolved.length})`}>
+            <Stack gap="2">
+              {unresolved.map((session) => (
+                <Flex key={session.id} gap="2" justify="space-between" align="center" wrap="wrap">
+                  <Stack gap="0">
+                    <Text fontWeight="semibold">{session.prescription.title}</Text>
+                    <Text fontSize="sm" color="fg.muted">
+                      {fullDate(session.scheduledDate)}
+                    </Text>
+                  </Stack>
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    onClick={() => selectSession(session.id, true)}
+                  >
+                    Log workout
+                  </Button>
+                </Flex>
+              ))}
+            </Stack>
+          </Disclosure>
+        </Panel>
+      )}
+      <Panel as="section" aria-label="Calendar controls" py={{ base: "3", md: "4" }}>
+        <Flex justify="space-between" wrap="wrap" gap="3" align="center">
+          <Heading as="h2" size="lg" aria-live="polite" me="auto">
+            {period}
+          </Heading>
+          <Flex gap="2" wrap="wrap" aria-label="Calendar navigation" role="group">
+            <Button size="sm" variant="outline" onClick={() => move(-1)}>
+              Previous
+            </Button>
+            <Button size="sm" variant="outline" onClick={() => navigate(today, view)}>
+              Today
+            </Button>
+            <Button size="sm" variant="outline" onClick={() => move(1)}>
+              Next
+            </Button>
+          </Flex>
+          <Flex gap="2" aria-label="Calendar view" role="group">
+            <Button
+              size="sm"
+              aria-pressed={view === "month"}
+              variant={view === "month" ? "solid" : "outline"}
+              onClick={() => navigate(date, "month")}
+            >
+              Month
+            </Button>
+            <Button
+              size="sm"
+              aria-pressed={view === "week"}
+              variant={view === "week" ? "solid" : "outline"}
+              onClick={() => navigate(date, "week")}
+            >
+              Week
+            </Button>
+          </Flex>
         </Flex>
-        <Flex gap="2" aria-label="Calendar view" role="group">
-          <Button
-            size="sm"
-            aria-pressed={view === "month"}
-            variant={view === "month" ? "solid" : "outline"}
-            onClick={() => navigate(date, "month")}
-          >
-            Month
-          </Button>
-          <Button
-            size="sm"
-            aria-pressed={view === "week"}
-            variant={view === "week" ? "solid" : "outline"}
-            onClick={() => navigate(date, "week")}
-          >
-            Week
-          </Button>
-        </Flex>
-      </Flex>
+      </Panel>
       {query.isPending && <Notice role="status">Loading scheduled sessions…</Notice>}
       {query.isError && (
         <Flex align="center" gap="2" wrap="wrap">
@@ -226,7 +370,7 @@ const Calendar = ({ ownerId }: { ownerId: string }) => {
         alignItems="start"
         templateColumns={
           view === "week"
-            ? { base: "minmax(0, 1fr)", xl: "minmax(0, 1fr) 15rem" }
+            ? { base: "minmax(0, 1fr)", xl: "minmax(0, 1fr) minmax(15rem, 22%)" }
             : "minmax(0, 1fr)"
         }
       >
@@ -244,9 +388,13 @@ const Calendar = ({ ownerId }: { ownerId: string }) => {
           templateColumns={
             view === "month"
               ? "repeat(7, minmax(0, 1fr))"
-              : { base: "1fr", lg: "repeat(7, minmax(0, 1fr))" }
+              : {
+                  base: "minmax(0, 1fr)",
+                  md: "repeat(2, minmax(0, 1fr))",
+                  "2xl": "repeat(3, minmax(0, 1fr))",
+                }
           }
-          gap={desktopMonth ? "1px" : "1"}
+          gap={desktopMonth ? "1px" : isMonth ? "1" : "3"}
           bg={desktopMonth ? "border" : undefined}
           borderWidth={desktopMonth ? "1px" : undefined}
           borderRadius={desktopMonth ? "md" : undefined}
@@ -276,22 +424,44 @@ const Calendar = ({ ownerId }: { ownerId: string }) => {
               return (
                 <Button
                   key={key}
-                  variant={key === dateKey(date) ? "solid" : "outline"}
-                  h="12"
-                  px="0"
+                  variant={key === dateKey(date) ? "surface" : "outline"}
+                  h="auto"
+                  minH="20"
+                  px="0.5"
+                  py="1"
                   minW="0"
                   flexDirection="column"
-                  gap="0"
+                  justifyContent="start"
+                  gap="0.5"
                   aria-current={current ? "date" : undefined}
                   aria-pressed={key === dateKey(date)}
-                  aria-label={`${fullDate(key)}, ${sessions.length} sessions`}
+                  aria-label={`${fullDate(key)}, ${sessions.length ? sessions.map(({ prescription }) => workoutTypes[prescription.sessionType].label).join(", ") : "no sessions"}`}
                   opacity={outside ? 0.65 : 1}
                   onClick={() => navigate(day, view)}
                 >
-                  {day.getUTCDate()}
-                  {sessions.length > 0 && (
-                    <Text fontSize="2xs">
-                      {sessions.length} {sessions.length === 1 ? "session" : "sessions"}
+                  <Text as="span" lineHeight="short">
+                    {day.getUTCDate()}
+                  </Text>
+                  {sessions.slice(0, monthSessionLimit).map(({ id, prescription, status }) => {
+                    const type = workoutTypes[prescription.sessionType];
+                    return (
+                      <Badge
+                        as="span"
+                        key={id}
+                        colorPalette={sessionPalette(prescription.sessionType, status)}
+                        variant="subtle"
+                        justifyContent="center"
+                        fontSize="xs"
+                        px="0"
+                        w="full"
+                      >
+                        {type.short}
+                      </Badge>
+                    );
+                  })}
+                  {extraSessions > 0 && (
+                    <Text as="span" fontSize="xs" lineHeight="1">
+                      +{extraSessions}
                     </Text>
                   )}
                 </Button>
@@ -305,25 +475,25 @@ const Calendar = ({ ownerId }: { ownerId: string }) => {
                 minW="0"
                 gap="0"
                 borderWidth={desktopMonth ? undefined : "1px"}
-                borderRadius={desktopMonth ? undefined : "md"}
+                borderColor={current ? "teal.border" : "border"}
+                borderRadius={desktopMonth ? undefined : "xl"}
                 overflow="clip"
-                minH={desktopMonth ? "20" : { base: "auto", lg: "32" }}
+                minH={desktopMonth ? "20" : undefined}
                 bg={outside ? "bg.inset" : "bg.panel"}
               >
                 <Flex
                   align="center"
-                  px="2"
-                  py={desktopMonth ? "0.5" : "1.5"}
-                  bg={current ? "teal.solid" : "bg.inset"}
-                  color={current ? "teal.contrast" : outside ? "fg.muted" : "fg"}
+                  px={desktopMonth ? "2" : "4"}
+                  py={desktopMonth ? "1" : "2.5"}
+                  bg={current ? "teal.subtle" : "bg.inset"}
+                  color={current ? "teal.fg" : outside ? "fg.muted" : "fg"}
                   borderBottomWidth="1px"
                   gap="2"
                 >
                   <chakra.time
                     dateTime={key}
-                    fontSize="sm"
-                    fontWeight="semibold"
-                    truncate={isMonth ? undefined : { base: false, lg: true }}
+                    fontSize={desktopMonth ? "sm" : "md"}
+                    fontWeight="bold"
                     aria-current={current ? "date" : undefined}
                   >
                     {isMonth
@@ -331,14 +501,17 @@ const Calendar = ({ ownerId }: { ownerId: string }) => {
                       : formatDate(day, { ...dayOptions, weekday: "short" })}
                   </chakra.time>
                   {current && (
-                    <Text fontSize="xs" fontWeight="medium" hideFrom={isMonth ? undefined : "lg"}>
+                    <Badge colorPalette="teal" variant="solid" ms="auto">
                       Today
-                    </Text>
+                    </Badge>
                   )}
                 </Flex>
-                <Stack gap={desktopMonth ? "0.5" : "1.5"} p={desktopMonth ? "1" : "2"}>
-                  {checkInButton(key)}
-                  {addWorkoutButton(key)}
+                <Stack gap="2" p={desktopMonth ? "1.5" : "3"} flex="1">
+                  {!desktopMonth && query.isSuccess && sessions.length === 0 && (
+                    <Text color="fg.muted" fontSize="sm" px="1">
+                      No sessions scheduled
+                    </Text>
+                  )}
                   <SessionButtons
                     sessions={desktopMonth ? sessions.slice(0, monthSessionLimit) : sessions}
                     select={selectSession}
@@ -358,6 +531,10 @@ const Calendar = ({ ownerId }: { ownerId: string }) => {
                       +{extraSessions} more
                     </Button>
                   )}
+                  <Flex gap="1" wrap="wrap" mt="auto">
+                    {checkInButtons(key)}
+                    {addWorkoutButton(key)}
+                  </Flex>
                 </Stack>
               </Stack>
             );
@@ -369,10 +546,12 @@ const Calendar = ({ ownerId }: { ownerId: string }) => {
           <Heading as="h3" size="sm">
             {fullDate(dateKey(date))}
           </Heading>
-          {checkInButton(dateKey(date))}
-          {addWorkoutButton(dateKey(date))}
           {query.isSuccess && !byDay.has(dateKey(date)) && <Text>No sessions scheduled.</Text>}
           <SessionButtons sessions={byDay.get(dateKey(date)) ?? []} select={selectSession} />
+          <Flex gap="2" wrap="wrap">
+            {checkInButtons(dateKey(date))}
+            {addWorkoutButton(dateKey(date))}
+          </Flex>
         </Panel>
       )}
       {workoutDate && (
@@ -384,12 +563,13 @@ const Calendar = ({ ownerId }: { ownerId: string }) => {
           trigger={() => workoutTrigger.current}
         />
       )}
-      {checkInDate && (
+      {checkIn && (
         <CheckInDialog
-          key={checkInDate}
-          date={checkInDate}
+          key={`${checkIn.date}/${checkInSection.id}`}
+          date={checkIn.date}
+          section={checkInSection}
           ownerId={ownerId}
-          close={() => setCheckInDate(undefined)}
+          close={() => setCheckIn(undefined)}
           trigger={() => checkInTrigger.current}
         />
       )}
@@ -397,10 +577,12 @@ const Calendar = ({ ownerId }: { ownerId: string }) => {
         <SessionDetail
           key={selected.id}
           session={selected}
+          startLogging={params.get("log") === "true"}
           ownerId={ownerId}
           close={() => selectSession(undefined)}
           onMoved={(date) => navigate(new Date(date + "T00:00:00Z"), view)}
-          onExecuted={(state) =>
+          onExecuted={(state) => {
+            selectSession(selected.id);
             queryClient.setQueryData<CalendarReport>(
               queryKey,
               (report) =>
@@ -410,8 +592,8 @@ const Calendar = ({ ownerId }: { ownerId: string }) => {
                     session.id === selected.id ? { ...session, ...state } : session,
                   ),
                 },
-            )
-          }
+            );
+          }}
           reload={async () => {
             const { data, error } = await query.refetch();
             if (error) throw error;
@@ -436,7 +618,9 @@ const SessionButtons = ({
     const { title, sessionType, plannedDurationMin, plannedDurationMax } = session.prescription;
     const planned = formatPlannedDuration(plannedDurationMin, plannedDurationMax);
     const actual = session.completion?.actualDurationMin;
-    const palette = palettes[session.status];
+    const type = workoutTypes[sessionType];
+    const palette = sessionPalette(sessionType, session.status);
+    const status = session.status === "planned" ? null : session.status;
     return (
       <Button
         key={session.id}
@@ -450,16 +634,23 @@ const SessionButtons = ({
         flexDir="column"
         alignItems="stretch"
         textAlign="start"
-        h={compact ? "6" : "auto"}
+        h="auto"
         minW="0"
         w="full"
         gap="0.5"
-        px="1.5"
-        py={compact ? "0" : "1.5"}
+        px={compact ? "1.5" : "3"}
+        py={compact ? "1" : "2.5"}
         onClick={() => select(session.id)}
-        aria-label={compact ? `${title}, ${session.status}` : undefined}
-        title={compact ? `${title} · ${session.status}` : undefined}
+        aria-label={
+          compact ? [`${type.label}: ${title}`, status].filter(Boolean).join(", ") : undefined
+        }
+        title={compact ? [type.label, title, status].filter(Boolean).join(" · ") : undefined}
       >
+        {compact && (
+          <Text as="span" fontSize="xs" color="colorPalette.fg" lineHeight="short">
+            {type.label}
+          </Text>
+        )}
         <Text
           as="span"
           truncate={compact}
@@ -472,11 +663,14 @@ const SessionButtons = ({
         {!compact && (
           <>
             <Text as="span" fontWeight="normal" fontSize="xs" textTransform="capitalize">
-              {sessionType} · {session.status}
+              {status ? `${type.label} · ${status}` : type.label}
             </Text>
             {(planned !== null || actual != null) && (
               <Text as="span" fontWeight="normal" fontSize="xs" color="fg.muted">
-                {[planned && `${planned} planned`, actual != null && `${actual} min actual`]
+                {[
+                  planned && (status === "completed" ? `${planned} target` : planned),
+                  actual != null && `${actual} min actual`,
+                ]
                   .filter(Boolean)
                   .join(" · ")}
               </Text>
@@ -489,6 +683,7 @@ const SessionButtons = ({
 
 const SessionDetail = ({
   session,
+  startLogging,
   ownerId,
   close,
   onMoved,
@@ -496,6 +691,7 @@ const SessionDetail = ({
   reload,
 }: {
   session: CalendarSession;
+  startLogging: boolean;
   ownerId: string;
   close: () => void;
   onMoved: (date: string) => void;
@@ -506,7 +702,9 @@ const SessionDetail = ({
   const [moveDate, setMoveDate] = useState<string>();
   const [editing, setEditing] = useState<CalendarSession>();
   const past = session.scheduledDate < todayInTimezone(session.timezone);
-  const [completionRevision, setCompletionRevision] = useState<string>();
+  const [completionRevision, setCompletionRevision] = useState<string | undefined>(() =>
+    startLogging && session.status !== "rest" ? session.revision : undefined,
+  );
   const queryClient = useQueryClient();
   const sync = () =>
     Promise.all([
@@ -520,7 +718,8 @@ const SessionDetail = ({
   const execute = useMutation({
     mutationFn: ({ revision, execution }: { revision: string; execution: SessionExecution }) =>
       schedulingApi.execute(session.id, revision, execution),
-    onSuccess: async (state) => {
+    onSuccess: async (state, { revision }) => {
+      clearCompletionDraft(completionDraftKey(ownerId, session.id, completionRevision ?? revision));
       await queryClient.cancelQueries({ queryKey: calendarKey(ownerId) });
       onExecuted(state);
       setCompletionRevision(undefined);
@@ -651,7 +850,7 @@ const SessionDetail = ({
                     : screen === "completion"
                       ? session.status === "completed"
                         ? "Edit completion details"
-                        : "Complete session"
+                        : "Log workout"
                       : prescription.title}
                 </Dialog.Title>
                 {screen !== "overview" && (
@@ -677,6 +876,15 @@ const SessionDetail = ({
             <Dialog.Body px={{ base: "4", md: "6" }} py="4" overflowWrap="anywhere" key={screen}>
               <Stack gap="4">
                 {executionFeedback}
+                {execute.isSuccess && screen === "overview" && (
+                  <Notice role="status">
+                    {session.status === "skipped"
+                      ? "Workout marked skipped."
+                      : session.status === "completed"
+                        ? "Workout saved."
+                        : "Workout restored."}
+                  </Notice>
+                )}
                 {remove.isError && screen === "overview" && (
                   <Notice role="alert">
                     {errorMessage(remove.error, "Unable to delete the workout. Try again.")}
@@ -750,6 +958,7 @@ const SessionDetail = ({
                     <CompletionForm
                       key={completionRevision}
                       session={session}
+                      draftKey={completionDraftKey(ownerId, session.id, completionRevision)}
                       pending={busy}
                       canSave={!executionConflict}
                       save={({ componentResults, ...completion }) => {
@@ -763,6 +972,7 @@ const SessionDetail = ({
                           },
                         });
                       }}
+                      skip={session.status === "planned" ? () => toggleStatus("skip") : undefined}
                       cancel={() => {
                         execute.reset();
                         reloadSession.reset();
@@ -773,6 +983,13 @@ const SessionDetail = ({
                 )}
                 {screen === "overview" && (
                   <>
+                    {session.programId && session.programName && (
+                      <Link asChild variant="underline" alignSelf="start" fontSize="sm">
+                        <RouterLink to={`/programs/${session.programId}`}>
+                          {session.programName}
+                        </RouterLink>
+                      </Link>
+                    )}
                     {session.status === "completed" && (
                       <Box bg="bg.inset" borderRadius="md" p="3">
                         <CompletionResults
@@ -785,7 +1002,7 @@ const SessionDetail = ({
                     )}
                     <Stack gap="2">
                       <Heading as="h3" size="sm">
-                        Planned workout
+                        Workout prescription
                       </Heading>
                       <Text color="fg.muted" textTransform="capitalize">
                         {[
@@ -823,17 +1040,18 @@ const SessionDetail = ({
                 gap="2"
                 flexWrap="wrap"
               >
-                {(session.status === "planned" || session.status === "skipped") && (
-                  <Button disabled={busy || executionConflict} onClick={openCompletion}>
-                    Mark complete
-                  </Button>
-                )}
+                {session.status !== "rest" &&
+                  (session.status === "planned" || session.status === "skipped") && (
+                    <Button disabled={busy || executionConflict} onClick={openCompletion}>
+                      Log workout
+                    </Button>
+                  )}
                 {session.status === "skipped" && !past && (
                   <Button
                     disabled={busy || executionConflict}
                     onClick={() => toggleStatus("restore")}
                   >
-                    Restore to planned
+                    Restore to schedule
                   </Button>
                 )}
                 {session.status === "completed" && (

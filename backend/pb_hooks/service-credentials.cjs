@@ -13,6 +13,7 @@ const serviceScopeSet = new Set(serviceScopes);
 
 const scopeByImportKind = {
   program: "programs:write",
+  "session-templates": "programs:write",
   "workout-component-results": "workouts:write",
   "daily-check-ins": "metrics:write",
   "heart-rate-recording": "recordings:write",

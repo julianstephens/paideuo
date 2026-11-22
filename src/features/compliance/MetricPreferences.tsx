@@ -1,14 +1,7 @@
-import { Button, Flex, Grid, Heading, NativeSelect, Stack, Table, Text } from "@chakra-ui/react";
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { Button, Flex, Heading, NativeSelect, Stack, Table } from "@chakra-ui/react";
 import { FormField, Notice, Panel } from "../../components/ui";
 import { errorMessage } from "../../lib/api/request";
-import {
-  checkInApi,
-  checkInFieldKeys,
-  checkInPreferencesKey,
-  checkInSections,
-} from "../recovery/recovery";
-import type { PreferenceUpdate } from "../recovery/recovery";
+import { useCheckInPreferences, useSaveCheckInPreferences } from "../recovery/checkInPreferences";
 import { metricKeys, metricLabels } from "./metrics";
 
 const visibilityColumns = [
@@ -16,22 +9,9 @@ const visibilityColumns = [
   { group: "hiddenCharts", label: "Chart" },
 ] as const;
 
-export const useMetricPreferences = (ownerId: string) =>
-  useQuery({
-    queryKey: checkInPreferencesKey(ownerId),
-    queryFn: ({ signal }) => checkInApi.preferences(signal),
-    retry: false,
-  });
-
 export const MetricPreferences = ({ ownerId }: { ownerId: string }) => {
-  const query = useMetricPreferences(ownerId);
-  const client = useQueryClient();
-  const save = useMutation({
-    mutationFn: (change: PreferenceUpdate) => checkInApi.updatePreferences(change),
-    onSuccess: (data) => {
-      client.setQueryData(checkInPreferencesKey(ownerId), data);
-    },
-  });
+  const query = useCheckInPreferences(ownerId);
+  const save = useSaveCheckInPreferences(ownerId);
   const preferences = query.data;
   if (!preferences) {
     return query.isError ? (
@@ -128,54 +108,6 @@ export const MetricPreferences = ({ ownerId }: { ownerId: string }) => {
             ))}
           </Table.Body>
         </Table.Root>
-      </Panel>
-      <Panel as="section">
-        <Heading as="h2" size="md">
-          Daily check-in fields
-        </Heading>
-        <Button
-          type="button"
-          size="sm"
-          variant="outline"
-          alignSelf="start"
-          aria-label="Select all daily check-in fields"
-          disabled={
-            save.isPending || !checkInFieldKeys.some((key) => preferences.disabled.includes(key))
-          }
-          onClick={() => save.mutate({ group: "disabled", keys: checkInFieldKeys, enabled: true })}
-        >
-          Select all
-        </Button>
-        <Grid templateColumns={{ base: "minmax(0, 1fr)", sm: "repeat(2, minmax(0, 1fr))" }} gap="4">
-          {checkInSections.map(({ label, fields }) => (
-            <Stack key={label} as="fieldset" gap="0">
-              <Text as="legend" fontWeight="semibold" mb="1">
-                {label}
-              </Text>
-              {fields.map(({ key, label: fieldLabel }) => (
-                <Flex
-                  key={key}
-                  as="label"
-                  gap="2"
-                  align="center"
-                  minH="9"
-                  fontSize="sm"
-                  cursor="pointer"
-                >
-                  <input
-                    type="checkbox"
-                    disabled={save.isPending}
-                    checked={!preferences.disabled.includes(key)}
-                    onChange={({ target }) =>
-                      save.mutate({ group: "disabled", key, enabled: target.checked })
-                    }
-                  />
-                  {fieldLabel}
-                </Flex>
-              ))}
-            </Stack>
-          ))}
-        </Grid>
       </Panel>
     </Stack>
   );

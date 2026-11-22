@@ -1,5 +1,6 @@
 /* oxlint-disable import/no-commonjs */
 const assert = require("node:assert/strict");
+const { createHash } = require("node:crypto");
 const fs = require("node:fs");
 const os = require("node:os");
 const path = require("node:path");
@@ -218,7 +219,7 @@ const createAuthedUser = async (admin, baseUrl, suffix) => {
   return { client, userId: client.authStore.record.id };
 };
 
-const withPocketBase = async (run, { pendingMigration } = {}) => {
+const withPocketBase = async (run, { pendingMigration, env } = {}) => {
   const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "paideuo-imports-it-"));
   const dataDir = path.join(tempRoot, "pb_data");
   const hooksDir = path.join(tempRoot, "pb_hooks");
@@ -278,7 +279,7 @@ onRecordValidate((event) => {
         `--hooksDir=${hooksDir}`,
         "--hooksWatch=false",
       ],
-      { cwd: repoRoot, stdio: "pipe" },
+      { cwd: repoRoot, stdio: "pipe", env: { ...process.env, ...env } },
     );
   const stopServer = async (processRef) => {
     await new Promise((resolve) => {
@@ -316,6 +317,84 @@ onRecordValidate((event) => {
     fs.rmSync(tempRoot, { recursive: true, force: true });
   }
 };
+
+test("Library imports reconcile templates and snapshot program baselines", async () => {
+  await withPocketBase(async ({ admin, baseUrl }) => {
+    const { client } = await createAuthedUser(admin, baseUrl, "library-owner");
+    const { client: other } = await createAuthedUser(admin, baseUrl, "library-other");
+    const library = JSON.parse(
+      fs.readFileSync(
+        path.join(repoRoot, "docs", "examples", "import-v1-session-templates.json"),
+        "utf8",
+      ),
+    );
+    const importDocument = async (document) => {
+      const preview = await previewImport(client, document);
+      return commitImport(client, document, preview.previewToken);
+    };
+    assert.equal((await importDocument(library)).rows[0].status, "created");
+    assert.equal((await importDocument(library)).rows[0].status, "skipped");
+
+    const program = makeProgramDocument();
+    const [block] = program.data.blocks;
+    block.slots[0].templateExternalId = "easy-run";
+    const foreignPreview = await previewImport(other, program);
+    assert.equal(foreignPreview.items.find(({ type }) => type === "slot").status, "conflict");
+    const programPreview = await previewImport(client, program);
+    assert.match(programPreview.items.find(({ type }) => type === "slot").detail, /Easy run/);
+    program.data.templateWorkoutKeys = [
+      programPreview.items.find(({ type }) => type === "prescription").key,
+    ];
+    const selectedPreview = await previewImport(client, program);
+    assert.equal(
+      selectedPreview.items.find(({ type }) => type === "session-template").label,
+      "Base session",
+    );
+
+    library.data.templates[0].plannedDurationMax = 45;
+    assert.equal((await importDocument(library)).rows[0].status, "updated");
+    await assert.rejects(
+      commitImport(client, program, selectedPreview.previewToken),
+      (error) => error.status === 409 && /stale/.test(error.response.message),
+    );
+
+    const committed = await importDocument(program);
+    assert.equal(committed.rows.templates[0].status, "created");
+    const repeated = await importDocument(program);
+    assert.equal(repeated.rows.templates[0].status, "skipped");
+    assert.equal(repeated.rows.unchanged, true);
+    const templates = await client.send("/api/paideuo/templates", { method: "GET" });
+    assert.equal(templates.length, 2);
+    assert.ok(templates.some(({ externalId }) => externalId === "easy-run"));
+
+    const rejectedProgram = structuredClone(program);
+    const rejectedWorkout = rejectedProgram.data.blocks[0].weeks[0].prescriptions[0].workout;
+    rejectedWorkout.title = "Rejected template update";
+    rejectedWorkout.components[0].name = injectedFailureMarker;
+    await assert.rejects(
+      importDocument(rejectedProgram),
+      (error) =>
+        error.status === 400 && /Injected nested write failure/.test(error.response.message),
+    );
+    const afterRollback = await client.send("/api/paideuo/templates", { method: "GET" });
+    assert.ok(afterRollback.some(({ name }) => name === "Base session"));
+    assert.ok(afterRollback.every(({ name }) => name !== rejectedWorkout.title));
+
+    library.data.templates[0].plannedDurationMax = 50;
+    await importDocument(library);
+    const readSlot = () =>
+      admin
+        .collection("paideuo_session_slots")
+        .getFirstListItem(admin.filter("external_id = {:key}", { key: block.slots[0].externalId }));
+    assert.equal((await readSlot()).baseline.plannedDurationMax, 45);
+    delete block.slots[0].templateExternalId;
+    await importDocument(program);
+    assert.equal((await readSlot()).baseline.name, "Easy run");
+    block.slots[0].templateExternalId = null;
+    await importDocument(program);
+    assert.equal((await readSlot()).baseline, null);
+  });
+});
 
 test("PocketBase-backed hierarchy imports are transactional and schedule-safe", async () => {
   const fixtureSample = JSON.parse(fs.readFileSync(sampleProgramPath, "utf8"));
@@ -2261,4 +2340,325 @@ test("movement observations survive completion edits, import reconciliation and 
     assert.equal(after.sets, 3);
     assert.equal(after.notes, "Imported component notes");
   });
+});
+
+test("rest and optional recovery survive editing, scheduling, and reporting", async () => {
+  await withPocketBase(
+    async ({ admin, baseUrl, upgrade }) => {
+      const { client } = await createAuthedUser(admin, baseUrl, "rest-recovery");
+      const request = (path, method = "GET", body) => client.send(path, { method, body });
+      const document = makeProgramDocument();
+      const [block] = document.data.blocks;
+      document.data.blocks = [block];
+      block.slots.push(
+        { externalId: "friday-rest", weekday: 5, position: 2, label: "Friday" },
+        { externalId: "sunday-rest", weekday: 7, position: 3, label: "Sunday" },
+      );
+      const { previewToken } = await previewImport(client, document);
+      const {
+        rows: { programId },
+      } = await commitImport(client, document, previewToken);
+      const root = `/api/paideuo/programs/${programId}`;
+      const [week] = await admin.collection("paideuo_program_weeks").getFullList({
+        filter: admin.filter("block.program = {:programId}", { programId }),
+      });
+      const slots = await admin.collection("paideuo_session_slots").getFullList({
+        filter: admin.filter("block = {:block}", { block: week.block }),
+        sort: "weekday",
+      });
+      const cellPath = (slot) => `${root}/blocks/${week.block}/weeks/${week.id}/cells/${slot.id}`;
+      const [monday, friday] = slots;
+      await upgrade();
+      const legacy = (await request(cellPath(monday))).prescription;
+      assert.equal(legacy.components[0].name, "Warm-up");
+      assert.equal(legacy.components[0].optional, false);
+      block.weeks[0].prescriptions.push({
+        slotExternalId: "sunday-rest",
+        workout: { title: "Sunday rest", sessionType: "rest", components: [] },
+      });
+      const restImport = await previewImport(client, document);
+      await commitImport(client, document, restImport.previewToken);
+
+      const templatePath = "/api/paideuo/templates";
+      const { id: templateId } = await request(templatePath, "POST", {
+        name: "Rest",
+        description: "",
+        sessionType: "rest",
+        components: [],
+      });
+      const template = (await request(templatePath)).find(({ id }) => id === templateId);
+      const patch = async (slot, prescription) => {
+        const path = cellPath(slot);
+        const { revision } = await request(path);
+        await request(path, "PATCH", { ...prescription, revision });
+        return (await request(path)).prescription;
+      };
+      const rest = await patch(friday, { ...template, title: "Friday rest", notes: "" });
+      assert.equal(rest.sessionType, "rest");
+      const edited = await patch(monday, {
+        ...(await request(cellPath(monday))).prescription,
+        plannedDurationMin: 85,
+        components: [
+          {
+            key: "sauna",
+            name: "Sauna",
+            classification: "aerobic",
+            durationMin: 15,
+            optional: true,
+          },
+          {
+            key: "stretch",
+            name: "Stretch",
+            classification: "mobility",
+            durationMin: 10,
+            optional: true,
+          },
+        ],
+      });
+      assert.deepEqual(
+        edited.components.map(({ optional }) => optional),
+        [true, true],
+      );
+
+      const date = "2026-01-05";
+      const schedule = { startDate: date, timezone: "UTC" };
+      const { revision } = await request(root + "/schedule/preview", "POST", schedule);
+      await request(root + "/schedule", "POST", { ...schedule, revision });
+      const calendar = () => request(`/api/paideuo/calendar?start=${date}&end=2026-01-11`);
+      const [workout, ...restDays] = await calendar();
+      assert.deepEqual(
+        restDays.map(({ scheduledDate, status, completion }) => [
+          scheduledDate,
+          status,
+          completion,
+        ]),
+        [
+          ["2026-01-09", "rest", null],
+          ["2026-01-11", "rest", null],
+        ],
+      );
+      assert.deepEqual(
+        workout.prescription.components.map(({ optional }) => optional),
+        [true, true],
+      );
+
+      await domainRequest(client, "check-ins/upsert", {
+        entries: [{ date: restDays[0].scheduledDate, recovery: { sleepHours: 8 } }],
+      });
+      const executionPath = `/api/paideuo/calendar/sessions/${workout.id}/execution`;
+      const completion = { completedDate: date, actualDurationMin: 60, sessionRpe: 7 };
+      const complete = (state, action, componentResults) =>
+        request(executionPath, "PATCH", {
+          action,
+          revision: state.revision,
+          completion,
+          componentResults,
+        });
+      const checkReports = async () => {
+        assert.equal((await calendar())[0].sessionLoad, 420);
+        const metrics = (
+          await request(`/api/paideuo/metrics?view=weekly&program=${programId}&start=${date}`)
+        ).total;
+        const { weeks } = await request(root + "/training-load");
+        assert.equal(weeks[0].totals.all.load, 420);
+        assert.equal(weeks[0].totals.all.scheduledSessions, 1);
+        const review = await request(`${root}/weekly-reviews/${week.id}`);
+        assert.equal(metrics.load, 420);
+        assert.equal(review.total.load, 420);
+        assert.equal(review.dataCoverage.scheduledSessions, 1);
+        assert.deepEqual(review.total.compliance, metrics.compliance);
+        assert.equal(metrics.compliance.scheduled, 1);
+        assert.equal(metrics.compliance.adherence, 1);
+        assert.equal(metrics.compliance.plannedMinutes, 60);
+        assert.equal(metrics.compliance.actualMinutes, 60);
+        assert.equal(metrics.compliance.aerobicMinutes, null);
+        assert.equal(review.total.recovery.sleepHours.mean, 8);
+        assert.deepEqual(review.progression.aerobicByModality, {});
+      };
+      const completed = await complete(workout, "complete", []);
+      await checkReports();
+      const logged = await complete(completed, "edit-completion", [
+        { componentKey: "sauna", durationMin: 12 },
+      ]);
+      assert.equal(logged.componentResults[0].durationMin, 12);
+      await checkReports();
+    },
+    { pendingMigration: "1760000026_rest_and_optional_components.js" },
+  );
+});
+
+test("ChatGPT OAuth discovers MCP, authorizes a Paideuo user, and rotates credentials", async () => {
+  const origin = "https://paideuo.example.com";
+  const mcpPath = "/api/paideuo/v1/mcp";
+  const oauthPath = "/api/paideuo/v1/mcp-oauth";
+  const resource = origin + mcpPath;
+  const redirectUri = "https://chatgpt.com/connector_platform_oauth_redirect";
+  const clientId = "chatgpt";
+  const secret = "test-secret-0123456789-0123456789-0123456789";
+  const verifier = "test-verifier-0123456789-0123456789-0123456789";
+  const basic = "Basic " + Buffer.from(clientId + ":" + secret).toString("base64");
+  await withPocketBase(
+    async ({ admin, baseUrl, restart }) => {
+      const { client } = await createAuthedUser(admin, baseUrl, "mcp-oauth");
+      const { client: other } = await createAuthedUser(admin, baseUrl, "mcp-other");
+      const rpc = (method, params, authorization, path = mcpPath) =>
+        fetch(baseUrl + path, {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            Accept: "application/json, text/event-stream",
+            ...(authorization ? { Authorization: authorization } : {}),
+          },
+          body: JSON.stringify({
+            jsonrpc: "2.0",
+            ...(method.startsWith("notifications/") ? {} : { id: 1 }),
+            method,
+            params,
+          }),
+        });
+      const tokenRequest = (path, fields, authorization = basic) =>
+        fetch(baseUrl + oauthPath + path, {
+          method: "POST",
+          headers: authorization ? { Authorization: authorization } : {},
+          body: new URLSearchParams(fields),
+        });
+
+      const init = {
+        protocolVersion: "2025-11-25",
+        capabilities: {},
+        clientInfo: { name: "test", version: "1" },
+      };
+      const unauthorized = await rpc("initialize", init);
+      assert.equal(unauthorized.status, 401);
+      const metadataPath = "/.well-known/oauth-protected-resource" + mcpPath;
+      assert.match(unauthorized.headers.get("www-authenticate"), /resource_metadata=/);
+      const metadata = await (await fetch(baseUrl + metadataPath)).json();
+      assert.equal(metadata.resource, resource);
+      assert.deepEqual(metadata.authorization_servers, [origin]);
+      const issuer = await (
+        await fetch(baseUrl + "/.well-known/oauth-authorization-server")
+      ).json();
+      assert.equal(issuer.issuer, origin);
+      assert.equal(issuer.authorization_response_iss_parameter_supported, true);
+      assert.deepEqual(issuer.code_challenge_methods_supported, ["S256"]);
+      assert.equal((await fetch(baseUrl + mcpPath)).status, 405);
+
+      const authorize = {
+        response_type: "code",
+        redirect_uri: redirectUri,
+        client_id: clientId,
+        code_challenge_method: "S256",
+        code_challenge: createHash("sha256").update(verifier).digest("base64url"),
+        scope: "paideuo:mcp",
+        resource,
+        state: "state & test",
+      };
+      const authorizeRequest = (params) =>
+        fetch(baseUrl + oauthPath + "/authorize?" + new URLSearchParams(params), {
+          redirect: "manual",
+        });
+      assert.equal(
+        (await authorizeRequest({ ...authorize, redirect_uri: "https://example.org/" })).status,
+        400,
+      );
+      const start = await authorizeRequest(authorize);
+      assert.equal(start.status, 302);
+      assert.equal(new URL(start.headers.get("location")).pathname, "/mcp/authorize");
+      const consent = async (approved) =>
+        new URL(
+          (
+            await client.send(oauthPath + "/consent", {
+              method: "POST",
+              body: { ...authorize, approved },
+            })
+          ).redirect,
+        );
+      const denied = await consent(false);
+      assert.equal(denied.searchParams.get("error"), "access_denied");
+      assert.equal(denied.searchParams.get("iss"), origin);
+      const allowed = await consent(true);
+      assert.equal(allowed.searchParams.get("state"), authorize.state);
+      assert.equal(allowed.searchParams.get("iss"), origin);
+
+      const exchange = {
+        grant_type: "authorization_code",
+        code: allowed.searchParams.get("code"),
+        redirect_uri: redirectUri,
+        code_verifier: verifier,
+        resource,
+      };
+      const badVerifier = await tokenRequest("/token", {
+        ...exchange,
+        code_verifier: "x".repeat(43),
+      });
+      assert.equal(badVerifier.status, 400);
+      assert.equal((await badVerifier.json()).error, "invalid_grant");
+      const wrongResource = await tokenRequest("/token", {
+        ...exchange,
+        resource: origin + "/other",
+      });
+      assert.equal((await wrongResource.json()).error, "invalid_target");
+      const exchanges = await Promise.all([
+        tokenRequest("/token", exchange),
+        tokenRequest("/token", exchange),
+      ]);
+      assert.deepEqual(exchanges.map((response) => response.status).sort(), [200, 400]);
+      const tokens = await exchanges.find((response) => response.ok).json();
+
+      const authorization = "Bearer " + tokens.access_token;
+      const initialized = await (await rpc("initialize", init, authorization)).json();
+      assert.equal(initialized.result.protocolVersion, init.protocolVersion);
+      const notification = await rpc("notifications/initialized", {}, authorization);
+      assert.equal(notification.status, 202);
+      assert.equal(await notification.text(), "");
+      const catalog = await (await rpc("tools/list", {}, authorization)).json();
+      assert.equal(
+        catalog.result.tools.find(({ name }) => name === "list_programs").annotations.readOnlyHint,
+        true,
+      );
+      const create = await (
+        await rpc(
+          "tools/call",
+          {
+            name: "create_draft",
+            arguments: { name: "OAuth draft", externalId: "oauth-draft" },
+          },
+          authorization,
+        )
+      ).json();
+      assert.equal(create.result.isError, false, JSON.stringify(create));
+      const list = (auth) => rpc("tools/call", { name: "list_programs" }, auth);
+      const own = await (await list(authorization)).json();
+      assert.match(JSON.stringify(own.result.structuredContent), /OAuth draft/);
+      const foreign = await (await list(other.authStore.token)).json();
+      assert.doesNotMatch(JSON.stringify(foreign.result.structuredContent), /OAuth draft/);
+      assert.equal((await list(client.authStore.token)).status, 200);
+      assert.equal(
+        (await rpc("tools/list", {}, authorization, "/api/paideuo/v1/service/mcp")).status,
+        401,
+      );
+
+      await restart();
+      const refresh = { grant_type: "refresh_token", refresh_token: tokens.refresh_token };
+      const refreshed = await tokenRequest(
+        "/token",
+        { ...refresh, client_id: clientId, client_secret: secret },
+        "",
+      );
+      const rotated = await refreshed.json();
+      assert.equal(refreshed.status, 200, JSON.stringify(rotated));
+      assert.equal((await tokenRequest("/token", refresh)).status, 400);
+      assert.equal((await list(authorization)).status, 401);
+      assert.equal((await list("Bearer " + rotated.access_token)).status, 200);
+      assert.equal((await tokenRequest("/revoke", { token: rotated.refresh_token })).status, 200);
+      assert.equal((await list("Bearer " + rotated.access_token)).status, 401);
+    },
+    {
+      env: {
+        PAIDEUO_MCP_OAUTH_ORIGIN: origin,
+        PAIDEUO_MCP_OAUTH_CLIENT_ID: clientId,
+        PAIDEUO_MCP_OAUTH_CLIENT_SECRET: secret,
+      },
+    },
+  );
 });

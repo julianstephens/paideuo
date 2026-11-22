@@ -55,11 +55,15 @@ export const protein = {
 
 export const checkInSections = [
   {
+    id: "recovery",
     label: "Recovery",
+    title: "Pre-training check-in",
     fields: [...recoveryMetrics, { key: "notes", label: "Recovery notes" }],
   },
   {
+    id: "nutrition",
     label: "Nutrition",
+    title: "Nutrition log",
     fields: [...nutritionChoices, protein, { key: "nutritionNotes", label: "Nutrition notes" }],
   },
 ] as const;
@@ -78,6 +82,14 @@ export type CheckInFields = Record<NumericMetric, number | null> &
   ChoiceFields & { notes: string; nutritionNotes: string };
 export type CheckInEntry = CheckInFields & { date: string };
 export type CheckInField = keyof CheckInFields;
+export type CheckInSection = (typeof checkInSections)[number];
+
+export const hasCheckInResponse = (entry: CheckInEntry | undefined, section: CheckInSection) =>
+  !!entry &&
+  section.fields.some(({ key }) => {
+    const value = entry[key];
+    return value != null && value !== "";
+  });
 
 const path = "/api/paideuo/check-ins";
 const entryPath = (date: string) => `${path}/${encodeURIComponent(date)}`;

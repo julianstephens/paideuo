@@ -22,6 +22,7 @@ export type PrescriptionComponent = {
   durationMin: number | null;
   durationMax?: number | null;
   classification?: "aerobic" | "strength" | "movement" | "mobility" | "other";
+  optional?: boolean;
   targets?: ComponentTargets | null;
 };
 
@@ -33,6 +34,7 @@ export type ComponentDraft = {
   name: string;
   instructions: string;
   classification?: "aerobic" | "strength" | "movement" | "mobility" | "other";
+  optional?: boolean;
   targets: TargetDrafts;
 };
 
@@ -43,6 +45,7 @@ export const componentDraft = (
     name,
     instructions,
     classification,
+    optional,
     durationMin,
     durationMax,
     targets,
@@ -53,6 +56,7 @@ export const componentDraft = (
   name,
   instructions,
   classification,
+  optional,
   targets: {
     ...(durationMin != null || durationMax != null
       ? {
@@ -142,6 +146,7 @@ export const componentPayload = ({
   name,
   instructions,
   classification,
+  optional,
   targets,
 }: ComponentDraft): PrescriptionComponent => {
   const {
@@ -168,6 +173,7 @@ export const componentPayload = ({
     name,
     instructions,
     ...(classification ? { classification } : {}),
+    ...(optional ? { optional: true } : {}),
     durationMin,
     ...(durationMax != null ? { durationMax } : {}),
     targets: {

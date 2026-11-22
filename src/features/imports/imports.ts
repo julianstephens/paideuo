@@ -2,6 +2,7 @@ import { apiRequest } from "../../lib/api/request";
 
 export type ImportKind =
   | "program"
+  | "session-templates"
   | "workout-component-results"
   | "daily-check-ins"
   | "heart-rate-recording";
@@ -266,6 +267,8 @@ export type ImportItem = {
   id: string | null;
   status: "create" | "update" | "skip" | "conflict";
   error?: string;
+  label?: string;
+  detail?: string;
 };
 
 export type ImportPreview = {
@@ -277,11 +280,18 @@ export type ImportPreview = {
   conflicting: number;
 };
 
+type ImportCommitRow = { key: string; status: string; label?: string };
+
 export type ImportCommit = {
   committed: true;
   rows:
-    | { programId: string; scheduleSynchronization: "review-required" | null }
-    | { key: string; status: string }[];
+    | {
+        programId: string;
+        scheduleSynchronization: "review-required" | null;
+        unchanged?: boolean;
+        templates?: ImportCommitRow[];
+      }
+    | ImportCommitRow[];
 };
 
 const endpoint = "/api/paideuo/v1/imports";

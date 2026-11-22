@@ -6,8 +6,9 @@ export const Panel = chakra(Stack, {
     bg: "bg.panel",
     borderWidth: "1px",
     borderColor: "border",
-    borderRadius: "lg",
-    p: { base: "4", md: "5" },
+    borderRadius: "xl",
+    boxShadow: "xs",
+    p: { base: "4", md: "5", xl: "6" },
     gap: "3",
     minW: "0",
     overflowWrap: "anywhere",
@@ -20,12 +21,12 @@ export const PageHeader = ({ title, action }: { title: string; action?: ReactNod
     justify="space-between"
     wrap="wrap"
     gap="3"
-    pb="4"
-    borderBottomWidth="1px"
+    pb={{ base: "1", md: "2" }}
   >
     <Heading
       as="h1"
-      size={{ base: "2xl", md: "3xl" }}
+      size={{ base: "3xl", md: "4xl" }}
+      fontWeight="bold"
       letterSpacing="tight"
       overflowWrap="anywhere"
     >

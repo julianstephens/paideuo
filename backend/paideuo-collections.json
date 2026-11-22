@@ -1427,7 +1427,7 @@
         "required": true,
         "system": false,
         "type": "select",
-        "values": ["climbing", "strength", "conditioning", "mobility", "other"]
+        "values": ["climbing", "strength", "conditioning", "mobility", "other", "rest"]
       },
       {
         "help": "",
@@ -1597,6 +1597,21 @@
     "type": "base",
     "fields": [
       {
+        "autogeneratePattern": "",
+        "help": "",
+        "hidden": false,
+        "id": "text2675300272",
+        "max": 200,
+        "min": 0,
+        "name": "external_id",
+        "pattern": "",
+        "presentable": false,
+        "primaryKey": false,
+        "required": false,
+        "system": false,
+        "type": "text"
+      },
+      {
         "autogeneratePattern": "[a-z0-9]{15}",
         "help": "",
         "hidden": false,
@@ -1665,7 +1680,7 @@
         "required": true,
         "system": false,
         "type": "select",
-        "values": ["climbing", "strength", "conditioning", "mobility", "other"]
+        "values": ["climbing", "strength", "conditioning", "mobility", "other", "rest"]
       },
       {
         "help": "",
@@ -1723,7 +1738,8 @@
       }
     ],
     "indexes": [
-      "CREATE INDEX paideuo_idx_session_templates_owner ON paideuo_session_templates (owner)"
+      "CREATE INDEX paideuo_idx_session_templates_owner ON paideuo_session_templates (owner)",
+      "CREATE UNIQUE INDEX idx_paideuo_template_import_identity ON paideuo_session_templates (owner, external_id) WHERE external_id != ''"
     ],
     "system": false
   },
@@ -1853,6 +1869,16 @@
         "hidden": false,
         "id": "bool2131984934",
         "name": "duration_specified",
+        "presentable": false,
+        "required": false,
+        "system": false,
+        "type": "bool"
+      },
+      {
+        "help": "",
+        "hidden": false,
+        "id": "bool2650706260",
+        "name": "optional",
         "presentable": false,
         "required": false,
         "system": false,

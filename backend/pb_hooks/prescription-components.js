@@ -48,12 +48,16 @@ module.exports = (components) => {
         `Choose a valid training classification for component ${position}.`,
       );
     }
+    if (component.optional != null && typeof component.optional !== "boolean") {
+      throw new BadRequestError(`Choose a valid optional setting for component ${position}.`);
+    }
     return componentFields(
       {
         key,
         name: component.name.trim(),
         instructions: instructions.trim(),
         classification,
+        optional: component.optional === true,
         durationMin: duration,
         durationMax,
         targets: parseTargets(component.targets, position),

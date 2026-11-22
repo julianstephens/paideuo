@@ -5,11 +5,13 @@ const imports = require(__hooks + "/imports.js");
 const tools = [
   {
     name: "list_programs",
+    annotations: { readOnlyHint: true, openWorldHint: false },
     description: "List programs owned by the authenticated principal.",
     inputSchema: { type: "object", properties: {}, additionalProperties: false },
   },
   {
     name: "get_program",
+    annotations: { readOnlyHint: true, openWorldHint: false },
     description: "Get an owned program with blocks, weeks, slots, prescriptions, and components.",
     inputSchema: {
       type: "object",
@@ -20,6 +22,7 @@ const tools = [
   },
   {
     name: "create_draft",
+    annotations: { destructiveHint: false, openWorldHint: false },
     description: "Create a new draft program. Use commit_import to modify an existing program.",
     inputSchema: {
       type: "object",
@@ -36,6 +39,7 @@ const tools = [
   },
   {
     name: "preview_import",
+    annotations: { readOnlyHint: true, openWorldHint: false },
     description: "Validate and preview an import without writing or consuming a preview.",
     inputSchema: {
       type: "object",
@@ -46,6 +50,7 @@ const tools = [
   },
   {
     name: "commit_import",
+    annotations: { destructiveHint: true, openWorldHint: false },
     description:
       "Commit an exact previewed import. Scheduled/completed plan changes require explicit approval.",
     inputSchema: {
@@ -65,6 +70,7 @@ const tools = [
   },
   {
     name: "record_workout",
+    annotations: { destructiveHint: true, openWorldHint: false },
     description: "Record workout results through the validated batch ingestion service.",
     inputSchema: {
       type: "object",
@@ -79,6 +85,7 @@ const tools = [
   },
   {
     name: "submit_check_ins",
+    annotations: { destructiveHint: true, openWorldHint: false },
     description: "Submit check-in observations through the validated batch ingestion service.",
     inputSchema: {
       type: "object",
@@ -92,6 +99,7 @@ const tools = [
   },
   {
     name: "fetch_metrics",
+    annotations: { readOnlyHint: true, openWorldHint: false },
     description: "Fetch metrics for an owned program or custom date window.",
     inputSchema: {
       type: "object",
@@ -373,20 +381,32 @@ const callTool = (event, principal, name, args = {}) => {
   throw rpcError(-32601, `Unknown tool: ${name}`);
 };
 
-const jsonRpc = (event, principal, request) => {
+const jsonRpc = (event, principal, request, oauthScope) => {
   if (!request || request.jsonrpc !== "2.0") {
     throw rpcError(-32600, "Invalid JSON-RPC request.");
   }
   if (request.method === "initialize") {
     return {
-      protocolVersion: "2025-06-18",
+      protocolVersion: ["2025-03-26", "2025-06-18", "2025-11-25"].includes(
+        request.params?.protocolVersion,
+      )
+        ? request.params.protocolVersion
+        : "2025-06-18",
       capabilities: { tools: { listChanged: false } },
       serverInfo: { name: "paideuo-mcp", version: "1.0.0" },
     };
   }
   if (request.method === "notifications/initialized") return null;
   if (request.method === "ping") return {};
-  if (request.method === "tools/list") return { tools };
+  if (request.method === "tools/list") {
+    if (!oauthScope) return { tools };
+    return {
+      tools: tools.map((tool) => ({
+        ...tool,
+        _meta: { securitySchemes: [{ type: "oauth2", scopes: [oauthScope] }] },
+      })),
+    };
+  }
   if (request.method === "tools/call") {
     const params = request.params;
     if (!params || typeof params.name !== "string") throw rpcError(-32602, "Invalid tool call.");
@@ -420,7 +440,7 @@ const jsonRpc = (event, principal, request) => {
   throw rpcError(-32601, `Method not found: ${request.method}`);
 };
 
-const handle = (event) => {
+const handle = (event, { oauthScope } = {}) => {
   const body = event.requestInfo().body;
   let principal = null;
   try {
@@ -436,8 +456,8 @@ const handle = (event) => {
     if (!principal && body?.method?.startsWith("tools/")) {
       throw rpcError(401, "Unauthorized.");
     }
-    const value = jsonRpc(event, principal, body);
-    if (body?.method?.startsWith("notifications/")) return event.json(202, {});
+    const value = jsonRpc(event, principal, body, oauthScope);
+    if (body?.method?.startsWith("notifications/")) return event.noContent(202);
     return event.json(200, { jsonrpc: "2.0", id: body?.id ?? null, result: value });
   } catch (error) {
     const code =
