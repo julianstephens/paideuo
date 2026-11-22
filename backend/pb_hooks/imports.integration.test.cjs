@@ -1688,6 +1688,42 @@ test("invalid prescription segment text cannot become a save payload", async () 
   );
 });
 
+test("archived programs can be unscheduled after a schedule revision", async () => {
+  await withPocketBase(async ({ admin, baseUrl }) => {
+    const { client } = await createAuthedUser(admin, baseUrl, "archived-unschedule");
+    const document = makeProgramDocument();
+    const preview = await previewImport(client, document);
+    const { rows } = await commitImport(client, document, preview.previewToken);
+    const root = `/api/paideuo/programs/${rows.programId}`;
+    const post = (action, body) => client.send(root + action, { method: "POST", body });
+    const start = { startDate: "2026-01-05", timezone: "UTC" };
+    const { revision } = await post("/schedule/preview", start);
+    const schedule = await post("/schedule", { ...start, revision });
+    const receipt = await admin.collection("paideuo_schedule_revision_receipts").create({
+      schedule: schedule.id,
+      operation_id: "2f946a91-409c-4646-b62f-010c5adbcd04",
+      request_hash: "a".repeat(64),
+      applied: 1,
+    });
+    const sessions = admin.collection("paideuo_scheduled_sessions");
+    const filter = admin.filter("schedule = {:id}", { id: schedule.id });
+
+    await post("/archive", { unscheduleWorkouts: false });
+    assert.equal((await client.send(root)).scheduled, true);
+    assert.ok((await sessions.getFullList({ filter })).length > 0);
+
+    await post("/unschedule");
+    const program = await client.send(root);
+    assert.equal(program.status, "archived");
+    assert.equal(program.scheduled, false);
+    assert.deepEqual(await sessions.getFullList({ filter }), []);
+    await assert.rejects(
+      admin.collection("paideuo_schedule_revision_receipts").getOne(receipt.id),
+      { status: 404 },
+    );
+  });
+});
+
 test("prescription ranges survive import, editing, templates, block duplication and scheduling", async () => {
   await withPocketBase(async ({ admin, baseUrl }) => {
     const { client } = await createAuthedUser(admin, baseUrl, "prescription-ranges");

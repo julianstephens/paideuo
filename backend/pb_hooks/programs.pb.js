@@ -347,6 +347,14 @@ const handlePrograms = (event) => {
     const schedule = scheduleFor(tx, id);
     if (!schedule) throw new BadRequestError("This program has no scheduled workouts.");
     for (const row of scheduledRows(tx, schedule, true)) tx.delete(row);
+    for (const receipt of children(
+      tx,
+      "paideuo_schedule_revision_receipts",
+      "schedule",
+      schedule.id,
+    )) {
+      tx.delete(receipt);
+    }
     tx.delete(schedule);
   };
 
