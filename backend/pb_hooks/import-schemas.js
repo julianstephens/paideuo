@@ -279,7 +279,16 @@ const component = (value, index) => {
   const label = `component ${index + 1}`;
   const fields = object(
     value,
-    ["key", "name", "instructions", "durationMin", "durationMax", "classification", "targets"],
+    [
+      "key",
+      "name",
+      "instructions",
+      "durationMin",
+      "durationMax",
+      "classification",
+      "optional",
+      "targets",
+    ],
     ["name"],
     label,
   );
@@ -311,6 +320,8 @@ const component = (value, index) => {
         : ["aerobic", "strength", "movement", "mobility", "other"].includes(fields.classification)
           ? fields.classification
           : fail(`${label} classification is invalid.`),
+    optional:
+      fields.optional == null ? false : choice(fields.optional, [true, false], `${label} optional`),
     targets: targets(fields.targets, `${label} targets`),
   };
 };
@@ -331,6 +342,8 @@ const prescription = (value, index) => {
       "plannedRpe",
       "plannedIntensity",
       "components",
+      "kind",
+      "rest",
     ],
     ["title", "sessionType"],
     label,
@@ -389,7 +402,7 @@ const prescription = (value, index) => {
     title: text(fields.title, `${label} title`, 200, true),
     sessionType: choice(
       fields.sessionType,
-      ["climbing", "strength", "conditioning", "mobility", "other"],
+      ["climbing", "strength", "conditioning", "mobility", "other", "rest"],
       "session type",
     ),
     description: text(fields.description ?? "", `${label} description`, 10000),
@@ -405,6 +418,13 @@ const prescription = (value, index) => {
       true,
     ),
     components: normalizedComponents,
+    kind:
+      fields.kind != null
+        ? choice(fields.kind, ["workout", "rest"], "prescription kind")
+        : fields.rest === true || fields.sessionType === "rest"
+          ? "rest"
+          : "workout",
+    rest: fields.rest === true || fields.sessionType === "rest",
   };
 };
 

@@ -5,10 +5,25 @@ const weekMs = 7 * dayMs;
 const lastDate = Date.parse("9999-12-31");
 const formatDate = (day) => new Date(day).toISOString().slice(0, 10);
 
-const sessionLoad = (completion) =>
-  completion?.actualDurationMin != null && completion.sessionRpe != null
-    ? completion.actualDurationMin * completion.sessionRpe
-    : null;
+const optionalComponent = (component) =>
+  component?.optional === true ||
+  component?.optional === "true" ||
+  component?.recovery === true ||
+  component?.classification === "recovery" ||
+  /sauna|cold plunge|recovery extra/i.test(`${component?.name ?? ""} ${component?.key ?? ""}`);
+
+const sessionLoad = (completion, prescription = null) => {
+  if (completion?.actualDurationMin == null || completion.sessionRpe == null) return null;
+  const optionalMinutes = (prescription?.components ?? []).reduce(
+    (total, component) =>
+      optionalComponent(component)
+        ? total + (Number.isFinite(component.durationMin) ? component.durationMin : 0)
+        : total,
+    0,
+  );
+  const workoutMinutes = Math.max(0, completion.actualDurationMin - optionalMinutes);
+  return workoutMinutes * completion.sessionRpe;
+};
 
 const emptyWeek = () => ({
   load: null,
@@ -24,9 +39,25 @@ const emptyWeek = () => ({
 });
 
 const addSession = (week, session) => {
+  if (
+    session.status === "rest" ||
+    session.prescription?.kind === "rest" ||
+    session.prescription?.rest === true ||
+    session.prescription?.sessionType === "rest"
+  )
+    return;
   week.scheduledSessions++;
-  if (session.plannedMinutes != null) {
-    week.plannedMinutes = (week.plannedMinutes ?? 0) + session.plannedMinutes;
+  const optionalMinutes = (session.prescription?.components ?? []).reduce(
+    (total, component) =>
+      optionalComponent(component)
+        ? total + (Number.isFinite(component.durationMin) ? component.durationMin : 0)
+        : total,
+    0,
+  );
+  const plannedMinutes =
+    session.plannedMinutes != null ? Math.max(0, session.plannedMinutes - optionalMinutes) : null;
+  if (plannedMinutes != null) {
+    week.plannedMinutes = (week.plannedMinutes ?? 0) + plannedMinutes;
   }
   week.intensity[session.plannedIntensity ?? "unspecified"]++;
   if (!session.completed) return;
@@ -35,13 +66,14 @@ const addSession = (week, session) => {
   const completion = session.completion;
   if (completion?.actualDurationMin != null) {
     week.measuredDurationSessions++;
-    week.actualMinutes = (week.actualMinutes ?? 0) + completion.actualDurationMin;
+    week.actualMinutes =
+      (week.actualMinutes ?? 0) + Math.max(0, completion.actualDurationMin - optionalMinutes);
   }
   if (completion?.sessionRpe != null) {
     week.rpeSum += completion.sessionRpe;
     week.rpeCount++;
   }
-  const load = sessionLoad(completion);
+  const load = sessionLoad(completion, session.prescription);
   if (load !== null) {
     week.load = (week.load ?? 0) + load;
     week.measuredLoadSessions++;

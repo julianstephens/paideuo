@@ -54,7 +54,7 @@ type View = "month" | "week";
 const weekdays = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
 const monthSessionLimit = 2;
 const dayOptions = { month: "short", day: "numeric" } as const;
-const palettes = { planned: "gray", completed: "green", skipped: "orange" };
+const palettes = { planned: "gray", completed: "green", skipped: "orange", rest: "blue" };
 
 const calendarRange = (date: Date, view: View) => {
   const first = monday(view === "month" ? monthStart(date) : date);
@@ -337,8 +337,12 @@ const Calendar = ({ ownerId }: { ownerId: string }) => {
                   )}
                 </Flex>
                 <Stack gap={desktopMonth ? "0.5" : "1.5"} p={desktopMonth ? "1" : "2"}>
-                  {checkInButton(key)}
-                  {addWorkoutButton(key)}
+                  {!sessions.some((session) => session.status === "rest") && (
+                    <>
+                      {checkInButton(key)}
+                      {addWorkoutButton(key)}
+                    </>
+                  )}
                   <SessionButtons
                     sessions={desktopMonth ? sessions.slice(0, monthSessionLimit) : sessions}
                     select={selectSession}
@@ -823,11 +827,12 @@ const SessionDetail = ({
                 gap="2"
                 flexWrap="wrap"
               >
-                {(session.status === "planned" || session.status === "skipped") && (
-                  <Button disabled={busy || executionConflict} onClick={openCompletion}>
-                    Mark complete
-                  </Button>
-                )}
+                {session.status !== "rest" &&
+                  (session.status === "planned" || session.status === "skipped") && (
+                    <Button disabled={busy || executionConflict} onClick={openCompletion}>
+                      Mark complete
+                    </Button>
+                  )}
                 {session.status === "skipped" && !past && (
                   <Button
                     disabled={busy || executionConflict}

@@ -21,8 +21,12 @@ const parsePrescription = (prescription) => {
     plannedRpe = null,
     plannedIntensity = null,
     components = [],
+    kind = null,
+    rest = false,
   } = prescription;
-  if (!["climbing", "strength", "conditioning", "mobility", "other"].includes(sessionType)) {
+  if (
+    !["climbing", "strength", "conditioning", "mobility", "other", "rest"].includes(sessionType)
+  ) {
     throw new BadRequestError("Choose a session type.");
   }
   if (
@@ -75,6 +79,8 @@ const parsePrescription = (prescription) => {
     plannedRpeMin: rpeMin,
     plannedRpeMax: rpeMax,
     plannedIntensity,
+    kind: kind ?? (sessionType === "rest" || rest ? "rest" : "workout"),
+    rest: rest === true || sessionType === "rest",
     components: componentValues(components).map(presentComponent),
   };
 };

@@ -16,6 +16,58 @@ const compile = (filename) => {
 };
 const { calculate } = compile(path.join(__dirname, "compliance.js"));
 const { progression } = compile(path.join(__dirname, "gpp-progression.js"));
+const { sessionLoad } = compile(path.join(__dirname, "training-load.js"));
+
+test("planned rest is excluded from adherence and training totals", () => {
+  const total = calculate(
+    [
+      {
+        status: "rest",
+        scheduledDate: "2026-01-09",
+        planned: 0,
+        prescription: { kind: "rest", sessionType: "rest", components: [] },
+      },
+    ],
+    "2026-01-10",
+  );
+
+  assert.equal(total.scheduled, 0);
+  assert.equal(total.completed, 0);
+  assert.equal(total.adherence, null);
+  assert.equal(total.plannedMinutes, null);
+});
+
+test("optional sauna is excluded from aerobic minutes and session load", () => {
+  const prescription = {
+    plannedDurationMin: 75,
+    components: [
+      {
+        key: "sauna",
+        name: "Sauna",
+        classification: "other",
+        optional: true,
+        durationMin: 15,
+      },
+    ],
+  };
+  const total = calculate(
+    [
+      {
+        status: "completed",
+        planned: 75,
+        actual: 75,
+        prescription,
+        componentResults: [],
+      },
+    ],
+    "2026-01-10",
+  );
+
+  assert.equal(total.plannedMinutes, 60);
+  assert.equal(total.actualMinutes, 60);
+  assert.equal(total.aerobicMinutes, null);
+  assert.equal(sessionLoad({ actualDurationMin: 75, sessionRpe: 7 }, prescription), 420);
+});
 
 test("aerobic totals exclude missing component outcomes and aggregate by modality", () => {
   const sessions = [

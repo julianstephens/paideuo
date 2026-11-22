@@ -36,12 +36,24 @@ const todayIn = (timezone, now = new DateTime()) =>
   now.time().in(new Timezone(timezone)).format("2006-01-02");
 
 const statusFor = (row, today) => {
+  const prescription = JSON.parse(row.getString("prescription_snapshot") || "{}");
+  if (
+    prescription.kind === "rest" ||
+    prescription.type === "rest" ||
+    prescription.rest === true ||
+    prescription.sessionType === "rest"
+  ) {
+    return "rest";
+  }
   const status = row.getString("status");
   return status === "planned" && row.getString("scheduled_date") < today ? "skipped" : status;
 };
 
 const state = (row, completion, status = row.getString("status"), componentResults = []) => ({
-  sessionLoad: require(__hooks + "/training-load.js").sessionLoad(completion),
+  sessionLoad: require(__hooks + "/training-load.js").sessionLoad(
+    completion,
+    JSON.parse(row.getString("prescription_snapshot") || "{}"),
+  ),
   status,
   completion,
   componentResults,

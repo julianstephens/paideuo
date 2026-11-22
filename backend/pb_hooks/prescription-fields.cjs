@@ -22,6 +22,7 @@ const componentFields = (component, index) => ({
   duration_max: component.durationMax ?? 0,
   duration_max_specified: component.durationMax != null,
   classification: component.classification ?? null,
+  optional: component.optional === true,
   targets: component.targets ?? null,
 });
 
@@ -33,6 +34,7 @@ const presentComponent = (component) => ({
     component.duration_specified || component.duration_min > 0 ? component.duration_min : null,
   durationMax: component.duration_max_specified ? component.duration_max : null,
   classification: component.classification || null,
+  optional: component.optional === true,
   targets: component.targets,
 });
 
