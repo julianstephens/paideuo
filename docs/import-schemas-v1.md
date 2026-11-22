@@ -336,6 +336,11 @@ in ChatGPT, and the Server URL must exactly match the metadata's `resource` valu
 path and its lack of a trailing slash. ChatGPT starts the flow with an S256 PKCE challenge, so
 opening the authorize endpoint directly without the OAuth parameters also returns HTTP 400.
 
+If consent fails after signing in, verify that `paideuo_mcp_oauth_grants` exists in the
+PocketBase instance serving Paideuo. Migration `1760000029_mcp_oauth_grants.js` creates the
+collection needed to issue an authorization code. Deploying the hooks alone leaves the
+collection absent on an instance that has yet to run the migration.
+
 This scope grants access to the MCP tools listed below for the consenting Paideuo account. The
 authorization code expires after five minutes and is single-use. Access tokens last one hour,
 and refreshing rotates both credentials. Refresh tokens expire after 30 days of inactivity. The

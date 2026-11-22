@@ -157,7 +157,18 @@ const consent = (event) => {
   if (request.state !== undefined) result.state = request.state;
   if (request.approved) {
     const code = opaqueToken("pdc_");
-    const grant = new Record(event.app.findCollectionByNameOrId(collectionName));
+    let collection;
+    try {
+      collection = event.app.findCollectionByNameOrId(collectionName);
+    } catch (error) {
+      event.app.logger().error("MCP OAuth grant storage lookup failed", "error", String(error));
+      return event.json(503, {
+        error: "temporarily_unavailable",
+        error_description:
+          "Paideuo's MCP OAuth grant storage is unavailable. Check that the PocketBase OAuth migration has been applied.",
+      });
+    }
+    const grant = new Record(collection);
     grant.set("owner", event.auth.id);
     grant.set("client_id", config.clientId);
     grant.set("resource", config.resource);

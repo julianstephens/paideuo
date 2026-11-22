@@ -1,3 +1,7 @@
+## v0.5.2
+
+- Add `paideuo_mcp_oauth_grants` collection for MCP OAuth consent verification
+
 ## v0.5.1
 
 - Fix error message specificity for MCP oauth errors

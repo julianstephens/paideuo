@@ -1,4 +1,5 @@
 import { Button, Container, HStack, Text } from "@chakra-ui/react";
+import { ClientResponseError } from "pocketbase";
 import { useState } from "react";
 import { useLocation } from "react-router";
 import { Notice, PageHeader, Panel } from "../../components/ui";
@@ -7,11 +8,11 @@ import { pocketbase } from "../../lib/api/pocketbase";
 export const McpConsentPage = () => {
   const { search } = useLocation();
   const [pending, setPending] = useState<"allow" | "deny" | null>(null);
-  const [error, setError] = useState(false);
+  const [error, setError] = useState("");
 
   const respond = async (approved: boolean) => {
     setPending(approved ? "allow" : "deny");
-    setError(false);
+    setError("");
     try {
       const { redirect } = await pocketbase.send<{ redirect: string }>(
         "/api/paideuo/v1/mcp-oauth/consent",
@@ -21,8 +22,14 @@ export const McpConsentPage = () => {
         },
       );
       window.location.replace(redirect);
-    } catch {
-      setError(true);
+    } catch (error) {
+      const description =
+        error instanceof ClientResponseError ? error.response?.error_description : undefined;
+      setError(
+        typeof description === "string"
+          ? description
+          : "Unable to connect. Restart setup in ChatGPT and try again.",
+      );
       setPending(null);
     }
   };
@@ -35,9 +42,7 @@ export const McpConsentPage = () => {
           ChatGPT can read your training programs and metrics, create program drafts, import
           training data, log workouts, and submit check-ins.
         </Text>
-        {error && (
-          <Notice role="alert">Unable to connect. Restart setup in ChatGPT and try again.</Notice>
-        )}
+        {error && <Notice role="alert">{error}</Notice>}
         <HStack gap="3">
           <Button
             loading={pending === "allow"}

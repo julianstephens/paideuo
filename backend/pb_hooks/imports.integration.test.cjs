@@ -2667,6 +2667,15 @@ test("ChatGPT OAuth discovers MCP, authorizes a Paideuo user, and rotates creden
       assert.equal((await list("Bearer " + rotated.access_token)).status, 200);
       assert.equal((await tokenRequest("/revoke", { token: rotated.refresh_token })).status, 200);
       assert.equal((await list("Bearer " + rotated.access_token)).status, 401);
+
+      await admin.collections.delete("paideuo_mcp_oauth_grants");
+      await assert.rejects(
+        () => consent(true),
+        (error) =>
+          error.status === 503 &&
+          error.response.error === "temporarily_unavailable" &&
+          /migration/.test(error.response.error_description),
+      );
     },
     {
       env: {
