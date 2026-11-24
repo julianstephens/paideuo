@@ -402,18 +402,21 @@ const listWorkouts = (event, principal, args) => {
   const dates = require(__hooks + "/calendar-dates.js");
   const first = dates.parse(args.start);
   const last = dates.parse(args.end);
-  if (!first || !last || last < first) {
-    throw rpcError(400, "Provide valid start and end dates.");
+  if (!first || !last || last < first || last.getTime() - first.getTime() > 41 * 86400000) {
+    throw rpcError(400, "Provide a valid date range of up to 42 days.");
   }
+  const { ownerFilter } = require(__hooks + "/calendar-sessions.js");
   let workouts = [];
   event.app.runInTransaction((tx) => {
     const records = find(
       tx,
       "paideuo_scheduled_sessions",
-      "owner = {:owner} && deleted = false && scheduled_date >= {:start} && scheduled_date <= {:end}",
+      ownerFilter() +
+        " && deleted = false && scheduled_date >= {:start} && scheduled_date <= {:end}",
       { owner: principal.ownerId, start: args.start, end: args.end },
-      "scheduled_date,slot_position,id",
+      "scheduled_date,slot_position,schedule,id",
     );
+    tx.expandRecords(records, ["schedule"], null);
     workouts = records.map(presentWorkout);
   });
   return workouts;
