@@ -99,7 +99,7 @@ const event = (body) => {
   const mockTx = {
     findRecordsByFilter: (collection, filter, sort, skip, limit, params) => {
       return Array.from(records.values()).filter(
-        (r) => r.collection === collection && !r.deleted,
+        (r) => r.collection === collection && !r.getBool("deleted"),
       );
     },
     findCollectionByNameOrId: (name) => ({ name, id: `coll_${name}` }),
