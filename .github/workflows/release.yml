@@ -138,6 +138,21 @@ jobs:
           
           echo "✓ Hooks synchronized to ${{ secrets.PB_CONTAINER_NAME }}"
 
+      - name: Restart PocketBase container
+        if: steps.detect.outputs.has_hooks == 'true'
+        run: |
+          ssh -i ~/.ssh/deploy_key -o StrictHostKeyChecking=no \
+            "${{ secrets.PB_DEPLOY_USER }}@${{ secrets.PB_DEPLOY_HOST }}" \
+            "docker restart ${{ secrets.PB_CONTAINER_NAME }}"
+          
+          echo "✓ Container restarted to load new hooks"
+          sleep 5
+          
+          # Verify container is running
+          ssh -i ~/.ssh/deploy_key -o StrictHostKeyChecking=no \
+            "${{ secrets.PB_DEPLOY_USER }}@${{ secrets.PB_DEPLOY_HOST }}" \
+            "docker exec ${{ secrets.PB_CONTAINER_NAME }} pocketbase --version 2>&1 | head -1 || echo 'Container status: running'"
+
       - name: Verify hook deployment
         if: steps.detect.outputs.has_hooks == 'true'
         run: |
