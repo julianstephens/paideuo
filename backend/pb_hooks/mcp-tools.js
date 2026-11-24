@@ -370,7 +370,6 @@ const makeDraftDocument = (args) => ({
   },
 });
 
-
 const presentWorkout = (row) => {
   const snapshot = JSON.parse(row.getString("prescription_snapshot") || "{}");
   return {
@@ -460,12 +459,10 @@ const createOneOffWorkout = (event, principal, args) => {
   let id;
   event.app.runInTransaction((tx) => {
     const collection = "paideuo_scheduled_sessions";
-    const existing = find(
-      tx,
-      collection,
-      "owner = {:owner} && operation_id = {:operationId}",
-      { owner: principal.ownerId, operationId: args.operationId },
-    )[0];
+    const existing = find(tx, collection, "owner = {:owner} && operation_id = {:operationId}", {
+      owner: principal.ownerId,
+      operationId: args.operationId,
+    })[0];
     if (existing) {
       if (existing.getString("request_hash") !== requestHash) {
         throw rpcError(409, "This workout was already saved. Use a different operationId.");
@@ -503,12 +500,10 @@ const editOneOffWorkout = (event, principal, args) => {
   let workout = null;
   event.app.runInTransaction((tx) => {
     const collection = "paideuo_scheduled_sessions";
-    const record = find(
-      tx,
-      collection,
-      "id = {:id} && owner = {:owner} && deleted = false",
-      { id: args.id, owner: principal.ownerId },
-    )[0];
+    const record = find(tx, collection, "id = {:id} && owner = {:owner} && deleted = false", {
+      id: args.id,
+      owner: principal.ownerId,
+    })[0];
     if (!record) throw rpcError(404, "Workout not found.");
     if (args.prescription) {
       const parsePrescription = require(__hooks + "/workout-prescriptions.js");
@@ -529,12 +524,10 @@ const deleteOneOffWorkout = (event, principal, args) => {
   if (!args.id) throw rpcError(-32602, "Provide an id.");
   event.app.runInTransaction((tx) => {
     const collection = "paideuo_scheduled_sessions";
-    const record = find(
-      tx,
-      collection,
-      "id = {:id} && owner = {:owner} && deleted = false",
-      { id: args.id, owner: principal.ownerId },
-    )[0];
+    const record = find(tx, collection, "id = {:id} && owner = {:owner} && deleted = false", {
+      id: args.id,
+      owner: principal.ownerId,
+    })[0];
     if (!record) throw rpcError(404, "Workout not found.");
     record.set("deleted", true);
     tx.save(record);

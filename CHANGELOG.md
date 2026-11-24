@@ -1,3 +1,7 @@
+## v0.6.1
+
+- Fix bug where one-off workouts were not available through MCP
+
 ## v0.6.0
 
 - Add support for connecting a Google Health account

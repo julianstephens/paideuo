@@ -107,7 +107,7 @@ jobs:
         run: |
           # Get the previous tag for comparison
           PREV_TAG=$(git describe --tags --abbrev=0 2>/dev/null || echo "")
-          
+
           if [ -z "$PREV_TAG" ]; then
             # First release - check if hooks directory exists
             HAS_HOOKS=$([ -d "backend/pb_hooks" ] && echo "true" || echo "false")
@@ -115,7 +115,7 @@ jobs:
             # Check if any files in backend/pb_hooks have changed since last tag
             HAS_HOOKS=$(git diff "$PREV_TAG"...HEAD --name-only | grep -q "^backend/pb_hooks/" && echo "true" || echo "false")
           fi
-          
+
           echo "has_hooks=$HAS_HOOKS" >> $GITHUB_OUTPUT
           echo "Hooks changed: $HAS_HOOKS"
 
@@ -135,7 +135,7 @@ jobs:
             "${{ secrets.PB_DEPLOY_USER }}@${{ secrets.PB_DEPLOY_HOST }}" \
             "docker cp - ${{ secrets.PB_CONTAINER_NAME }}:/app/pb_hooks" \
             < <(tar -cf - -C backend pb_hooks)
-          
+
           echo "✓ Hooks synchronized to ${{ secrets.PB_CONTAINER_NAME }}"
 
       - name: Restart PocketBase container
@@ -144,10 +144,10 @@ jobs:
           ssh -i ~/.ssh/deploy_key -o StrictHostKeyChecking=no \
             "${{ secrets.PB_DEPLOY_USER }}@${{ secrets.PB_DEPLOY_HOST }}" \
             "docker restart ${{ secrets.PB_CONTAINER_NAME }}"
-          
+
           echo "✓ Container restarted to load new hooks"
           sleep 5
-          
+
           # Verify container is running
           ssh -i ~/.ssh/deploy_key -o StrictHostKeyChecking=no \
             "${{ secrets.PB_DEPLOY_USER }}@${{ secrets.PB_DEPLOY_HOST }}" \
@@ -164,4 +164,3 @@ jobs:
         if: always()
         run: |
           rm -f ~/.ssh/deploy_key
-

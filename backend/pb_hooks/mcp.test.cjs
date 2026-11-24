@@ -21,8 +21,7 @@ global.$security = {
 global.Record = class Record {
   constructor(collection, data = {}) {
     this.id = data.id || `rec_${$security.randomString(16)}`;
-    this.collection =
-      typeof collection === "string" ? collection : (collection?.name ?? "");
+    this.collection = typeof collection === "string" ? collection : (collection?.name ?? "");
     this.data = { ...data };
   }
   set(key, value) {
@@ -32,7 +31,10 @@ global.Record = class Record {
     return this.data[key];
   }
   getString(key) {
-    return this.data[key] || "";
+    const value = this.data[key];
+    return key === "prescription_snapshot" && value && typeof value === "object"
+      ? JSON.stringify(value)
+      : (value ?? "");
   }
   getInt(key) {
     return parseInt(this.data[key] || "0", 10);
@@ -100,7 +102,7 @@ const { tools, handle, callTool } = source.exports;
 const event = (body) => {
   const records = new Map();
   const mockTx = {
-    findRecordsByFilter: (collection, filter, sort, skip, limit, params) => {
+    findRecordsByFilter: (collection) => {
       return Array.from(records.values()).filter(
         (r) => r.collection === collection && !r.getBool("deleted"),
       );
