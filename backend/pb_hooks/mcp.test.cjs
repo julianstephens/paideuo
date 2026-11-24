@@ -21,7 +21,8 @@ global.$security = {
 global.Record = class Record {
   constructor(collection, data = {}) {
     this.id = data.id || `rec_${$security.randomString(16)}`;
-    this.collection = collection;
+    this.collection =
+      typeof collection === "string" ? collection : (collection?.name ?? "");
     this.data = { ...data };
   }
   set(key, value) {
@@ -71,7 +72,9 @@ source.require = (id) => {
     return {
       parse: (dateStr) => {
         try {
-          return new Date(dateStr).getTime();
+          if (!/^\d{4}-\d{2}-\d{2}$/.test(dateStr)) return null;
+          const date = new Date(`${dateStr}T00:00:00Z`);
+          return Number.isFinite(date.getTime()) ? date : null;
         } catch {
           return null;
         }
@@ -112,6 +115,7 @@ const event = (body) => {
     },
   };
   return {
+    records,
     app: {
       findRecordsByFilter: (collection, filter, sort, skip, limit, params) =>
         mockTx.findRecordsByFilter(collection, filter, sort, skip, limit, params),
@@ -168,4 +172,45 @@ test("tools/list and tools/call are JSON-RPC responses", () => {
   const list = handle(event({ jsonrpc: "2.0", id: 1, method: "tools/list" }));
   assert.equal(list.status, 200);
   assert.equal(list.value.result.tools.length, 13);
+});
+
+test("one-off workout CRUD behavior", () => {
+  const evt = event({});
+  const principal = credentials.servicePrincipalFromEvent();
+  const operationId = "12345678-1234-1234-1234-123456789abc";
+  const prescription = { title: "Day 1", components: [] };
+
+  const created = callTool(evt, principal, "create_one_off_workout", {
+    scheduledDate: "2026-01-10",
+    timezone: "UTC",
+    prescription,
+    operationId,
+  });
+  assert.equal(evt.records.size, 1);
+
+  const idempotent = callTool(evt, principal, "create_one_off_workout", {
+    scheduledDate: "2026-01-10",
+    timezone: "UTC",
+    prescription,
+    operationId,
+  });
+  assert.equal(idempotent.id, created.id);
+  assert.equal(evt.records.size, 1);
+
+  const edited = callTool(evt, principal, "edit_one_off_workout", {
+    id: created.id,
+    scheduledDate: "2026-01-11",
+  });
+  assert.equal(edited.scheduledDate, "2026-01-11");
+
+  const fetched = callTool(evt, principal, "get_workout", { id: created.id });
+  assert.equal(fetched.id, created.id);
+  assert.equal(fetched.scheduledDate, "2026-01-11");
+
+  const deleted = callTool(evt, principal, "delete_one_off_workout", { id: created.id });
+  assert.deepEqual(deleted, { id: created.id, deleted: true });
+  assert.throws(
+    () => callTool(evt, principal, "get_workout", { id: created.id }),
+    /Workout not found/,
+  );
 });
