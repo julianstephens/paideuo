@@ -1,3 +1,7 @@
+## v0.6.5
+
+- Fix bug where opening metrics triggered chart download instead of display
+
 ## v0.6.4
 
 - Fix ensure MCP parity for program modification

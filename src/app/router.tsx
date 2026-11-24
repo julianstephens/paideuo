@@ -3,7 +3,8 @@ import { RequireSession, SignInPage } from "../features/auth/AuthRoutes";
 import { BlockPage } from "../features/blocks/BlockPage";
 import { ProgramPage } from "../features/programs/ProgramPage";
 import { Link, Stack } from "@chakra-ui/react";
-import { Link as RouterLink, createBrowserRouter } from "react-router";
+import { Link as RouterLink, Outlet, createBrowserRouter } from "react-router";
+import { RouteErrorBoundary } from "./AppErrorBoundary";
 import { AnnualPlanPage } from "../features/annual-plan/AnnualPlanPage";
 import { CalendarPage } from "../features/calendar/CalendarPage";
 import { MetricsPage } from "../features/compliance/MetricsPage";
@@ -16,36 +17,42 @@ import { ImportsPage } from "../features/imports/ImportsPage";
 import { SettingsPage } from "../features/settings/SettingsPage";
 
 export const router = createBrowserRouter([
-  { path: "sign-in", Component: SignInPage },
   {
-    Component: RequireSession,
+    Component: Outlet,
+    ErrorBoundary: RouteErrorBoundary,
     children: [
-      { path: "mcp/authorize", Component: McpConsentPage },
+      { path: "sign-in", Component: SignInPage },
       {
-        Component: AppLayout,
+        Component: RequireSession,
         children: [
-          { index: true, Component: CalendarPage },
-          { path: "annual-plan", Component: AnnualPlanPage },
-          { path: "metrics", Component: MetricsPage },
-          { path: "programs", Component: ProgramsPage },
-          { path: "programs/:programId", Component: ProgramPage },
-          { path: "programs/:programId/weekly-reviews/:weekId", Component: WeeklyReviewPage },
-          { path: "programs/:programId/blocks/:blockId", Component: BlockPage },
-          { path: "library", Component: LibraryPage },
-          { path: "imports", Component: ImportsPage },
-          { path: "settings", Component: SettingsPage },
+          { path: "mcp/authorize", Component: McpConsentPage },
           {
-            path: "*",
-            element: (
-              <Stack gap="5">
-                <PageHeader title="Page not found" />
-                <Panel align="start">
-                  <Link asChild variant="underline">
-                    <RouterLink to="/">Back to Calendar</RouterLink>
-                  </Link>
-                </Panel>
-              </Stack>
-            ),
+            Component: AppLayout,
+            children: [
+              { index: true, Component: CalendarPage },
+              { path: "annual-plan", Component: AnnualPlanPage },
+              { path: "metrics", Component: MetricsPage },
+              { path: "programs", Component: ProgramsPage },
+              { path: "programs/:programId", Component: ProgramPage },
+              { path: "programs/:programId/weekly-reviews/:weekId", Component: WeeklyReviewPage },
+              { path: "programs/:programId/blocks/:blockId", Component: BlockPage },
+              { path: "library", Component: LibraryPage },
+              { path: "imports", Component: ImportsPage },
+              { path: "settings", Component: SettingsPage },
+              {
+                path: "*",
+                element: (
+                  <Stack gap="5">
+                    <PageHeader title="Page not found" />
+                    <Panel align="start">
+                      <Link asChild variant="underline">
+                        <RouterLink to="/">Back to Calendar</RouterLink>
+                      </Link>
+                    </Panel>
+                  </Stack>
+                ),
+              },
+            ],
           },
         ],
       },

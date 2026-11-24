@@ -5,6 +5,7 @@ import { createRoot } from "react-dom/client";
 import { RouterProvider } from "react-router/dom";
 import { AuthProvider } from "./features/auth/AuthProvider";
 import { router } from "./app/router";
+import { AppErrorBoundary } from "./app/AppErrorBoundary";
 
 import { ColorModeProvider } from "./app/ColorModeControl";
 import { theme } from "./app/theme";
@@ -19,14 +20,16 @@ if (!root) {
 
 createRoot(root).render(
   <StrictMode>
-    <ChakraProvider value={theme}>
-      <ColorModeProvider>
-        <QueryClientProvider client={queryClient}>
-          <AuthProvider>
-            <RouterProvider router={router} />
-          </AuthProvider>
-        </QueryClientProvider>
-      </ColorModeProvider>
-    </ChakraProvider>
+    <AppErrorBoundary>
+      <ChakraProvider value={theme}>
+        <ColorModeProvider>
+          <QueryClientProvider client={queryClient}>
+            <AuthProvider>
+              <RouterProvider router={router} />
+            </AuthProvider>
+          </QueryClientProvider>
+        </ColorModeProvider>
+      </ChakraProvider>
+    </AppErrorBoundary>
   </StrictMode>,
 );
