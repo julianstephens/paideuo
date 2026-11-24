@@ -1,3 +1,7 @@
+## v0.6.3
+
+- Update MCP documentation
+
 ## v0.6.2
 
 - Fix issue with release workflow detecting changes

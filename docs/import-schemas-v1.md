@@ -330,6 +330,14 @@ are supported. Create and install the plugin, sign in to Paideuo when prompted, 
 access. In a conversation with the plugin enabled, ask it to list your Paideuo training programs.
 See [OpenAI's custom MCP server guide](https://developers.openai.com/api/docs/guides/custom-mcp-server).
 
+For one-off workouts, the live `tools/list` response should include `list_workouts`,
+`get_workout`, `create_one_off_workout`, `edit_one_off_workout`, and `delete_one_off_workout`.
+If they are missing from the server, run **Build and Release** in GitHub Actions with
+**Deploy PocketBase hooks even if no hook changes are detected** selected. The job requires
+`PB_DEPLOY_HOST`, `PB_DEPLOY_USER`, `PB_DEPLOY_PRIVATE_KEY`, and `PB_CONTAINER_NAME`.
+Once the live catalog includes the tools, refresh discovery for the custom MCP connection
+and open a new conversation.
+
 If `/authorize` returns HTTP 400, check the response's `error_description`. The predefined
 client ID must match the PocketBase environment, the redirect URI must match the callback shown
 in ChatGPT, and the Server URL must exactly match the metadata's `resource` value, including the

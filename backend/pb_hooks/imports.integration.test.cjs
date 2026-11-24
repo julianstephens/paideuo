@@ -2838,6 +2838,16 @@ test("ChatGPT OAuth discovers MCP, authorizes a Paideuo user, and rotates creden
       assert.equal(notification.status, 202);
       assert.equal(await notification.text(), "");
       const catalog = await (await rpc("tools/list", {}, authorization)).json();
+      const toolNames = catalog.result.tools.map(({ name }) => name);
+      for (const name of [
+        "list_workouts",
+        "get_workout",
+        "create_one_off_workout",
+        "edit_one_off_workout",
+        "delete_one_off_workout",
+      ]) {
+        assert.ok(toolNames.includes(name), `OAuth tool catalog is missing ${name}`);
+      }
       assert.equal(
         catalog.result.tools.find(({ name }) => name === "list_programs").annotations.readOnlyHint,
         true,

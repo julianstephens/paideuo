@@ -5,6 +5,11 @@ on:
     tags:
       - "v*.*.*"
   workflow_dispatch:
+    inputs:
+      force_deploy_hooks:
+        description: Deploy PocketBase hooks even if no hook changes are detected
+        type: boolean
+        default: false
 
 env:
   REGISTRY: ghcr.io
@@ -106,13 +111,14 @@ jobs:
 
       - name: Detect hook changes
         id: detect
+        if: inputs.force_deploy_hooks != true
         uses: tj-actions/changed-files@9426d40962ed5378910ee2e21d5f8c6fcbf2dd96 # v47.0.6
         with:
           tags_pattern: 'v*.*.*'
           files: backend/pb_hooks/**
 
       - name: Setup SSH key
-        if: steps.detect.outputs.any_modified == 'true'
+        if: inputs.force_deploy_hooks == true || steps.detect.outputs.any_modified == 'true'
         run: |
           mkdir -p ~/.ssh
           echo "${{ secrets.PB_DEPLOY_PRIVATE_KEY }}" > ~/.ssh/deploy_key
@@ -120,18 +126,17 @@ jobs:
           ssh-keyscan -H "${{ secrets.PB_DEPLOY_HOST }}" >> ~/.ssh/known_hosts 2>/dev/null || true
 
       - name: Sync hooks to PocketBase container
-        if: steps.detect.outputs.any_modified == 'true'
+        if: inputs.force_deploy_hooks == true || steps.detect.outputs.any_modified == 'true'
+        shell: bash
         run: |
-          # Copy hooks to container via SSH + Docker
-          ssh -i ~/.ssh/deploy_key -o StrictHostKeyChecking=no \
+          tar -cf - -C backend/pb_hooks . | ssh -i ~/.ssh/deploy_key -o StrictHostKeyChecking=no \
             "${{ secrets.PB_DEPLOY_USER }}@${{ secrets.PB_DEPLOY_HOST }}" \
-            "docker cp - ${{ secrets.PB_CONTAINER_NAME }}:/app/pb_hooks" \
-            < <(tar -cf - -C backend pb_hooks)
+            "docker cp - ${{ secrets.PB_CONTAINER_NAME }}:/app/pb_hooks"
 
           echo "✓ Hooks synchronized to ${{ secrets.PB_CONTAINER_NAME }}"
 
       - name: Restart PocketBase container
-        if: steps.detect.outputs.any_modified == 'true'
+        if: inputs.force_deploy_hooks == true || steps.detect.outputs.any_modified == 'true'
         run: |
           ssh -i ~/.ssh/deploy_key -o StrictHostKeyChecking=no \
             "${{ secrets.PB_DEPLOY_USER }}@${{ secrets.PB_DEPLOY_HOST }}" \
@@ -140,17 +145,18 @@ jobs:
           echo "✓ Container restarted to load new hooks"
           sleep 5
 
-          # Verify container is running
-          ssh -i ~/.ssh/deploy_key -o StrictHostKeyChecking=no \
-            "${{ secrets.PB_DEPLOY_USER }}@${{ secrets.PB_DEPLOY_HOST }}" \
-            "docker exec ${{ secrets.PB_CONTAINER_NAME }} pocketbase --version 2>&1 | head -1 || echo 'Container status: running'"
-
       - name: Verify hook deployment
-        if: steps.detect.outputs.any_modified == 'true'
+        if: inputs.force_deploy_hooks == true || steps.detect.outputs.any_modified == 'true'
+        shell: bash
         run: |
-          ssh -i ~/.ssh/deploy_key -o StrictHostKeyChecking=yes -o UserKnownHostsFile=~/.ssh/known_hosts \
+          expected=$(sha256sum backend/pb_hooks/mcp-tools.js)
+          actual=$(ssh -i ~/.ssh/deploy_key -o StrictHostKeyChecking=yes \
             "${{ secrets.PB_DEPLOY_USER }}@${{ secrets.PB_DEPLOY_HOST }}" \
-            "docker exec ${{ secrets.PB_CONTAINER_NAME }} ls -la /app/pb_hooks | head -20"
+            "docker exec ${{ secrets.PB_CONTAINER_NAME }} cat /app/pb_hooks/mcp-tools.js" | sha256sum)
+          if [[ "${expected%% *}" != "${actual%% *}" ]]; then
+            echo "::error::The running container does not have the expected mcp-tools.js"
+            exit 1
+          fi
 
       - name: Cleanup SSH key
         if: always()
