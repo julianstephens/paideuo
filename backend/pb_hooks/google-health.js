@@ -164,9 +164,12 @@ const complete = (event) => {
     Array.isArray(identity.json?.error?.details) &&
     identity.json.error.details.some((detail) => detail?.reason === "ACCOUNT_NOT_LINKED")
   ) {
-    throw new BadRequestError(
-      "Set up your profile or migrate your Fitbit account in the Google Health app, then try again.",
-    );
+    return event.json(400, {
+      status: 400,
+      message:
+        "The Google Account you selected needs an active Google Health profile. Set it up or move your Fitbit account in the Google Health app, then reconnect using that same Google Account.",
+      data: { reason: "ACCOUNT_NOT_LINKED" },
+    });
   }
   if (
     identity.statusCode !== 200 ||

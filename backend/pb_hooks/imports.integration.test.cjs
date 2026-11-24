@@ -2953,7 +2953,7 @@ test("Google Health links only verified profiles and keeps credentials private",
       const first = await start();
       await assert.rejects(complete(other, first.state, "unlinked"), { status: 400 });
       await assert.rejects(complete(client, first.state, "unlinked"), (error) => {
-        assert.match(error.response.message, /Set up your profile/);
+        assert.equal(error.response.data.reason, "ACCOUNT_NOT_LINKED");
         return error.status === 400;
       });
       await assert.rejects(complete(client, first.state, "linked"), { status: 400 });

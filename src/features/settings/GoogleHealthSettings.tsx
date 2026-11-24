@@ -1,6 +1,7 @@
-import { Button, Heading, Text } from "@chakra-ui/react";
+import { Button, Heading, Link, Stack, Text } from "@chakra-ui/react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useEffect, useRef, useState } from "react";
+import { ClientResponseError } from "pocketbase";
 import { useSearchParams } from "react-router";
 import { Notice, Panel } from "../../components/ui";
 import { apiRequest, errorMessage } from "../../lib/api/request";
@@ -12,7 +13,7 @@ export const GoogleHealthSettings = ({ ownerId }: { ownerId: string }) => {
   const [search, setSearch] = useSearchParams();
   const queryClient = useQueryClient();
   const [busy, setBusy] = useState(false);
-  const [error, setError] = useState<string | null>(null);
+  const [error, setError] = useState<{ message: string; needsSetup?: boolean } | null>(null);
   const handledCallback = useRef(false);
   const status = useQuery({
     queryKey: ["google-health", ownerId],
@@ -48,14 +49,19 @@ export const GoogleHealthSettings = ({ ownerId }: { ownerId: string }) => {
       try {
         const expectedState = sessionStorage.getItem(storageKey(ownerId));
         if (!state || state !== expectedState) {
-          setError("Start a new Google Health connection from this tab.");
+          setError({ message: "Start a new Google Health connection from this tab." });
           return;
         }
         sessionStorage.removeItem(storageKey(ownerId));
         await apiRequest(`${endpoint}/complete`, "POST", { state, code, denied });
         await queryClient.invalidateQueries({ queryKey: ["google-health", ownerId] });
       } catch (cause) {
-        setError(errorMessage(cause, "Unable to connect Google Health."));
+        setError({
+          message: errorMessage(cause, "Unable to connect Google Health."),
+          needsSetup:
+            cause instanceof ClientResponseError &&
+            cause.response.data?.reason === "ACCOUNT_NOT_LINKED",
+        });
       } finally {
         setBusy(false);
       }
@@ -74,7 +80,7 @@ export const GoogleHealthSettings = ({ ownerId }: { ownerId: string }) => {
       sessionStorage.setItem(storageKey(ownerId), result.state);
       window.location.assign(result.authorizationUrl);
     } catch (cause) {
-      setError(errorMessage(cause, "Unable to start the Google Health connection."));
+      setError({ message: errorMessage(cause, "Unable to start the Google Health connection.") });
       setBusy(false);
     }
   };
@@ -84,7 +90,16 @@ export const GoogleHealthSettings = ({ ownerId }: { ownerId: string }) => {
       <Heading as="h2" size="md">
         Google Health
       </Heading>
-      {error && <Notice role="alert">{error}</Notice>}
+      {error && (
+        <Stack align="start" gap="2">
+          <Notice role="alert">{error.message}</Notice>
+          {error.needsSetup && (
+            <Link href="https://fitbit.google.com/auth/signup" variant="underline">
+              Set up Google Health
+            </Link>
+          )}
+        </Stack>
+      )}
       {status.isError && (
         <Notice role="alert">Unable to load the Google Health connection status.</Notice>
       )}

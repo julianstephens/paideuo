@@ -113,6 +113,73 @@ const tools = [
       additionalProperties: false,
     },
   },
+  {
+    name: "list_workouts",
+    annotations: { readOnlyHint: true, openWorldHint: false },
+    description: "List scheduled workouts (both one-off and program-based) for a date range.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        start: { type: "string", format: "date" },
+        end: { type: "string", format: "date" },
+      },
+      required: ["start", "end"],
+      additionalProperties: false,
+    },
+  },
+  {
+    name: "get_workout",
+    annotations: { readOnlyHint: true, openWorldHint: false },
+    description: "Get details of a specific scheduled workout.",
+    inputSchema: {
+      type: "object",
+      properties: { id: { type: "string" } },
+      required: ["id"],
+      additionalProperties: false,
+    },
+  },
+  {
+    name: "create_one_off_workout",
+    annotations: { destructiveHint: true, openWorldHint: false },
+    description: "Create a one-off workout for a specific date.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        scheduledDate: { type: "string", format: "date" },
+        timezone: { type: "string", maxLength: 100 },
+        prescription: { type: "object" },
+        operationId: { type: "string", maxLength: 36 },
+      },
+      required: ["scheduledDate", "timezone", "prescription", "operationId"],
+      additionalProperties: false,
+    },
+  },
+  {
+    name: "edit_one_off_workout",
+    annotations: { destructiveHint: true, openWorldHint: false },
+    description: "Edit an existing one-off workout prescription or scheduled date.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        id: { type: "string" },
+        prescription: { type: "object" },
+        scheduledDate: { type: "string", format: "date" },
+      },
+      additionalProperties: false,
+      anyOf: [{ required: ["id", "prescription"] }, { required: ["id", "scheduledDate"] }],
+    },
+  },
+  {
+    name: "delete_one_off_workout",
+    annotations: { destructiveHint: true, openWorldHint: false },
+    description: "Delete a one-off workout.",
+    inputSchema: {
+      type: "object",
+      properties: { id: { type: "string" } },
+      required: ["id"],
+      additionalProperties: false,
+    },
+  },
 ];
 
 const rpcError = (status, message) => {
@@ -303,6 +370,171 @@ const makeDraftDocument = (args) => ({
   },
 });
 
+const presentWorkout = (row) => {
+  const snapshot = JSON.parse(row.getString("prescription_snapshot") || "{}");
+  return {
+    id: row.id,
+    scheduledDate: row.getString("scheduled_date"),
+    timezone: row.getString("timezone"),
+    status: row.getString("status"),
+    prescription: {
+      title: snapshot.title || "",
+      sessionType: snapshot.sessionType || "other",
+      description: snapshot.description || "",
+      notes: snapshot.notes || "",
+      plannedDurationMin: snapshot.plannedDurationMin,
+      plannedDurationMax: snapshot.plannedDurationMax,
+      plannedRpeMin: snapshot.plannedRpeMin,
+      plannedRpeMax: snapshot.plannedRpeMax,
+      plannedIntensity: snapshot.plannedIntensity,
+      kind: snapshot.kind,
+      rest: snapshot.rest || false,
+      components: snapshot.components || [],
+    },
+  };
+};
+
+const listWorkouts = (event, principal, args) => {
+  requireScope(principal, "workouts:read");
+  const dates = require(__hooks + "/calendar-dates.js");
+  const first = dates.parse(args.start);
+  const last = dates.parse(args.end);
+  if (!first || !last || last < first || last.getTime() - first.getTime() > 41 * 86400000) {
+    throw rpcError(400, "Provide a valid date range of up to 42 days.");
+  }
+  const { ownerFilter } = require(__hooks + "/calendar-sessions.js");
+  let workouts = [];
+  event.app.runInTransaction((tx) => {
+    const records = find(
+      tx,
+      "paideuo_scheduled_sessions",
+      ownerFilter() +
+        " && deleted = false && scheduled_date >= {:start} && scheduled_date <= {:end}",
+      { owner: principal.ownerId, start: args.start, end: args.end },
+      "scheduled_date,slot_position,schedule,id",
+    );
+    tx.expandRecords(records, ["schedule"], null);
+    workouts = records.map(presentWorkout);
+  });
+  return workouts;
+};
+
+const getWorkout = (event, principal, args) => {
+  requireScope(principal, "workouts:read");
+  if (!args.id) throw rpcError(-32602, "Provide a workout id.");
+  let workout = null;
+  event.app.runInTransaction((tx) => {
+    const record = find(
+      tx,
+      "paideuo_scheduled_sessions",
+      "id = {:id} && owner = {:owner} && deleted = false",
+      { id: args.id, owner: principal.ownerId },
+    )[0];
+    if (!record) throw rpcError(404, "Workout not found.");
+    workout = presentWorkout(record);
+  });
+  return workout;
+};
+
+const createOneOffWorkout = (event, principal, args) => {
+  requireScope(principal, "workouts:write");
+  if (!args.scheduledDate || !args.timezone || !args.prescription || !args.operationId) {
+    throw rpcError(-32602, "Provide scheduledDate, timezone, prescription, and operationId.");
+  }
+  const dates = require(__hooks + "/calendar-dates.js");
+  if (!dates.parse(args.scheduledDate)) {
+    throw rpcError(400, "Provide a valid scheduledDate.");
+  }
+  if (!dates.validTimezone(args.timezone)) {
+    throw rpcError(400, "Provide a valid timezone.");
+  }
+  if (!/^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/i.test(args.operationId)) {
+    throw rpcError(400, "Provide a valid operationId (UUID format).");
+  }
+  const parsePrescription = require(__hooks + "/workout-prescriptions.js");
+  const snapshot = parsePrescription(args.prescription);
+  const requestHash = $security.sha256(
+    JSON.stringify([args.scheduledDate, args.timezone, snapshot]),
+  );
+  let id;
+  event.app.runInTransaction((tx) => {
+    const collection = "paideuo_scheduled_sessions";
+    const existing = find(tx, collection, "owner = {:owner} && operation_id = {:operationId}", {
+      owner: principal.ownerId,
+      operationId: args.operationId,
+    })[0];
+    if (existing) {
+      if (existing.getString("request_hash") !== requestHash) {
+        throw rpcError(409, "This workout was already saved. Use a different operationId.");
+      }
+      id = existing.id;
+      return;
+    }
+    const row = new Record(tx.findCollectionByNameOrId(collection), {
+      owner: principal.ownerId,
+      timezone: args.timezone,
+      operation_id: args.operationId,
+      request_hash: requestHash,
+      scheduled_date: args.scheduledDate,
+      original_date: args.scheduledDate,
+      slot_position: 1,
+      prescription_snapshot: snapshot,
+      status: "planned",
+    });
+    tx.save(row);
+    id = row.id;
+  });
+  return { id };
+};
+
+const editOneOffWorkout = (event, principal, args) => {
+  requireScope(principal, "workouts:write");
+  if (!args.id) throw rpcError(-32602, "Provide an id.");
+  if (!args.prescription && !args.scheduledDate) {
+    throw rpcError(-32602, "Provide either prescription or scheduledDate to edit.");
+  }
+  const dates = require(__hooks + "/calendar-dates.js");
+  if (args.scheduledDate && !dates.parse(args.scheduledDate)) {
+    throw rpcError(400, "Provide a valid scheduledDate.");
+  }
+  let workout = null;
+  event.app.runInTransaction((tx) => {
+    const collection = "paideuo_scheduled_sessions";
+    const record = find(tx, collection, "id = {:id} && owner = {:owner} && deleted = false", {
+      id: args.id,
+      owner: principal.ownerId,
+    })[0];
+    if (!record) throw rpcError(404, "Workout not found.");
+    if (args.prescription) {
+      const parsePrescription = require(__hooks + "/workout-prescriptions.js");
+      const snapshot = parsePrescription(args.prescription);
+      record.set("prescription_snapshot", JSON.stringify(snapshot));
+    }
+    if (args.scheduledDate) {
+      record.set("scheduled_date", args.scheduledDate);
+    }
+    tx.save(record);
+    workout = presentWorkout(record);
+  });
+  return workout;
+};
+
+const deleteOneOffWorkout = (event, principal, args) => {
+  requireScope(principal, "workouts:write");
+  if (!args.id) throw rpcError(-32602, "Provide an id.");
+  event.app.runInTransaction((tx) => {
+    const collection = "paideuo_scheduled_sessions";
+    const record = find(tx, collection, "id = {:id} && owner = {:owner} && deleted = false", {
+      id: args.id,
+      owner: principal.ownerId,
+    })[0];
+    if (!record) throw rpcError(404, "Workout not found.");
+    record.set("deleted", true);
+    tx.save(record);
+  });
+  return { id: args.id, deleted: true };
+};
+
 const callTool = (event, principal, name, args = {}) => {
   if (name === "list_programs") return listPrograms(event, principal);
   if (name === "get_program") return getProgram(event, principal, args);
@@ -378,6 +610,11 @@ const callTool = (event, principal, name, args = {}) => {
     const result = require(__hooks + "/metrics.js").report(metricEvent);
     return result.status ? serviceResult(result) : result;
   }
+  if (name === "list_workouts") return listWorkouts(event, principal, args);
+  if (name === "get_workout") return getWorkout(event, principal, args);
+  if (name === "create_one_off_workout") return createOneOffWorkout(event, principal, args);
+  if (name === "edit_one_off_workout") return editOneOffWorkout(event, principal, args);
+  if (name === "delete_one_off_workout") return deleteOneOffWorkout(event, principal, args);
   throw rpcError(-32601, `Unknown tool: ${name}`);
 };
 
