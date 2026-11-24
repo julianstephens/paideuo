@@ -481,7 +481,7 @@ const createOneOffWorkout = (event, principal, args) => {
       scheduled_date: args.scheduledDate,
       original_date: args.scheduledDate,
       slot_position: 1,
-      prescription_snapshot: JSON.stringify(snapshot),
+      prescription_snapshot: snapshot,
       status: "planned",
     });
     tx.save(row);
