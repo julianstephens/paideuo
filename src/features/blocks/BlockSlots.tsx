@@ -85,7 +85,7 @@ export const BlockSlots = ({ ownerId, block, api, sync }: SlotEditorProps) => {
       <Heading as="h2" size="lg">
         Weekly session slots
       </Heading>
-      {editing !== "new" && (
+      {block.editable && editing !== "new" && (
         <Button
           alignSelf="start"
           variant="outline"
@@ -95,13 +95,13 @@ export const BlockSlots = ({ ownerId, block, api, sync }: SlotEditorProps) => {
           Add slot
         </Button>
       )}
-      {editing === "new" && renderForm()}
+      {block.editable && editing === "new" && renderForm()}
       {error && (
         <Notice role="alert">
           {errorMessage(error, "Unable to change the weekly slots. Try again.")}
         </Notice>
       )}
-      {removal && (
+      {block.editable && removal && (
         <Panel
           ref={removalPanel}
           role="group"
@@ -148,76 +148,78 @@ export const BlockSlots = ({ ownerId, block, api, sync }: SlotEditorProps) => {
                 {slot.baselineName && (
                   <Text fontSize="sm" color="fg.muted">
                     Baseline: {slot.baselineName}
+                    {block.editable && slot.templateId ? " · Linked to Library" : ""}
                   </Text>
                 )}
-                {editing === slot.id ? (
-                  renderForm(slot)
-                ) : baselineSlot === slot.id ? (
-                  <SlotBaselineForm
-                    ownerId={ownerId}
-                    slot={slot}
-                    api={api}
-                    sync={sync}
-                    close={() => setBaselineSlot(undefined)}
-                  />
-                ) : (
-                  <Flex wrap="wrap" gap="2">
-                    <Button
-                      size="sm"
-                      variant="outline"
-                      disabled={locked || editing !== undefined}
-                      aria-label={`Edit ${slot.label}`}
-                      onClick={() => openEditor(slot.id)}
-                    >
-                      Edit
-                    </Button>
-                    <Button
-                      size="sm"
-                      variant="outline"
-                      disabled={locked || editing !== undefined}
-                      aria-label={`Set baseline for ${slot.label}`}
-                      onClick={() => setBaselineSlot(slot.id)}
-                    >
-                      Set baseline
-                    </Button>
-                    <Disclosure label="Slot actions">
-                      <Flex gap="2" wrap="wrap">
-                        <Button
-                          size="sm"
-                          variant="outline"
-                          disabled={locked || editing !== undefined || position === 0}
-                          aria-label={`Move ${slot.label} earlier`}
-                          onClick={() => change.mutate({ kind: "move", id: slot.id, offset: -1 })}
-                        >
-                          Move earlier
-                        </Button>
-                        <Button
-                          size="sm"
-                          variant="outline"
-                          disabled={
-                            locked || editing !== undefined || position === slots.length - 1
-                          }
-                          aria-label={`Move ${slot.label} later`}
-                          onClick={() => change.mutate({ kind: "move", id: slot.id, offset: 1 })}
-                        >
-                          Move later
-                        </Button>
-                        <Button
-                          size="sm"
-                          variant="outline"
-                          disabled={locked || editing !== undefined}
-                          aria-label={`Remove ${slot.label}`}
-                          onClick={() => {
-                            change.reset();
-                            preview.mutate(slot);
-                          }}
-                        >
-                          Remove
-                        </Button>
-                      </Flex>
-                    </Disclosure>
-                  </Flex>
-                )}
+                {block.editable &&
+                  (editing === slot.id ? (
+                    renderForm(slot)
+                  ) : baselineSlot === slot.id ? (
+                    <SlotBaselineForm
+                      ownerId={ownerId}
+                      slot={slot}
+                      api={api}
+                      sync={sync}
+                      close={() => setBaselineSlot(undefined)}
+                    />
+                  ) : (
+                    <Flex wrap="wrap" gap="2">
+                      <Button
+                        size="sm"
+                        variant="outline"
+                        disabled={locked || editing !== undefined}
+                        aria-label={`Edit ${slot.label}`}
+                        onClick={() => openEditor(slot.id)}
+                      >
+                        Edit
+                      </Button>
+                      <Button
+                        size="sm"
+                        variant="outline"
+                        disabled={locked || editing !== undefined}
+                        aria-label={`Set baseline for ${slot.label}`}
+                        onClick={() => setBaselineSlot(slot.id)}
+                      >
+                        Set baseline
+                      </Button>
+                      <Disclosure label="Slot actions">
+                        <Flex gap="2" wrap="wrap">
+                          <Button
+                            size="sm"
+                            variant="outline"
+                            disabled={locked || editing !== undefined || position === 0}
+                            aria-label={`Move ${slot.label} earlier`}
+                            onClick={() => change.mutate({ kind: "move", id: slot.id, offset: -1 })}
+                          >
+                            Move earlier
+                          </Button>
+                          <Button
+                            size="sm"
+                            variant="outline"
+                            disabled={
+                              locked || editing !== undefined || position === slots.length - 1
+                            }
+                            aria-label={`Move ${slot.label} later`}
+                            onClick={() => change.mutate({ kind: "move", id: slot.id, offset: 1 })}
+                          >
+                            Move later
+                          </Button>
+                          <Button
+                            size="sm"
+                            variant="outline"
+                            disabled={locked || editing !== undefined}
+                            aria-label={`Remove ${slot.label}`}
+                            onClick={() => {
+                              change.reset();
+                              preview.mutate(slot);
+                            }}
+                          >
+                            Remove
+                          </Button>
+                        </Flex>
+                      </Disclosure>
+                    </Flex>
+                  ))}
               </Stack>
             ))}
           </Stack>

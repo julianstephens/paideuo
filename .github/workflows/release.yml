@@ -114,7 +114,7 @@ jobs:
         if: inputs.force_deploy_hooks != true
         uses: tj-actions/changed-files@9426d40962ed5378910ee2e21d5f8c6fcbf2dd96 # v47.0.6
         with:
-          tags_pattern: 'v*.*.*'
+          tags_pattern: "v*.*.*"
           files: backend/pb_hooks/**
 
       - name: Setup SSH key

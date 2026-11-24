@@ -358,11 +358,29 @@ OAuth client can revoke the grant at `POST /api/paideuo/v1/mcp-oauth/revoke`.
 
 The JSON-RPC 2.0 MCP endpoint is `POST /api/paideuo/v1/service/mcp` for service credentials and
 `POST /api/paideuo/v1/mcp` for authenticated human sessions. It supports `tools/list` and
-`tools/call`. Available tools are `list_programs`, `get_program`, `create_draft`,
-`preview_import`, `commit_import`, `record_workout`, `submit_check_ins`, and `fetch_metrics`.
+`tools/call`. Use `tools/list` to discover the tools and their argument schemas.
 
-Read tools require `programs:read` or `metrics:read`. Mutations require `imports:commit` plus the
-matching `programs:write`, `workouts:write`, `metrics:write`, or `recordings:write` scope.
+Direct program edits use `edit_program`, `edit_program_workout`, and
+`edit_session_template`. Use `get_program_workout` to get the cell revision and
+`get_session_template` to get the template's `updated` timestamp before editing.
+Direct tools share validation with the HTTP endpoints used by the program editor
+and Library. Service credentials need `programs:read` for reads and previews and
+`programs:write` for direct writes. Import mutations still require `imports:commit`
+and the matching domain write scope.
+
+Draft and active programs support edits. Completed and archived programs are
+read-only. Assigning a Library template as a slot baseline links the baseline
+and workouts subsequently initialized from it to the template. Use **Link and save
+workout** in the template picker or `link_program_workout_template` to link an
+individual workout. Direct edits to
+an individual workout make that workout an independent copy. Existing snapshots
+and templates inserted as copies keep their saved values.
+
+For scheduled programs, use **Review calendar changes** in the program UI or call
+`preview_program_calendar_changes` and `apply_program_calendar_changes`. Applying
+selected changes updates the eligible calendar workouts and preserves past,
+completed, and skipped workouts and manual calendar overrides.
+
 `get_program` returns the owned program with blocks, slots, slot baselines, weeks,
 prescriptions, and training components. Prescriptions reference their session slot by ID.
 `preview_import` returns planned changes without writing domain records.

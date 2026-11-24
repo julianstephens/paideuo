@@ -27,7 +27,13 @@ import { ProgramScheduling } from "../calendar/ProgramScheduling";
 import { ProgramCompliance } from "../compliance/ComplianceSummary";
 import { ProgramActions } from "./ProgramActions";
 import { ProgramForm } from "./ProgramForm";
-import { blockEditorPath, errorMessage, programKeys, programsApi } from "./programs";
+import {
+  blockEditorPath,
+  errorMessage,
+  isProgramEditable,
+  programKeys,
+  programsApi,
+} from "./programs";
 import type { BlockFields, Program, ProgramFields } from "./programs";
 
 export const ProgramPage = () => {
@@ -67,6 +73,7 @@ const ProgramDetail = ({ id, ownerId }: { id: string; ownerId: string }) => {
 };
 
 const ProgramEditor = ({ program, ownerId }: { program: Program; ownerId: string }) => {
+  const editable = isProgramEditable(program.status);
   const [editing, setEditing] = useState(false);
   const [adding, setAdding] = useState(false);
   const queryClient = useQueryClient();
@@ -114,19 +121,21 @@ const ProgramEditor = ({ program, ownerId }: { program: Program; ownerId: string
             {program.description}
           </Text>
         )}
-        <Button
-          alignSelf="start"
-          variant="outline"
-          aria-expanded={editing}
-          disabled={update.isPending}
-          onClick={() => {
-            update.reset();
-            setEditing((open) => !open);
-          }}
-        >
-          {editing ? "Cancel edit" : "Edit program"}
-        </Button>
-        {editing && (
+        {editable && (
+          <Button
+            alignSelf="start"
+            variant="outline"
+            aria-expanded={editing}
+            disabled={update.isPending}
+            onClick={() => {
+              update.reset();
+              setEditing((open) => !open);
+            }}
+          >
+            {editing ? "Cancel edit" : "Edit program"}
+          </Button>
+        )}
+        {editable && editing && (
           <Panel maxW="xl">
             <ProgramForm
               initial={program}
@@ -149,19 +158,21 @@ const ProgramEditor = ({ program, ownerId }: { program: Program; ownerId: string
       <Stack gap="3">
         <Flex justify="space-between" align="center" wrap="wrap" gap="3">
           <Heading as="h2">Blocks</Heading>
-          <Button
-            variant={adding ? "outline" : "solid"}
-            aria-expanded={adding}
-            disabled={add.isPending || reorder.isPending}
-            onClick={() => {
-              add.reset();
-              setAdding((open) => !open);
-            }}
-          >
-            {adding ? "Cancel block" : "Add block"}
-          </Button>
+          {editable && (
+            <Button
+              variant={adding ? "outline" : "solid"}
+              aria-expanded={adding}
+              disabled={add.isPending || reorder.isPending}
+              onClick={() => {
+                add.reset();
+                setAdding((open) => !open);
+              }}
+            >
+              {adding ? "Cancel block" : "Add block"}
+            </Button>
+          )}
         </Flex>
-        {adding && (
+        {editable && adding && (
           <Panel maxW="xl">
             <BlockForm
               ownerId={ownerId}
@@ -196,30 +207,32 @@ const ProgramEditor = ({ program, ownerId }: { program: Program; ownerId: string
                   {block.durationWeeks} {block.durationWeeks === 1 ? "week" : "weeks"}
                 </Text>
                 {block.objective && <Text>{block.objective}</Text>}
-                <Disclosure label="Block order">
-                  <Flex wrap="wrap" gap="2">
-                    <Button
-                      size="sm"
-                      variant="outline"
-                      aria-label={`Move ${block.name} up`}
-                      disabled={index === 0 || reorder.isPending || add.isPending}
-                      onClick={() => move(index, -1)}
-                    >
-                      Move up
-                    </Button>
-                    <Button
-                      size="sm"
-                      variant="outline"
-                      aria-label={`Move ${block.name} down`}
-                      disabled={
-                        index === program.blocks.length - 1 || reorder.isPending || add.isPending
-                      }
-                      onClick={() => move(index, 1)}
-                    >
-                      Move down
-                    </Button>
-                  </Flex>
-                </Disclosure>
+                {editable && (
+                  <Disclosure label="Block order">
+                    <Flex wrap="wrap" gap="2">
+                      <Button
+                        size="sm"
+                        variant="outline"
+                        aria-label={`Move ${block.name} up`}
+                        disabled={index === 0 || reorder.isPending || add.isPending}
+                        onClick={() => move(index, -1)}
+                      >
+                        Move up
+                      </Button>
+                      <Button
+                        size="sm"
+                        variant="outline"
+                        aria-label={`Move ${block.name} down`}
+                        disabled={
+                          index === program.blocks.length - 1 || reorder.isPending || add.isPending
+                        }
+                        onClick={() => move(index, 1)}
+                      >
+                        Move down
+                      </Button>
+                    </Flex>
+                  </Disclosure>
+                )}
               </Panel>
             ))}
           </Stack>

@@ -5,7 +5,7 @@ import { Link as RouterLink } from "react-router";
 import { FormField, Notice, Panel } from "../../components/ui";
 import { errorMessage } from "../../lib/api/request";
 import { metricsKey } from "../compliance/metrics";
-import { programKeys } from "../programs/programs";
+import { isProgramEditable, programKeys } from "../programs/programs";
 import type { Program } from "../programs/programs";
 import { fullDate, parseDate } from "./dates";
 import { ScheduleRevisionReview } from "./ScheduleRevisionReview";
@@ -16,6 +16,7 @@ export const ProgramScheduling = ({ program, ownerId }: { program: Program; owne
   const [open, setOpen] = useState(false);
   const [reviewOpen, setReviewOpen] = useState(false);
 
+  const editable = isProgramEditable(program.status);
   if (program.schedule) {
     return (
       <Stack align="start">
@@ -30,20 +31,22 @@ export const ProgramScheduling = ({ program, ownerId }: { program: Program; owne
             Programming changes are pending. Calendar sessions use the confirmed schedule.
           </Notice>
         )}
-        {reviewOpen ? (
-          <ScheduleRevisionReview
-            ownerId={ownerId}
-            programId={program.id}
-            close={() => setReviewOpen(false)}
-          />
-        ) : (
-          <Button variant="outline" onClick={() => setReviewOpen(true)}>
-            Review calendar changes
-          </Button>
-        )}
+        {editable &&
+          (reviewOpen ? (
+            <ScheduleRevisionReview
+              ownerId={ownerId}
+              programId={program.id}
+              close={() => setReviewOpen(false)}
+            />
+          ) : (
+            <Button variant="outline" onClick={() => setReviewOpen(true)}>
+              Review calendar changes
+            </Button>
+          ))}
       </Stack>
     );
   }
+  if (!editable) return null;
   return open ? (
     <ScheduleForm programId={program.id} ownerId={ownerId} close={() => setOpen(false)} />
   ) : (

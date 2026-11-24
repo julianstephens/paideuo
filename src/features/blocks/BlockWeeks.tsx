@@ -122,11 +122,13 @@ const CellButton = ({
   slot,
   session,
   open,
+  editable,
 }: {
   week: ProgramWeek;
   slot: Slot;
   session?: PrescriptionSummary;
   open: (week: ProgramWeek, slot: Slot) => void;
+  editable: boolean;
 }) => {
   const type = session?.sessionType ? workoutTypes[session.sessionType] : undefined;
   const intensity = session?.plannedIntensity;
@@ -151,7 +153,8 @@ const CellButton = ({
       whiteSpace="normal"
       textAlign="start"
       overflowWrap="anywhere"
-      aria-label={`${session ? `Edit ${session.title}` : `Add prescription for ${slot.label}`}, ${weekTitle(week)}${type ? `, ${type.label}` : ""}${duration ? `, ${duration}` : ""}${rpe ? `, ${rpe}` : ""}${intensity ? `, ${intensity} intensity` : ""}`}
+      disabled={!editable && !session}
+      aria-label={`${session ? `${editable ? "Edit" : "View"} ${session.title}` : `Add prescription for ${slot.label}`}, ${weekTitle(week)}${type ? `, ${type.label}` : ""}${duration ? `, ${duration}` : ""}${rpe ? `, ${rpe}` : ""}${intensity ? `, ${intensity} intensity` : ""}`}
       onClick={() => open(week, slot)}
     >
       {session ? (
@@ -188,7 +191,7 @@ const CellButton = ({
         </Stack>
       ) : (
         <Text as="span" color="fg.muted">
-          Add prescription
+          {editable ? "Add prescription" : "Empty"}
         </Text>
       )}
     </Button>
@@ -302,44 +305,47 @@ export const BlockWeeks = ({
             {compare ? "Back to week grid" : "Compare weeks"}
           </Button>
         )}
-        <Flex gap="1" align="center">
-          <Button
-            size="sm"
-            variant="outline"
-            loading={initialization.isPending}
-            disabled={!block.slots.some((slot) => slot.baselineName)}
-            onClick={() => initialization.mutate()}
-          >
-            Initialize weeks
-          </Button>
-          <Popover.Root positioning={{ placement: "bottom-end" }}>
-            <Popover.Trigger asChild>
-              <Button size="sm" variant="ghost" aria-label="Help for Initialize weeks">
-                ?
-              </Button>
-            </Popover.Trigger>
-            <Portal>
-              <Popover.Positioner>
-                <Popover.Content>
-                  <Popover.Body>
-                    <Popover.Title>Initialize weeks</Popover.Title>
-                    <Stack gap="2" mt="2" fontSize="sm">
-                      <Text>
-                        Fill empty session cells across all existing weeks with copies of each
-                        slot’s assigned baseline, including its session details and components.
-                        Existing prescriptions and the number of weeks stay the same.
-                      </Text>
-                      <Text>
-                        Slots without a baseline are skipped. Assign a baseline to at least one slot
-                        to enable the button.
-                      </Text>
-                    </Stack>
-                  </Popover.Body>
-                </Popover.Content>
-              </Popover.Positioner>
-            </Portal>
-          </Popover.Root>
-        </Flex>
+        {block.editable && (
+          <Flex gap="1" align="center">
+            <Button
+              size="sm"
+              variant="outline"
+              loading={initialization.isPending}
+              disabled={!block.slots.some((slot) => slot.baselineName)}
+              onClick={() => initialization.mutate()}
+            >
+              Initialize weeks
+            </Button>
+            <Popover.Root positioning={{ placement: "bottom-end" }}>
+              <Popover.Trigger asChild>
+                <Button size="sm" variant="ghost" aria-label="Help for Initialize weeks">
+                  ?
+                </Button>
+              </Popover.Trigger>
+              <Portal>
+                <Popover.Positioner>
+                  <Popover.Content>
+                    <Popover.Body>
+                      <Popover.Title>Initialize weeks</Popover.Title>
+                      <Stack gap="2" mt="2" fontSize="sm">
+                        <Text>
+                          Fill empty session cells across all existing weeks with copies of each
+                          slot’s assigned baseline, including its session details and components.
+                          Workouts filled from linked baselines follow Library edits until you edit
+                          the workout directly.
+                        </Text>
+                        <Text>
+                          Slots without a baseline are skipped. Assign a baseline to at least one
+                          slot to enable the button.
+                        </Text>
+                      </Stack>
+                    </Popover.Body>
+                  </Popover.Content>
+                </Popover.Positioner>
+              </Portal>
+            </Popover.Root>
+          </Flex>
+        )}
       </Flex>
       {initialization.isError && (
         <Notice role="alert">
@@ -438,18 +444,22 @@ export const BlockWeeks = ({
                     key={entry.id}
                     bg={entry.id === selected ? "teal.subtle" : undefined}
                   >
-                    <Button
-                      size="sm"
-                      variant="ghost"
-                      whiteSpace="normal"
-                      textAlign="start"
-                      h="auto"
-                      px="0"
-                      justifyContent="start"
-                      onClick={() => openWeek(entry)}
-                    >
-                      {weekTitle(entry)}
-                    </Button>
+                    {block.editable ? (
+                      <Button
+                        size="sm"
+                        variant="ghost"
+                        whiteSpace="normal"
+                        textAlign="start"
+                        h="auto"
+                        px="0"
+                        justifyContent="start"
+                        onClick={() => openWeek(entry)}
+                      >
+                        {weekTitle(entry)}
+                      </Button>
+                    ) : (
+                      <Text>{weekTitle(entry)}</Text>
+                    )}
                   </Table.ColumnHeader>
                 ))}
               </Table.Row>
@@ -500,6 +510,7 @@ export const BlockWeeks = ({
                         week={entry}
                         slot={slot}
                         session={sessions.get(`${entry.id}/${slot.id}`)}
+                        editable={block.editable}
                         open={openCell}
                       />
                     </Table.Cell>
@@ -512,9 +523,11 @@ export const BlockWeeks = ({
       )}
       {!compare && week && (
         <Stack display={{ base: "flex", md: "none" }} gap="4">
-          <Button alignSelf="start" variant="outline" size="sm" onClick={() => openWeek(week)}>
-            Edit {weekTitle(week)}
-          </Button>
+          {block.editable && (
+            <Button alignSelf="start" variant="outline" size="sm" onClick={() => openWeek(week)}>
+              Edit {weekTitle(week)}
+            </Button>
+          )}
           <WeekContext week={week} />
           <WeeklyWorkload workload={workloadFor(week)} max={maxWeekMinutes} />
           {weekdays.map((day, index) => {
@@ -535,6 +548,7 @@ export const BlockWeeks = ({
                         week={week}
                         slot={slot}
                         session={sessions.get(`${week.id}/${slot.id}`)}
+                        editable={block.editable}
                         open={openCell}
                       />
                     </Box>
@@ -544,13 +558,14 @@ export const BlockWeeks = ({
             );
           })}
           <Link href="#weekly-session-slots" alignSelf="start" minH="11" variant="underline">
-            Edit weekly slots
+            {block.editable ? "Edit weekly slots" : "View weekly slots"}
           </Link>
         </Stack>
       )}
-      {programming && (
+      {programming && (block.editable || programming.mode === "cell") && (
         <WeekProgramming
           selection={programming}
+          editable={block.editable}
           weeks={block.weeks}
           slots={block.slots}
           api={api}

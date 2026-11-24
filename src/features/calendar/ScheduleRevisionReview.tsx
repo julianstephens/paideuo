@@ -259,6 +259,14 @@ const RevisionDetails = ({ change }: { change: ScheduleChange }) => {
                     {session.prescription.title} · {session.prescription.sessionType} · Slot{" "}
                     {session.slotPosition}
                   </Text>
+                  {session.sourceAttribution && (
+                    <Text fontSize="sm" color="fg.muted">
+                      {session.sourceAttribution.blockName} · Week{" "}
+                      {session.sourceAttribution.weekPosition}
+                      {session.sourceAttribution.weekLabel &&
+                        ` · ${session.sourceAttribution.weekLabel}`}
+                    </Text>
+                  )}
                   <PrescriptionSnapshot prescription={session.prescription} />
                 </Stack>
               ),

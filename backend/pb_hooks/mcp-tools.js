@@ -1,8 +1,10 @@
 /* oxlint-disable import/no-commonjs */
 const credentials = require(__hooks + "/service-credentials.cjs");
 const imports = require(__hooks + "/imports.js");
+const programEdits = require(__hooks + "/mcp-program-edits.cjs");
 
 const tools = [
+  ...Array.from(programEdits.operations.values(), ({ tool }) => tool),
   {
     name: "list_programs",
     annotations: { readOnlyHint: true, openWorldHint: false },
@@ -23,7 +25,8 @@ const tools = [
   {
     name: "create_draft",
     annotations: { destructiveHint: false, openWorldHint: false },
-    description: "Create a new draft program. Use commit_import to modify an existing program.",
+    description:
+      "Create a new draft program. Use edit_program or edit_program_workout to make targeted edits.",
     inputSchema: {
       type: "object",
       properties: {
@@ -52,7 +55,7 @@ const tools = [
     name: "commit_import",
     annotations: { destructiveHint: true, openWorldHint: false },
     description:
-      "Commit an exact previewed import. Scheduled/completed plan changes require explicit approval.",
+      "Commit an exact previewed import. Scheduled program imports require explicit approval.",
     inputSchema: {
       type: "object",
       properties: {
@@ -536,6 +539,11 @@ const deleteOneOffWorkout = (event, principal, args) => {
 };
 
 const callTool = (event, principal, name, args = {}) => {
+  const operation = programEdits.operations.get(name);
+  if (operation) {
+    requireScope(principal, operation.readOnly ? "programs:read" : "programs:write");
+    return serviceResult(programEdits.run(event, principal, operation, args));
+  }
   if (name === "list_programs") return listPrograms(event, principal);
   if (name === "get_program") return getProgram(event, principal, args);
   if (name === "create_draft") {

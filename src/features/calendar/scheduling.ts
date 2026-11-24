@@ -7,7 +7,10 @@ export type ScheduleRequest = { startDate: string; timezone: string };
 export type ProgramSchedule = ScheduleRequest & { id: string; status: "active" | "completed" };
 export type SessionSnapshot = PrescriptionFields & { components: PrescriptionComponent[] };
 type DatedPrescription = { scheduledDate: string; prescription: SessionSnapshot };
-type RevisionSession = DatedPrescription & { slotPosition: number };
+type RevisionSession = DatedPrescription & {
+  slotPosition: number;
+  sourceAttribution?: { blockName: string; weekPosition: number; weekLabel: string } | null;
+};
 export type ScheduleChange = {
   id: string;
   kind: "add" | "update" | "remove" | "keep-moved";

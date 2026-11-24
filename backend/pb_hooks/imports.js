@@ -495,6 +495,17 @@ const programPlan = (db, owner, data) => {
         : "The selected workout is missing from this program.",
     });
   }
+  if (
+    programChoice.record &&
+    !require(__hooks + "/program-editability.js").isEditable(programChoice.record)
+  ) {
+    for (const item of items) {
+      if (item.type !== "session-template" && ["create", "update"].includes(item.status)) {
+        item.status = "conflict";
+        item.error = "Completed and archived programs are read-only.";
+      }
+    }
+  }
   const templates = planTemplates(db, owner, [...libraryTemplates.values()].filter(Boolean));
   return { items: items.concat(templates.items), state: state.concat(templates.state) };
 };
@@ -791,13 +802,12 @@ const protectedProgram = (db, document, plan) => {
     )
   )
     return null;
-  const completed = plan.state[0].current.status === "completed";
   const schedule = first(db, "paideuo_program_schedules", "program = {:program}", {
     program: program.id,
   });
-  return completed || schedule
+  return schedule
     ? {
-        completed,
+        completed: false,
         schedule: schedule
           ? {
               id: schedule.id,
@@ -940,8 +950,10 @@ const commitTemplates = (db, owner, plan) => {
       const fields = Object.fromEntries(
         Object.entries(desired).map(([field, value]) => [field.replace(/_json$/, ""), value]),
       );
-      if (id) update(db, db.findRecordById(templateCollection, id), fields);
-      else save(db, templateCollection, { owner, ...fields });
+      if (id) {
+        const template = update(db, db.findRecordById(templateCollection, id), fields);
+        require(__hooks + "/template-links.js")(db, template);
+      } else save(db, templateCollection, { owner, ...fields });
       return { key, label, status: id ? "updated" : "created" };
     });
 };
@@ -968,6 +980,7 @@ const commitProgram = (db, owner, document, plan) => {
         owner,
         externalId: data.program.externalId,
       });
+  if (program) require(__hooks + "/program-editability.js").requireEditable(program);
   const programFields = {
     owner,
     external_id: data.program.externalId,
@@ -1111,6 +1124,7 @@ const commitProgram = (db, owner, document, plan) => {
           program_week: weekRecord.id,
           slot: slotRecord.id,
           external_id: key,
+          source_template_id: "",
           ...sessionFields(item.workout),
         };
         const status = statusFor("prescription", key);

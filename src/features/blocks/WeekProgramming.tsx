@@ -28,6 +28,7 @@ import type {
   blocksApi,
 } from "../programs/programs";
 import { useSession } from "../auth/session";
+import { PrescriptionSnapshot } from "../calendar/PrescriptionSnapshot";
 import { PrescriptionComponents } from "../prescriptions/PrescriptionComponents";
 import { PrescriptionTemplatePicker } from "../prescriptions/PrescriptionTemplatePicker";
 import { componentDraft, componentPayload } from "../prescriptions/components";
@@ -41,6 +42,7 @@ export type ProgrammingSelection =
 
 type Props = {
   selection: ProgrammingSelection;
+  editable: boolean;
   weeks: ProgramWeek[];
   slots: Slot[];
   api: ReturnType<typeof blocksApi>;
@@ -216,7 +218,7 @@ const SessionDrawerContent = ({
 );
 
 const CellEditor = (props: CellProps) => {
-  const { api, cacheKey, week, slot, title, close } = props;
+  const { api, cacheKey, week, slot, title, close, editable } = props;
   const cell = useQuery({
     queryKey: [...cacheKey, "weeks", week.id, "cells", slot.id],
     queryFn: ({ signal }) => api.getCell(week.id, slot.id, signal),
@@ -238,6 +240,23 @@ const CellEditor = (props: CellProps) => {
         </Stack>
       </SessionDrawerContent>
     );
+  if (!editable) {
+    const prescription = cell.data.prescription;
+    return (
+      <SessionDrawerContent title={title} close={close}>
+        <Stack gap="3">
+          {prescription ? (
+            <>
+              <Text fontWeight="semibold">{prescription.title}</Text>
+              <PrescriptionSnapshot prescription={prescription} />
+            </>
+          ) : (
+            <Text>No prescription.</Text>
+          )}
+        </Stack>
+      </SessionDrawerContent>
+    );
+  }
   return <CellForm {...props} cell={cell.data} />;
 };
 
@@ -302,6 +321,14 @@ const CellForm = ({
       close();
     },
   });
+  const linkTemplate = useMutation({
+    mutationFn: (template: SessionTemplate) =>
+      api.linkCellTemplate(week.id, slot.id, template.id, cell.revision),
+    onSuccess: async () => {
+      await sync();
+      close();
+    },
+  });
   const libraryOrDelete = useMutation({
     mutationFn: (command: "template" | "delete") =>
       command === "template"
@@ -325,9 +352,10 @@ const CellForm = ({
     Object.entries(fields).some(
       ([key, value]) => cell.prescription?.[key as keyof PrescriptionFields] !== value,
     );
-  const pending = save.isPending || libraryOrDelete.isPending;
+  const pending = save.isPending || libraryOrDelete.isPending || linkTemplate.isPending;
   const setPanel = (mode?: typeof action) => {
     libraryOrDelete.reset();
+    linkTemplate.reset();
     setTemplateSaved(false);
     setAction(mode);
   };
@@ -507,8 +535,17 @@ const CellForm = ({
                 fields.sessionType !== "climbing"
               }
               insert={insert}
+              link={
+                cell.prescription ? (dirty ? undefined : linkTemplate.mutate) : linkTemplate.mutate
+              }
+              pending={linkTemplate.isPending}
               close={() => setPanel()}
             />
+          )}
+          {linkTemplate.isError && (
+            <Notice role="alert">
+              {errorMessage(linkTemplate.error, "Unable to link the template.")}
+            </Notice>
           )}
           {action === "template" && (
             <Panel role="group" aria-label="Save as template" bg="bg.inset">
@@ -570,6 +607,11 @@ const CellForm = ({
           {libraryOrDelete.isError && (
             <Notice role="alert">
               {errorMessage(libraryOrDelete.error, "Unable to apply the change.")}
+            </Notice>
+          )}
+          {cell.templateId && (
+            <Notice>
+              Saving an individual edit stops this workout from following its Library template.
             </Notice>
           )}
           {templateSaved && <Notice role="status">Template saved to Library.</Notice>}

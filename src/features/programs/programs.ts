@@ -6,6 +6,8 @@ export { errorMessage } from "../../lib/api/request";
 
 export const statuses = ["draft", "active", "completed", "archived"] as const;
 export type ProgramStatus = (typeof statuses)[number];
+export const isProgramEditable = (status: ProgramStatus) =>
+  status === "draft" || status === "active";
 export type ProgramFields = { name: string; description: string; objective: string };
 export type ProgramSummary = ProgramFields & {
   id: string;
@@ -18,7 +20,12 @@ export type BlockFields = { name: string; objective: string; durationWeeks: numb
 export type Block = BlockFields & { id: string; position: number };
 export type BlockSource = { id: string; name: string; programName: string };
 export type SlotFields = { label: string; weekday: number };
-export type Slot = SlotFields & { id: string; position: number; baselineName: string | null };
+export type Slot = SlotFields & {
+  id: string;
+  position: number;
+  baselineName: string | null;
+  templateId: string | null;
+};
 export const plannedIntensities = ["easy", "moderate", "hard", "maximal"] as const;
 export type PlannedIntensity = (typeof plannedIntensities)[number];
 export type WeekFields = { label: string; focus: string; weekType: "normal" | "recovery" };
@@ -49,6 +56,7 @@ export type PrescriptionSummary = Pick<
 };
 export type PrescriptionCell = {
   revision: string;
+  templateId?: string | null;
   prescription: (PrescriptionFields & { components: PrescriptionComponent[] }) | null;
 };
 export type DetailedPrescription = NonNullable<PrescriptionCell["prescription"]> &
@@ -60,6 +68,7 @@ export type CopyRequest = {
 };
 export type CopyPreview = { revision: string; copied: number; replaced: number; removed: number };
 export type BlockDetail = Block & {
+  editable: boolean;
   scheduled: boolean;
   weeks: ProgramWeek[];
   slots: Slot[];
@@ -132,6 +141,8 @@ export const blocksApi = (programId: string, blockId: string) => {
     ) => send(cellPath(weekId, slotId), "PATCH", { ...fields, revision }),
     deleteCell: (weekId: string, slotId: string, revision: string) =>
       send(cellPath(weekId, slotId), "DELETE", { revision }),
+    linkCellTemplate: (weekId: string, slotId: string, templateId: string, revision: string) =>
+      send(`${cellPath(weekId, slotId)}/template`, "PATCH", { templateId, revision }),
     saveCellAsTemplate: (weekId: string, slotId: string, name: string, revision: string) =>
       send<{ id: string }>(`${cellPath(weekId, slotId)}/template`, "POST", { name, revision }),
     copyPreview: (weekId: string, request: CopyRequest) =>

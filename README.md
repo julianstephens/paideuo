@@ -44,8 +44,11 @@ forwards `/api/` requests to that instance.
 
 The Docker image deploys the frontend and Nginx. For releases that change
 PocketBase hooks, also update the active hooks directory on the PocketBase host
-and restart PocketBase before rolling out the frontend. For example, **Delete
-program** requires the updated `programs.pb.js` hook on the backend.
+and restart PocketBase before rolling out the frontend. Apply migration
+[`1760000031_linked_session_templates.js`](backend/pb_migrations/1760000031_linked_session_templates.js)
+before deploying the linked-template hooks. Instances managed through the
+collections export can import the updated schema with deletion of missing
+collections and fields disabled.
 
 ### Timezone data for PocketBase
 

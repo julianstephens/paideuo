@@ -5,6 +5,7 @@ import { Link as RouterLink } from "react-router";
 import { FormField, Notice, PageHeader, Panel } from "../../components/ui";
 import { errorMessage } from "../../lib/api/request";
 import { useSession } from "../auth/session";
+import { programKeys } from "../programs/programs";
 import { TemplateForm } from "./TemplateForm";
 import { templateKey, templatesApi } from "./templates";
 import type { SessionTemplate, TemplateFields } from "./templates";
@@ -48,7 +49,10 @@ const Library = ({ ownerId }: { ownerId: string }) => {
       }
     },
     onSuccess: async (_result, command) => {
-      await queryClient.invalidateQueries({ queryKey });
+      await Promise.all([
+        queryClient.invalidateQueries({ queryKey }),
+        queryClient.invalidateQueries({ queryKey: programKeys.owner(ownerId) }),
+      ]);
       if (command.action === "save") setEditor(undefined);
       if (command.action === "remove") setRemoving(undefined);
     },

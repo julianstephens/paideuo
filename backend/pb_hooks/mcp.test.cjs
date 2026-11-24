@@ -70,6 +70,7 @@ source.paths = Module._nodeModulePaths(__dirname);
 source.require = (id) => {
   if (id === path.join(__hooks, "service-credentials.cjs")) return credentials;
   if (id === path.join(__hooks, "imports.js")) return imports;
+  if (id === path.join(__hooks, "mcp-program-edits.cjs")) return require(id);
   if (id === path.join(__hooks, "calendar-dates.js")) {
     return {
       parse: (dateStr) => {
@@ -131,9 +132,10 @@ const event = (body) => {
   };
 };
 
-test("MCP exposes the constrained ingestion tool set", () => {
+test("MCP advertises ingestion and direct program editing tools", () => {
   const names = tools.map((tool) => tool.name);
-  assert.deepEqual(names, [
+  assert.equal(new Set(names).size, names.length);
+  for (const name of [
     "list_programs",
     "get_program",
     "create_draft",
@@ -147,7 +149,14 @@ test("MCP exposes the constrained ingestion tool set", () => {
     "create_one_off_workout",
     "edit_one_off_workout",
     "delete_one_off_workout",
-  ]);
+    "edit_program",
+    "get_program_workout",
+    "edit_program_workout",
+    "edit_session_template",
+    "preview_program_calendar_changes",
+    "apply_program_calendar_changes",
+  ])
+    assert.ok(names.includes(name), name);
 });
 
 test("read-only service cannot create or commit", () => {
@@ -173,7 +182,7 @@ test("read-only service cannot create or commit", () => {
 test("tools/list and tools/call are JSON-RPC responses", () => {
   const list = handle(event({ jsonrpc: "2.0", id: 1, method: "tools/list" }));
   assert.equal(list.status, 200);
-  assert.equal(list.value.result.tools.length, 13);
+  assert.deepEqual(list.value.result.tools, tools);
 });
 
 test("one-off workout CRUD behavior", () => {

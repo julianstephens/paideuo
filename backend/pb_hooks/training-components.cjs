@@ -9,6 +9,7 @@ const sameTrainingComponent = (record, values) =>
   record.getInt("duration_max") === (values.duration_max ?? 0) &&
   record.getBool("duration_max_specified") === (values.duration_max_specified ?? false) &&
   record.getBool("duration_specified") === values.duration_specified &&
+  record.getBool("optional") === (values.optional ?? false) &&
   record.getString("classification") === (values.classification ?? "") &&
   JSON.stringify(JSON.parse(record.getString("targets") || "null")) ===
     JSON.stringify(values.targets);

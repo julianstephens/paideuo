@@ -407,6 +407,181 @@ test("Library imports reconcile templates and snapshot program baselines", async
   });
 });
 
+test("direct REST and MCP program edits share template propagation and calendar protection", async () => {
+  await withPocketBase(async ({ admin, baseUrl }) => {
+    const { client } = await createAuthedUser(admin, baseUrl, "direct-edits");
+    const { client: other } = await createAuthedUser(admin, baseUrl, "direct-edits-other");
+    const send = (path, method = "GET", body) =>
+      client.send("/api/paideuo/" + path, { method, body });
+    const issue = async (scopes) =>
+      (await send("v1/service-credentials/issue", "POST", { label: "direct edits", scopes }))
+        .plaintextToken;
+    const reader = await issue(["programs:read"]);
+    const writer = await issue(["programs:read", "programs:write"]);
+    const call = async (name, args, token = writer) =>
+      (
+        await serviceImportRequest(baseUrl, "/api/paideuo/v1/service/mcp", token, {
+          jsonrpc: "2.0",
+          id: 1,
+          method: "tools/call",
+          params: { name, arguments: args },
+        })
+      ).result;
+    const mcp = async (name, args) => {
+      const result = await call(name, args);
+      assert.equal(result.isError, false, JSON.stringify(result));
+      return result.structuredContent;
+    };
+
+    const { id: programId } = await send("programs", "POST", {
+      name: "GPP",
+      description: "Original",
+      objective: "Build capacity",
+    });
+    const root = "programs/" + programId;
+    assert.equal(
+      (await call("edit_program", { programId, name: "Blocked" }, reader)).structuredContent.status,
+      403,
+    );
+    await mcp("edit_program", { programId, name: "Updated GPP" });
+    const program = await send(root);
+    assert.equal(program.name, "Updated GPP");
+    assert.equal(program.description, "Original");
+    assert.equal(program.objective, "Build capacity");
+    await assert.rejects(
+      other.send("/api/paideuo/" + root, { method: "PATCH", body: { name: "Blocked" } }),
+      { status: 404 },
+    );
+
+    const { id: blockId } = await mcp("add_program_block", {
+      programId,
+      name: "Base",
+      durationWeeks: 2,
+    });
+    const blockRoot = root + "/blocks/" + blockId;
+    const { id: slotId } = await send(blockRoot + "/slots", "POST", {
+      weekday: 1,
+      label: "Aerobic",
+    });
+    const { id: templateId } = await send("templates", "POST", {
+      name: "Easy run",
+      sessionType: "conditioning",
+      plannedDurationMin: 35,
+      components: [{ key: "warmup", name: "Warm-up" }],
+    });
+    await mcp("set_program_slot_template", { programId, blockId, slotId, templateId });
+    assert.equal((await mcp("initialize_program_weeks", { programId, blockId })).created, 2);
+    const block = await send(blockRoot);
+    const ids = (index) => ({ programId, blockId, weekId: block.weeks[index].id, slotId });
+    const cellPath = (index) => blockRoot + "/weeks/" + ids(index).weekId + "/cells/" + slotId;
+    const original = await mcp("get_program_workout", ids(0));
+    assert.equal(original.templateId, templateId);
+    const template = await send("templates/" + templateId);
+    await mcp("edit_session_template", {
+      templateId,
+      updated: template.updated,
+      name: "Long easy run",
+      plannedDurationMin: 45,
+      components: [{ key: "warmup", name: "Warm-up", optional: true }],
+    });
+    assert.equal((await send(blockRoot)).slots[0].baselineName, "Long easy run");
+    const revised = await send(cellPath(0));
+    assert.equal(revised.prescription.plannedDurationMin, 45);
+    assert.equal(revised.prescription.components[0].optional, true);
+    assert.equal(
+      (
+        await call("edit_program_workout", {
+          ...ids(0),
+          revision: original.revision,
+          notes: "Stale",
+        })
+      ).structuredContent.status,
+      400,
+    );
+
+    const fields = { startDate: "2099-01-05", timezone: "UTC" };
+    const { revision } = await send(root + "/schedule/preview", "POST", fields);
+    const schedule = await send(root + "/schedule", "POST", { ...fields, revision });
+    const sessions = admin.collection("paideuo_scheduled_sessions");
+    const filter = admin.filter("schedule = {:schedule}", { schedule: schedule.id });
+    const [protectedSession, futureSession] = await sessions.getFullList({
+      filter,
+      sort: "scheduled_date",
+    });
+    await sessions.update(protectedSession.id, { status: "skipped" });
+
+    await mcp("edit_program_workout", {
+      ...ids(0),
+      revision: revised.revision,
+      notes: "Individual edit",
+    });
+    let currentTemplate = await mcp("get_session_template", { templateId });
+    await send("templates/" + templateId, "PATCH", {
+      updated: currentTemplate.updated,
+      plannedDurationMin: 50,
+    });
+    assert.equal((await send(cellPath(0))).prescription.plannedDurationMin, 45);
+    assert.equal((await mcp("get_program_workout", ids(1))).prescription.plannedDurationMin, 50);
+    const detached = await send(cellPath(0));
+    assert.equal(detached.templateId, null);
+    await mcp("link_program_workout_template", {
+      ...ids(0),
+      templateId,
+      revision: detached.revision,
+    });
+    assert.equal((await send(cellPath(0))).prescription.plannedDurationMin, 50);
+    currentTemplate = await mcp("get_session_template", { templateId });
+    await mcp("edit_session_template", {
+      templateId,
+      updated: currentTemplate.updated,
+      description: "Stay conversational",
+    });
+    const linked = await send(cellPath(0));
+    assert.equal(linked.prescription.description, "Stay conversational");
+    assert.equal(linked.prescription.notes, "Individual edit");
+
+    await mcp("edit_program_block", { programId, blockId, name: "Updated Base" });
+    const review = await mcp("preview_program_calendar_changes", { programId });
+    const eligible = review.changes.filter((item) => !item.blockedReason);
+    assert.equal(eligible.length, 1);
+    assert.equal(review.changes.filter((item) => item.blockedReason).length, 1);
+    await mcp("apply_program_calendar_changes", {
+      programId,
+      revision: review.revision,
+      changeIds: eligible.map(({ id }) => id),
+      operationId: "0630ca33-6454-4caf-a0dd-90881ef4a402",
+    });
+    const updatedFuture = await sessions.getOne(futureSession.id);
+    assert.equal(updatedFuture.prescription_snapshot.plannedDurationMin, 50);
+    assert.equal(updatedFuture.source_attribution.blockName, "Updated Base");
+    const historical = await sessions.getOne(protectedSession.id);
+    assert.equal(historical.prescription_snapshot.notes, "");
+    assert.equal(historical.source_attribution.blockName, "Base");
+
+    await send(root + "/complete", "POST");
+    assert.equal((await send(blockRoot)).editable, false);
+    assert.equal(
+      (await call("edit_program", { programId, name: "Blocked" })).structuredContent.status,
+      400,
+    );
+    await send(root + "/archive", "POST");
+    const frozen = await send(cellPath(1));
+    await assert.rejects(
+      send(cellPath(1), "PATCH", { revision: frozen.revision, title: "Blocked" }),
+      { status: 400 },
+    );
+    currentTemplate = await mcp("get_session_template", { templateId });
+    await mcp("edit_session_template", {
+      templateId,
+      updated: currentTemplate.updated,
+      name: "Renamed in Library",
+      plannedDurationMin: 55,
+    });
+    assert.equal((await send(blockRoot)).slots[0].baselineName, "Long easy run");
+    assert.equal((await send(cellPath(1))).prescription.plannedDurationMin, 50);
+  });
+});
+
 test("PocketBase-backed hierarchy imports are transactional and schedule-safe", async () => {
   const fixtureSample = JSON.parse(fs.readFileSync(sampleProgramPath, "utf8"));
   assert.equal(fixtureSample.kind, "program");
@@ -1346,7 +1521,8 @@ test("PocketBase-backed hierarchy imports are transactional and schedule-safe", 
     const completedPreview = (
       await callMcp(writer, "preview_import", { document: completedChange })
     ).structuredContent;
-    assert.equal(completedPreview.approvalRequired, true, JSON.stringify(completedPreview));
+    assert.equal(completedPreview.approvalRequired, false);
+    assert.match(completedPreview.items[0].error, /read-only/);
     expectMcpError(
       await callMcp(writer, "commit_import", {
         document: completedChange,

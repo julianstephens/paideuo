@@ -9,11 +9,15 @@ export const PrescriptionTemplatePicker = ({
   ownerId,
   populated,
   insert,
+  link,
+  pending = false,
   close,
 }: {
   ownerId: string;
   populated: boolean;
   insert: (template: SessionTemplate) => void;
+  link?: (template: SessionTemplate) => void;
+  pending?: boolean;
   close: () => void;
 }) => {
   const inputId = useId();
@@ -28,7 +32,7 @@ export const PrescriptionTemplatePicker = ({
   return (
     <Panel role="group" aria-label="Insert template" bg="bg.inset">
       <FormField htmlFor={inputId}>Library template</FormField>
-      <NativeSelect.Root>
+      <NativeSelect.Root disabled={pending}>
         <NativeSelect.Field
           id={inputId}
           value={selectedId}
@@ -83,6 +87,12 @@ export const PrescriptionTemplatePicker = ({
           ) : (
             <Text>No components</Text>
           )}
+          {link && (
+            <Text fontSize="sm">
+              A linked workout follows Library template edits. Linking replaces the workout details
+              and keeps its saved notes.
+            </Text>
+          )}
           {populated && (
             <Notice>
               This replaces the session details and components in your draft. Session notes are
@@ -94,14 +104,25 @@ export const PrescriptionTemplatePicker = ({
       <Flex gap="2" wrap="wrap">
         <Button
           type="button"
-          disabled={!selected}
+          disabled={!selected || pending}
           onClick={() => {
             if (selected) insert(selected);
           }}
         >
           {populated ? "Replace draft with template" : "Load template into draft"}
         </Button>
-        <Button type="button" variant="outline" onClick={close}>
+        {link && (
+          <Button
+            type="button"
+            variant="outline"
+            loading={pending}
+            disabled={!selected}
+            onClick={() => selected && link(selected)}
+          >
+            Link and save workout
+          </Button>
+        )}
+        <Button type="button" variant="outline" disabled={pending} onClick={close}>
           Cancel insertion
         </Button>
       </Flex>

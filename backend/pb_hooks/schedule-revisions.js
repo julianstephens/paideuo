@@ -47,6 +47,7 @@ const compare = (rows, desired, today) => {
       scheduledDate: row.getString("scheduled_date"),
       slotPosition: row.getInt("slot_position"),
       prescription: snapshot(row),
+      sourceAttribution: JSON.parse(row.getString("source_attribution") || "null"),
     };
     const programDate = after.scheduledDate;
     const manuallyMoved = row.getBool("manually_moved");
@@ -59,6 +60,7 @@ const compare = (rows, desired, today) => {
       programDate === row.getString("program_date") &&
       before.slotPosition === effective.slotPosition &&
       serialize(before.prescription) === serialize(effective.prescription) &&
+      serialize(before.sourceAttribution) === serialize(effective.sourceAttribution) &&
       !row.getBool("source_removal_acknowledged")
     )
       continue;

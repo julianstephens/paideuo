@@ -1870,11 +1870,27 @@
         "required": false,
         "system": false,
         "type": "text"
+      },
+      {
+        "autogeneratePattern": "",
+        "help": "",
+        "hidden": false,
+        "id": "text2618512402",
+        "max": 15,
+        "min": 0,
+        "name": "source_template_id",
+        "pattern": "",
+        "presentable": false,
+        "primaryKey": false,
+        "required": false,
+        "system": false,
+        "type": "text"
       }
     ],
     "indexes": [
       "CREATE UNIQUE INDEX paideuo_idx_prescriptions_week_slot ON paideuo_session_prescriptions (program_week, slot)",
-      "CREATE UNIQUE INDEX idx_paideuo_prescription_import_identity ON paideuo_session_prescriptions (program_week, external_id) WHERE external_id != ''"
+      "CREATE UNIQUE INDEX idx_paideuo_prescription_import_identity ON paideuo_session_prescriptions (program_week, external_id) WHERE external_id != ''",
+      "CREATE INDEX idx_prescriptions_source_template ON paideuo_session_prescriptions (source_template_id)"
     ],
     "system": false
   },

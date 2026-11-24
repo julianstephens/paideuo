@@ -1,3 +1,7 @@
+## v0.6.4
+
+- Fix ensure MCP parity for program modification
+
 ## v0.6.3
 
 - Update MCP documentation

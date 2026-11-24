@@ -19,6 +19,7 @@ import {
   blockEditorPath,
   blocksApi,
   errorMessage,
+  isProgramEditable,
   programKeys,
   programsApi,
 } from "../programs/programs";
@@ -78,6 +79,7 @@ const BlockEditor = ({
       {block.data && (
         <>
           <PageHeader title={block.data.name} />
+          {!block.data.editable && <Notice>This program is read-only.</Notice>}
           <Grid
             gap="5"
             alignItems="start"
@@ -121,22 +123,26 @@ const BlockSettings = (props: BlockContext & { ownerId: string }) => {
   return (
     <Stack gap="3">
       <Flex gap="2" wrap="wrap">
-        <Button
-          variant="outline"
-          aria-expanded={form === "details"}
-          disabled={form !== undefined}
-          onClick={() => setForm("details")}
-        >
-          Edit block
-        </Button>
-        <Button
-          variant="outline"
-          aria-expanded={form === "duration"}
-          disabled={form !== undefined}
-          onClick={() => setForm("duration")}
-        >
-          Change duration
-        </Button>
+        {props.block.editable && (
+          <Button
+            variant="outline"
+            aria-expanded={form === "details"}
+            disabled={form !== undefined}
+            onClick={() => setForm("details")}
+          >
+            Edit block
+          </Button>
+        )}
+        {props.block.editable && (
+          <Button
+            variant="outline"
+            aria-expanded={form === "duration"}
+            disabled={form !== undefined}
+            onClick={() => setForm("duration")}
+          >
+            Change duration
+          </Button>
+        )}
         <Button
           variant="outline"
           aria-expanded={form === "duplicate"}
@@ -146,8 +152,8 @@ const BlockSettings = (props: BlockContext & { ownerId: string }) => {
           Duplicate block
         </Button>
       </Flex>
-      {form === "details" && <DetailsForm {...props} close={close} />}
-      {form === "duration" && <DurationForm {...props} close={close} />}
+      {props.block.editable && form === "details" && <DetailsForm {...props} close={close} />}
+      {props.block.editable && form === "duration" && <DurationForm {...props} close={close} />}
       {form === "duplicate" && <DuplicateForm {...props} close={close} />}
     </Stack>
   );
@@ -311,7 +317,7 @@ const DuplicateForm = ({ api, sync, close, ownerId }: FormProps & { ownerId: str
     queryFn: ({ signal }) => programsApi.list(signal),
     retry: false,
   });
-  const drafts = programs.data?.filter(({ status }) => status === "draft");
+  const destinations = programs.data?.filter(({ status }) => isProgramEditable(status));
   const duplicate = useMutation({
     mutationFn: api.duplicate,
     onSuccess: async ({ programId, id }) => {
@@ -335,8 +341,8 @@ const DuplicateForm = ({ api, sync, close, ownerId }: FormProps & { ownerId: str
               value={destination}
               onChange={(event) => setDestination(event.target.value)}
             >
-              <option value="">Choose a draft program</option>
-              {drafts?.map((program) => (
+              <option value="">Choose a program</option>
+              {destinations?.map((program) => (
                 <option key={program.id} value={program.id}>
                   {program.name}
                 </option>
@@ -345,11 +351,11 @@ const DuplicateForm = ({ api, sync, close, ownerId }: FormProps & { ownerId: str
             <NativeSelect.Indicator />
           </NativeSelect.Root>
         </FormField>
-        {programs.isPending && <Notice role="status">Loading draft programs…</Notice>}
-        {drafts?.length === 0 && <Text>No draft programs available.</Text>}
+        {programs.isPending && <Notice role="status">Loading programs…</Notice>}
+        {destinations?.length === 0 && <Text>No editable programs available.</Text>}
         {programs.isError && (
           <Flex align="center" gap="2">
-            <Notice role="alert">Unable to load draft programs.</Notice>
+            <Notice role="alert">Unable to load programs.</Notice>
             <Button size="sm" onClick={() => void programs.refetch()}>
               Retry
             </Button>
