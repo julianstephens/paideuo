@@ -370,8 +370,6 @@ const makeDraftDocument = (args) => ({
   },
 });
 
-const workoutData = (row, field) =>
-  row.getBool("duration_specified") || row.getInt(field) > 0 ? row.getInt(field) : null;
 
 const presentWorkout = (row) => {
   const snapshot = JSON.parse(row.getString("prescription_snapshot") || "{}");
