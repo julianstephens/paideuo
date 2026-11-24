@@ -1,3 +1,7 @@
+## v0.6.2
+
+- Fix issue with release workflow detecting changes
+
 ## v0.6.1
 
 - Fix bug where one-off workouts were not available through MCP
