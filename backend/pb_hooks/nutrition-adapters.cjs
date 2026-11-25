@@ -20,4 +20,11 @@ const bind = (describe, key) =>
 const restOperations = bind(restContract, "path");
 const mcpOperations = bind(mcpContract, "name");
 
-module.exports = { restOperations, mcpOperations };
+const foodRestOperations = new Map(
+  [...restOperations].filter(([path]) => path.startsWith("/api/paideuo/v1/nutrition/foods/")),
+);
+const foodMcpOperations = new Map(
+  [...mcpOperations].filter(([name]) => name.startsWith("nutrition_foods_")),
+);
+
+module.exports = { restOperations, mcpOperations, foodRestOperations, foodMcpOperations };

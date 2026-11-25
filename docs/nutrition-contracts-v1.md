@@ -1,23 +1,31 @@
 # Nutrition contracts v1
 
-The contracts and shared PocketBase services are implemented in NUT-01. The feature issues will register the operations with the production HTTP and MCP dispatchers. The contract catalog in `backend/pb_hooks/nutrition-contracts.cjs` defines each operation's request and response JSON Schema. Both adapters in `backend/pb_hooks/nutrition-adapters.cjs` call the same service.
+The contracts and shared PocketBase services are implemented in NUT-01. The food-bank operations are live through HTTP and MCP. The remaining operations are shared contracts for follow-up features. The contract catalog in `backend/pb_hooks/nutrition-contracts.cjs` defines each operation's request and response JSON Schema. Both adapters in `backend/pb_hooks/nutrition-adapters.cjs` call the same service.
 
 ## Operations
 
-| Resource              | Operations                                 |
-| --------------------- | ------------------------------------------ |
-| `foods`               | get, list, create, update                  |
-| `recipes`             | get, list, create, update, delete          |
-| `plans`               | get, list, create, update                  |
-| `targets`             | get, list, create, update, delete, resolve |
-| `planned`, `consumed` | get, list, create, update, delete          |
-| `days`                | summary                                    |
+| Resource              | Operations                                        |
+| --------------------- | ------------------------------------------------- |
+| `foods`               | get, list, create, update, duplicate, set_archive |
+| `recipes`             | get, list, create, update, delete                 |
+| `plans`               | get, list, create, update                         |
+| `targets`             | get, list, create, update, delete, resolve        |
+| `planned`, `consumed` | get, list, create, update, delete                 |
+| `days`                | summary                                           |
 
 For example, `planned.create` maps to `POST /api/paideuo/v1/nutrition/planned/create` and the MCP tool `nutrition_planned_create`. HTTP accepts the operation input as a JSON body and returns the output directly. MCP accepts the same fields as tool arguments and returns the output as structured content. HTTP reads also use a JSON body so filters and cursors share the same schema with MCP. Lists use an opaque `next` ID as the next request's `after` cursor. Page sizes default to 50 and allow up to 100. Entity responses contain `id`, `externalId`, and `data`.
 
 Creates require an `externalId` unique per owner and collection. Every write requires an `operationId` unique across the owner's nutrition operations. Identical requests replay the original response, even after a later edit or deletion. A reused operation ID with different input, an existing external ID for a new operation, or an occupied singleton or override slot produces a conflict. Recipe and target deletion frees their singleton or selector slot. Food entries retain their external IDs after soft deletion.
 
 The shared service reports invalid input as 400, missing authentication as 401, missing scope as 403, unavailable records as 404, and conflicts as 409. Map these statuses into MCP tool errors using the existing MCP convention. The owner comes from the authenticated principal. Human requests use the verified Paideuo user. Service credentials and OAuth principals require an explicit `nutrition:read` or `nutrition:write` grant for the corresponding operation. The collections are locked to the shared service at the record API level. Lookups, parent checks, and writes all use the principal's owner ID.
+
+## Food bank
+
+Use `POST /api/paideuo/v1/nutrition/foods/{operation}` with a Paideuo session or `POST /api/paideuo/v1/service/nutrition/foods/{operation}` with a service bearer token. The matching MCP tools are `nutrition_foods_{operation}`.
+
+List filters apply before pagination. `search` matches title or description, `category` matches the exact trimmed category, and `status` accepts `active`, `archived`, or `all`. The explicit status takes precedence over `includeArchived`. Get accepts archived food IDs. For duplication, send the source `id`, new `externalId`, `title`, and `operationId`. It creates an active independent item and leaves recipe attachments with the source. Send `id`, `operationId`, and `archived` to `set_archive` to archive or restore.
+
+With ChatGPT OAuth, request `paideuo:mcp` plus `nutrition:read` for list and get or `nutrition:write` for mutations. Request both for the full workflow. Existing connections need new consent to gain either nutrition scope. Refresh can drop nutrition scopes and retains only the resulting grant.
 
 ## Dates, activation, and targets
 

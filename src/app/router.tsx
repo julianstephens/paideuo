@@ -10,6 +10,7 @@ import { CalendarPage } from "../features/calendar/CalendarPage";
 import { MetricsPage } from "../features/compliance/MetricsPage";
 import { WeeklyReviewPage } from "../features/reviews/WeeklyReviewPage";
 import { ProgramsPage } from "../features/programs/ProgramsPage";
+import { FoodBankPage } from "../features/nutrition/FoodBankPage";
 import { LibraryPage } from "../features/templates/LibraryPage";
 import { PageHeader, Panel } from "../components/ui";
 import { AppLayout } from "./AppLayout";
@@ -37,6 +38,7 @@ export const router = createBrowserRouter([
               { path: "programs/:programId/weekly-reviews/:weekId", Component: WeeklyReviewPage },
               { path: "programs/:programId/blocks/:blockId", Component: BlockPage },
               { path: "library", Component: LibraryPage },
+              { path: "nutrition", Component: FoodBankPage },
               { path: "imports", Component: ImportsPage },
               { path: "settings", Component: SettingsPage },
               {

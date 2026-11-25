@@ -3,7 +3,11 @@ const credentials = require(__hooks + "/service-credentials.cjs");
 const imports = require(__hooks + "/imports.js");
 const programEdits = require(__hooks + "/mcp-program-edits.cjs");
 
+const { foodMcpOperations } = require(__hooks + "/nutrition-adapters.cjs");
+const foodToolScopes = require(__hooks + "/nutrition-contracts.cjs").foodToolScopes;
+
 const tools = [
+  ...Array.from(foodMcpOperations.values(), ({ contract }) => contract),
   ...Array.from(programEdits.operations.values(), ({ tool }) => tool),
   {
     name: "list_programs",
@@ -538,7 +542,9 @@ const deleteOneOffWorkout = (event, principal, args) => {
   return { id: args.id, deleted: true };
 };
 
-const callTool = (event, principal, name, args = {}) => {
+const callTool = (event, principal, name, args = {}, oauthPrincipal) => {
+  const food = foodMcpOperations.get(name);
+  if (food) return food.invoke(event.app, oauthPrincipal ?? principal, args);
   const operation = programEdits.operations.get(name);
   if (operation) {
     requireScope(principal, operation.readOnly ? "programs:read" : "programs:write");
@@ -626,7 +632,7 @@ const callTool = (event, principal, name, args = {}) => {
   throw rpcError(-32601, `Unknown tool: ${name}`);
 };
 
-const jsonRpc = (event, principal, request, oauthScope) => {
+const jsonRpc = (event, principal, request, oauthScope, oauthPrincipal) => {
   if (!request || request.jsonrpc !== "2.0") {
     throw rpcError(-32600, "Invalid JSON-RPC request.");
   }
@@ -648,7 +654,16 @@ const jsonRpc = (event, principal, request, oauthScope) => {
     return {
       tools: tools.map((tool) => ({
         ...tool,
-        _meta: { securitySchemes: [{ type: "oauth2", scopes: [oauthScope] }] },
+        _meta: {
+          securitySchemes: [
+            {
+              type: "oauth2",
+              scopes: foodToolScopes.has(tool.name)
+                ? [oauthScope, foodToolScopes.get(tool.name)]
+                : [oauthScope],
+            },
+          ],
+        },
       })),
     };
   }
@@ -668,7 +683,7 @@ const jsonRpc = (event, principal, request, oauthScope) => {
       };
     };
     try {
-      return toolResult(callTool(event, principal, params.name, args), false);
+      return toolResult(callTool(event, principal, params.name, args, oauthPrincipal), false);
     } catch (error) {
       if (error.rpcCode === -32601) throw error;
       const status = error.status ?? (error.name === "ImportValidationError" ? 400 : 500);
@@ -685,7 +700,7 @@ const jsonRpc = (event, principal, request, oauthScope) => {
   throw rpcError(-32601, `Method not found: ${request.method}`);
 };
 
-const handle = (event, { oauthScope } = {}) => {
+const handle = (event, { oauthScope, oauthPrincipal } = {}) => {
   const body = event.requestInfo().body;
   let principal = null;
   try {
@@ -701,7 +716,7 @@ const handle = (event, { oauthScope } = {}) => {
     if (!principal && body?.method?.startsWith("tools/")) {
       throw rpcError(401, "Unauthorized.");
     }
-    const value = jsonRpc(event, principal, body, oauthScope);
+    const value = jsonRpc(event, principal, body, oauthScope, oauthPrincipal);
     if (body?.method?.startsWith("notifications/")) return event.noContent(202);
     return event.json(200, { jsonrpc: "2.0", id: body?.id ?? null, result: value });
   } catch (error) {

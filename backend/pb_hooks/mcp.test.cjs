@@ -68,6 +68,18 @@ const source = new Module(filename);
 source.filename = filename;
 source.paths = Module._nodeModulePaths(__dirname);
 source.require = (id) => {
+  if (id === path.join(__hooks, "nutrition-adapters.cjs")) {
+    const { foodToolScopes, mcpContract } = require("./nutrition-contracts.cjs");
+    return {
+      foodMcpOperations: new Map(
+        [...foodToolScopes.keys()].map((name) => [
+          name,
+          { contract: mcpContract(name.replace("nutrition_foods_", "foods.")) },
+        ]),
+      ),
+    };
+  }
+  if (id === path.join(__hooks, "nutrition-contracts.cjs")) return require(id);
   if (id === path.join(__hooks, "service-credentials.cjs")) return credentials;
   if (id === path.join(__hooks, "imports.js")) return imports;
   if (id === path.join(__hooks, "mcp-program-edits.cjs")) return require(id);

@@ -202,7 +202,15 @@ for (const [entityName, create, edit, parent, deletable] of [
   const identity = object({ id }, ["id"]);
   const pagination = { after: id, limit: { type: "integer", minimum: 1, maximum: 100 } };
   const children = parent ? { [parent]: id } : {};
-  const filters = entityName === "foods" ? { includeArchived: boolean } : {};
+  const filters =
+    entityName === "foods"
+      ? {
+          includeArchived: boolean,
+          status: enumOf("active", "archived", "all"),
+          search: text(200, 0),
+          category: text(100, 0),
+        }
+      : {};
   if (entityName === "planned" || entityName === "consumed") filters.date = date;
   define(entityName + ".get", "read", identity, result);
   define(
@@ -240,6 +248,43 @@ for (const [entityName, create, edit, parent, deletable] of [
     );
   }
 }
+define(
+  "foods.duplicate",
+  "write",
+  object(
+    {
+      id,
+      externalId,
+      operationId: externalId,
+      title: text(200),
+    },
+    ["id", "externalId", "operationId", "title"],
+  ),
+  resultSchemas.foods,
+);
+define(
+  "foods.set_archive",
+  "write",
+  object(
+    {
+      id,
+      operationId: externalId,
+      archived: boolean,
+    },
+    ["id", "operationId", "archived"],
+  ),
+  resultSchemas.foods,
+);
+
+const foodDescriptions = {
+  "foods.list": "List owned foods with search, category, status, and pagination filters.",
+  "foods.get": "Get an owned food by ID, including archived foods.",
+  "foods.create": "Create a food with manual per-serving macro estimates.",
+  "foods.update": "Edit an owned food and its per-serving estimates.",
+  "foods.duplicate": "Copy an owned food into a new active item without its recipe.",
+  "foods.set_archive": "Archive or restore an owned food.",
+};
+
 define("targets.resolve", "read", object({ date, programId: id }, ["date", "programId"]), targets);
 define(
   "days.summary",
@@ -322,6 +367,7 @@ const mcpContract = (name) => {
   return (
     contract && {
       name: "nutrition_" + name.replace(".", "_"),
+      ...(foodDescriptions[name] ? { description: foodDescriptions[name] } : {}),
       annotations: { readOnlyHint: contract.scope === "nutrition:read" },
       inputSchema: contract.inputSchema,
       outputSchema: contract.outputSchema,
@@ -329,4 +375,18 @@ const mcpContract = (name) => {
   );
 };
 
-module.exports = { macroKeys, matches, operations, contractFor, restContract, mcpContract };
+const foodToolScopes = new Map(
+  Object.keys(foodDescriptions).map((operation) => [
+    mcpContract(operation).name,
+    operations[operation].scope,
+  ]),
+);
+module.exports = {
+  macroKeys,
+  matches,
+  operations,
+  contractFor,
+  restContract,
+  mcpContract,
+  foodToolScopes,
+};

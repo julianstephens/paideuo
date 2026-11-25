@@ -200,6 +200,21 @@ const parentSpecs = {
   plans: { key: "programId", field: "program", name: "paideuo_programs" },
   targets: { key: "planId", field: "plan", name: collection("plans") },
 };
+const foodData = (data) => {
+  const title = data.title.trim();
+  const description = data.serving.description.trim();
+  const unit = data.serving.unit.trim();
+  if (!title || !description || !unit) {
+    throw new BadRequestError("Provide a title, serving description, and serving unit.");
+  }
+  return {
+    ...data,
+    title,
+    serving: { ...data.serving, description, unit },
+    ...(data.category === undefined ? {} : { category: data.category.trim() }),
+  };
+};
+
 const conflict = (message) => new ApiError(409, message);
 
 const create = (db, principal, kind, input) => {
@@ -207,7 +222,7 @@ const create = (db, principal, kind, input) => {
   const name = collection(kind);
   const parent = parentSpecs[kind];
   const fields = { owner, external_id: input.externalId };
-  let data = input.data;
+  let data = kind === "foods" ? foodData(input.data) : input.data;
 
   if (first(db, name, "owner = {:owner} && external_id = {:id}", { owner, id: input.externalId })) {
     throw conflict("External ID is already in use.");
@@ -246,6 +261,15 @@ const mutate = (db, principal, kind, action, input) => {
   }
   const previous = dataOf(record);
   let data = action === "delete" ? { ...previous, deleted: true } : { ...previous, ...input.data };
+  if (kind === "foods") {
+    if (action === "duplicate") {
+      return create(db, principal, kind, {
+        externalId: input.externalId,
+        data: { ...previous, title: input.title, archived: false },
+      });
+    }
+    data = action === "set_archive" ? { ...previous, archived: input.archived } : foodData(data);
+  }
   // The whole target layer is replaced so an omitted field can resume inheritance.
   if (kind === "plans") data = { programId: previous.programId, ...input.data };
   if (kind === "targets") {
@@ -282,8 +306,18 @@ const list = (db, kind, owner, input) => {
     filters.push("id > {:after}");
   }
   if (isEntry(kind)) filters.push("(data.deleted = null || data.deleted = false)");
-  if (kind === "foods" && !input.includeArchived) {
-    filters.push("(data.archived = null || data.archived = false)");
+  if (kind === "foods") {
+    const status = input.status ?? (input.includeArchived ? "all" : "active");
+    if (status === "active") filters.push("(data.archived = null || data.archived = false)");
+    if (status === "archived") filters.push("data.archived = true");
+    if (input.search?.trim()) {
+      params.search = input.search.trim();
+      filters.push("(data.title ~ {:search} || data.description ~ {:search})");
+    }
+    if (input.category?.trim()) {
+      params.category = input.category.trim();
+      filters.push("data.category = {:category}");
+    }
   }
   const limit = input.limit ?? 50;
   const rows = find(db, collection(kind), filters.join(" && "), params, "id", limit + 1);

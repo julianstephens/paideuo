@@ -3007,6 +3007,9 @@ test("ChatGPT OAuth discovers MCP, authorizes a Paideuo user, and rotates creden
       assert.deepEqual(exchanges.map((response) => response.status).sort(), [200, 400]);
       const tokens = await exchanges.find((response) => response.ok).json();
 
+      const grants = admin.collection("paideuo_mcp_oauth_grants");
+      const baseGrant = await grants.getFirstListItem("access_hash != ''");
+      await grants.update(baseGrant.id, { scopes: "" }); // Existing grants predate stored scopes.
       const authorization = "Bearer " + tokens.access_token;
       const initialized = await (await rpc("initialize", init, authorization)).json();
       assert.equal(initialized.result.protocolVersion, init.protocolVersion);
@@ -3028,6 +3031,91 @@ test("ChatGPT OAuth discovers MCP, authorizes a Paideuo user, and rotates creden
         catalog.result.tools.find(({ name }) => name === "list_programs").annotations.readOnlyHint,
         true,
       );
+      assert.deepEqual(issuer.scopes_supported, [
+        "paideuo:mcp",
+        "nutrition:read",
+        "nutrition:write",
+      ]);
+      assert.deepEqual(
+        catalog.result.tools.find(({ name }) => name === "nutrition_foods_list")._meta
+          .securitySchemes[0].scopes,
+        ["paideuo:mcp", "nutrition:read"],
+      );
+      const foodTool = async (name, args, auth) =>
+        (
+          await (
+            await rpc("tools/call", { name: "nutrition_foods_" + name, arguments: args }, auth)
+          ).json()
+        ).result;
+      assert.equal((await foodTool("list", {}, authorization)).structuredContent.status, 403);
+
+      const connectNutrition = async (scope) => {
+        const connection = await authorizeRequest({ ...authorize, scope });
+        assert.equal(connection.status, 302);
+        const request = Object.fromEntries(
+          new URL(connection.headers.get("location")).searchParams,
+        );
+        const decision = await client.send(oauthPath + "/consent", {
+          method: "POST",
+          body: { ...request, approved: true },
+        });
+        const code = new URL(decision.redirect).searchParams.get("code");
+        const response = await tokenRequest("/token", { ...exchange, code });
+        assert.equal(response.status, 200);
+        return response.json();
+      };
+      const reader = await connectNutrition("paideuo:mcp nutrition:read");
+      assert.equal(reader.scope, "paideuo:mcp nutrition:read");
+      const readAuth = "Bearer " + reader.access_token;
+      const foodInput = {
+        operationId: "oauth-tofu",
+        externalId: "oauth-tofu",
+        data: {
+          title: "Tofu",
+          serving: { description: "one portion", size: 100, unit: "g" },
+          macros: { protein: 12 },
+        },
+      };
+      assert.equal((await foodTool("create", foodInput, readAuth)).structuredContent.status, 403);
+      const readerEscalation = await tokenRequest("/token", {
+        grant_type: "refresh_token",
+        refresh_token: reader.refresh_token,
+        scope: "paideuo:mcp nutrition:read nutrition:write",
+      });
+      assert.equal(readerEscalation.status, 400);
+      assert.equal((await readerEscalation.json()).error, "invalid_scope");
+
+      const writer = await connectNutrition("paideuo:mcp nutrition:read nutrition:write");
+      const createdFood = await foodTool("create", foodInput, "Bearer " + writer.access_token);
+      assert.equal(createdFood.isError, false, JSON.stringify(createdFood));
+      assert.equal(
+        (await foodTool("list", {}, readAuth)).structuredContent.items[0].data.title,
+        "Tofu",
+      );
+      assert.equal(
+        (await foodTool("get", { id: createdFood.structuredContent.id }, other.authStore.token))
+          .structuredContent.status,
+        404,
+      );
+      const narrowedResponse = await tokenRequest("/token", {
+        grant_type: "refresh_token",
+        refresh_token: writer.refresh_token,
+        scope: "paideuo:mcp nutrition:read",
+      });
+      assert.equal(narrowedResponse.status, 200);
+      const narrowed = await narrowedResponse.json();
+      assert.equal(narrowed.scope, "paideuo:mcp nutrition:read");
+      assert.equal(
+        (await foodTool("create", foodInput, "Bearer " + narrowed.access_token)).structuredContent
+          .status,
+        403,
+      );
+      const renewNarrowed = await tokenRequest("/token", {
+        grant_type: "refresh_token",
+        refresh_token: narrowed.refresh_token,
+      });
+      assert.equal((await renewNarrowed.json()).scope, "paideuo:mcp nutrition:read");
+
       const document = {
         schema: "paideuo",
         version: 1,
@@ -3239,14 +3327,14 @@ const mockGoogle = (request) => {
 
 const nutritionMigration = "1760000032_nutrition.js";
 
-// Register the shared contracts only in the integration harness. Feature issues
-// wire the covered operations into the production REST and MCP dispatchers.
+// Register fixture routes for nutrition operations still awaiting production dispatch.
 const nutritionFixture = (hooksDir) => {
   fs.writeFileSync(
     path.join(hooksDir, "nutrition-fixture.pb.js"),
     `
 const nutrition = require(__hooks + "/nutrition-adapters.cjs");
 for (const path of nutrition.restOperations.keys()) {
+  if (nutrition.foodRestOperations.has(path)) continue;
   routerAdd("POST", path, (event) => {
     const credentials = require(__hooks + "/service-credentials.cjs");
     const principal = credentials.importPrincipalFromEvent(event);
@@ -3539,5 +3627,133 @@ test("nutrition targets follow training weeks and keep exact-date overrides on c
       await assert.rejects(resolve("2026-02-29"), { status: 400 });
     },
     { prepareHooks: nutritionFixture, useCollectionsExport: true },
+  );
+});
+
+test("food bank production HTTP and MCP share pagination, duplication and archive state", async () => {
+  await withPocketBase(async ({ admin, baseUrl }) => {
+    const { client } = await createAuthedUser(admin, baseUrl, "food-bank");
+    const { client: other } = await createAuthedUser(admin, baseUrl, "food-bank-other");
+    const rest = (name, input) => nutritionRequest(client, "foods." + name, input);
+    const credential = async (scopes) =>
+      (
+        await domainRequest(client, "service-credentials/issue", {
+          label: "food bank test",
+          scopes,
+        })
+      ).plaintextToken;
+    const readOnly = await credential(["nutrition:read"]);
+    const writer = await credential(["nutrition:write"]);
+    const service = (name, input, token) =>
+      serviceImportRequest(
+        baseUrl,
+        "/api/paideuo/v1/service/nutrition/foods/" + name,
+        token,
+        input,
+      );
+    const mcp = async (name, input, token) =>
+      (
+        await serviceImportRequest(baseUrl, "/api/paideuo/v1/service/mcp", token, {
+          jsonrpc: "2.0",
+          id: 1,
+          method: "tools/call",
+          params: { name: "nutrition_foods_" + name, arguments: input },
+        })
+      ).result;
+    const create = (key, title, category, extras = {}) =>
+      rest("create", {
+        operationId: key,
+        externalId: key,
+        data: {
+          title,
+          category,
+          serving: { description: "one bowl", size: 150.5, unit: "g" },
+          macros: { fat: 0, calories: 190.125 },
+          ...extras,
+        },
+      });
+    const rice = await create("rice-bowl", "Rice bowl", "Meals");
+    const side = await create("side", "Side", "Meals", { description: "Steamed rice" });
+    await create("plain-rice", "Plain rice", "Ingredients", {
+      serving: { description: "one scoop", size: 0.5, unit: "cup" },
+      macros: { carbohydrate: 24 },
+    });
+    const filters = { search: "RICE", category: "Meals", limit: 1 };
+    const first = await rest("list", filters);
+    assert.equal(first.items.length, 1);
+    assert.ok(first.next);
+    assert.deepEqual(await service("list", filters, readOnly), first);
+    assert.deepEqual((await mcp("list", filters, readOnly)).structuredContent, first);
+    const second = await rest("list", { ...filters, after: first.next });
+    assert.equal(second.next, null);
+    assert.deepEqual(new Set([first.items[0].id, second.items[0].id]), new Set([rice.id, side.id]));
+    assert.deepEqual(await nutritionRequest(other, "foods.list", {}), { items: [], next: null });
+
+    const copy = {
+      id: rice.id,
+      operationId: "duplicate",
+      externalId: "copy",
+      title: "Rice bowl copy",
+    };
+    assert.equal((await mcp("duplicate", copy, readOnly)).structuredContent.status, 403);
+    await assert.rejects(service("duplicate", copy, readOnly), { status: 403 });
+    await assert.rejects(nutritionRequest(other, "foods.duplicate", copy), { status: 404 });
+    const copied = (await mcp("duplicate", copy, writer)).structuredContent;
+    assert.notEqual(copied.id, rice.id);
+    assert.equal(copied.externalId, copy.externalId);
+    assert.deepEqual(copied.data, { ...rice.data, archived: false, title: copy.title });
+    assert.deepEqual(await rest("duplicate", copy), copied);
+    await assert.rejects(rest("duplicate", { ...copy, title: "Changed" }), { status: 409 });
+    await assert.rejects(
+      rest("create", {
+        operationId: "bad-serving",
+        externalId: "bad-serving",
+        data: { ...rice.data, serving: { ...rice.data.serving, size: -1 } },
+      }),
+      { status: 400 },
+    );
+
+    const archive = { id: copied.id, operationId: "archive-copy", archived: true };
+    assert.equal((await service("set_archive", archive, writer)).data.archived, true);
+    assert.equal((await rest("get", { id: copied.id })).data.archived, true);
+    assert.deepEqual(
+      (await rest("list", { status: "archived" })).items.map(({ id }) => id),
+      [copied.id],
+    );
+    assert.equal((await rest("list", {})).items.length, 3);
+    assert.equal((await rest("list", { includeArchived: true })).items.length, 4);
+    assert.equal((await rest("list", { status: "all" })).items.length, 4);
+    const restore = { ...archive, operationId: "restore-copy", archived: false };
+    assert.equal(
+      (await mcp("set_archive", restore, writer)).structuredContent.data.archived,
+      false,
+    );
+    assert.equal((await rest("list", { status: "archived" })).items.length, 0);
+    assert.deepEqual((await rest("get", { id: copied.id })).data.macros, {
+      calories: 190.125,
+      fat: 0,
+    });
+  });
+});
+
+test("OAuth scope migration preserves preexisting grants", async () => {
+  await withPocketBase(
+    async ({ admin, baseUrl, upgrade }) => {
+      const { userId } = await createAuthedUser(admin, baseUrl, "oauth-scope-upgrade");
+      const grants = admin.collection("paideuo_mcp_oauth_grants");
+      const grant = await grants.create({
+        owner: userId,
+        client_id: "test",
+        resource: "https://paideuo.example.com/api/paideuo/v1/mcp",
+        exchange_hash: "existing",
+        exchange_expires_at: 2000000000,
+      });
+      await upgrade();
+      const migrated = await grants.getOne(grant.id);
+      assert.equal(migrated.scopes, "");
+      assert.equal(migrated.exchange_hash, grant.exchange_hash);
+      assert.equal(migrated.owner, userId);
+    },
+    { pendingMigration: "1760000033_mcp_oauth_scopes.js" },
   );
 });

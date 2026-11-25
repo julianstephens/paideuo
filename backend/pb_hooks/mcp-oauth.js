@@ -6,6 +6,16 @@ const oauthPath = "/api/paideuo/v1/mcp-oauth";
 const metadataPath = "/.well-known/oauth-protected-resource" + mcpPath;
 const collectionName = "paideuo_mcp_oauth_grants";
 const scope = "paideuo:mcp";
+const supportedScopes = [scope, "nutrition:read", "nutrition:write"];
+const parseScopes = (value) => {
+  if (value === undefined) return [scope];
+  if (typeof value !== "string" || value.length > 200) return null;
+  const values = value.trim().split(/\s+/);
+  if (!values.includes(scope) || values.some((item) => !supportedScopes.includes(item)))
+    return null;
+  return supportedScopes.filter((item) => values.includes(item));
+};
+const grantScopes = (grant) => parseScopes(grant.getString("scopes") || undefined);
 const accessLifetime = 3600;
 const refreshLifetime = 30 * 24 * 3600;
 const codeLifetime = 5 * 60;
@@ -45,7 +55,7 @@ const protectedResource = (event) => {
   return event.json(200, {
     resource: config.resource,
     authorization_servers: [config.origin],
-    scopes_supported: [scope],
+    scopes_supported: supportedScopes,
     bearer_methods_supported: ["header"],
   });
 };
@@ -64,7 +74,7 @@ const authorizationServer = (event) => {
     code_challenge_methods_supported: ["S256"],
     token_endpoint_auth_methods_supported: ["client_secret_basic", "client_secret_post"],
     revocation_endpoint_auth_methods_supported: ["client_secret_basic", "client_secret_post"],
-    scopes_supported: [scope],
+    scopes_supported: supportedScopes,
   });
 };
 
@@ -90,12 +100,8 @@ const authorizationError = (request, config) => {
   ) {
     return ["invalid_request", "Send a valid PKCE code_challenge with code_challenge_method=S256."];
   }
-  if (
-    request.scope !== undefined &&
-    (typeof request.scope !== "string" ||
-      request.scope.split(" ").some((value) => value && value !== scope))
-  ) {
-    return ["invalid_scope", "Use paideuo:mcp as the default OAuth scope."];
+  if (!parseScopes(request.scope)) {
+    return ["invalid_scope", "Include paideuo:mcp and request only supported scopes."];
   }
   if (!validResource(request.resource, config)) {
     return [
@@ -172,6 +178,7 @@ const consent = (event) => {
     }
     const grant = new Record(collection);
     grant.set("owner", event.auth.id);
+    grant.set("scopes", parseScopes(request.scope).join(" "));
     grant.set("client_id", config.clientId);
     grant.set("resource", config.resource);
     grant.set("redirect_uri", config.redirect);
@@ -241,11 +248,13 @@ const token = (event) => {
       !/^[A-Za-z0-9._~-]{43,128}$/.test(body.code_verifier))
   )
     return event.json(400, { error: "invalid_grant" });
-  if (body.scope !== undefined && body.scope !== scope) {
+  const requestedScopes = body.scope === undefined ? undefined : parseScopes(body.scope);
+  if (requestedScopes === null) {
     return event.json(400, { error: "invalid_scope" });
   }
 
   let result;
+  let invalidScope = false;
   event.app.runInTransaction((tx) => {
     const grant = findGrant(tx, "exchange_hash", exchange, config);
     const timestamp = now();
@@ -256,6 +265,15 @@ const token = (event) => {
         !$security.equal(grant.getString("challenge"), pkceChallenge(body.code_verifier)))
     )
       return;
+
+    const approved = grantScopes(grant);
+    if (!approved) return;
+    if (requestedScopes?.some((item) => !approved.includes(item))) {
+      invalidScope = true;
+      return;
+    }
+    const scopes = (requestedScopes ?? approved).join(" ");
+    grant.set("scopes", scopes);
 
     const access = opaqueToken("pda_");
     const refresh = opaqueToken("pdr_");
@@ -271,10 +289,11 @@ const token = (event) => {
       refresh_token: refresh,
       token_type: "Bearer",
       expires_in: accessLifetime,
-      scope,
+      scope: scopes,
     };
   });
 
+  if (invalidScope) return event.json(400, { error: "invalid_scope" });
   return result ? event.json(200, result) : event.json(400, { error: "invalid_grant" });
 };
 
@@ -308,7 +327,17 @@ const mcp = (event) => {
   const grant = bearer && findGrant(event.app, "access_hash", bearer[1], config);
   if (grant && grant.getInt("access_expires_at") > now()) {
     event.auth = event.app.findRecordById("paideuo_users", grant.getString("owner"));
-    return tools.handle(event, { oauthScope: scope });
+    const scopes = grantScopes(grant);
+    if (!scopes) throw new UnauthorizedError("Invalid OAuth grant scopes.");
+    return tools.handle(event, {
+      oauthScope: scope,
+      oauthPrincipal: {
+        type: "oauth",
+        ownerId: event.auth.id,
+        credentialRef: "oauth:" + grant.id,
+        scopes: new Set(scopes),
+      },
+    });
   }
   event.response
     .header()

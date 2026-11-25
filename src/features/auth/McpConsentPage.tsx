@@ -7,6 +7,7 @@ import { pocketbase } from "../../lib/api/pocketbase";
 
 export const McpConsentPage = () => {
   const { search } = useLocation();
+  const scopes = new URLSearchParams(search).get("scope")?.split(/\s+/) ?? [];
   const [pending, setPending] = useState<"allow" | "deny" | null>(null);
   const [error, setError] = useState("");
 
@@ -42,6 +43,14 @@ export const McpConsentPage = () => {
           ChatGPT can read your training programs and metrics, create program drafts, import
           training data, log workouts, and submit check-ins.
         </Text>
+        {scopes.includes("nutrition:read") && (
+          <Text>ChatGPT can search your food bank and read serving sizes and macro estimates.</Text>
+        )}
+        {scopes.includes("nutrition:write") && (
+          <Text>
+            ChatGPT can create, edit, duplicate, archive, and restore foods in your food bank.
+          </Text>
+        )}
         {error && <Notice role="alert">{error}</Notice>}
         <HStack gap="3">
           <Button
