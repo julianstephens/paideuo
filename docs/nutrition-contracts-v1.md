@@ -81,3 +81,11 @@ Supply an explicit civil date, an offset-bearing `consumedAt` timestamp, or both
 `days.summary` takes `{ date, programId? }` and returns the selected civil date, the program's effective target when selected, and independent owner-wide planned and consumed totals. Consumed reads and summaries require `nutrition:read`. Single and batch writes require `nutrition:write`. The matching tools use names such as `nutrition_consumed_batch_create` and `nutrition_days_summary`.
 
 `days.summary_range` takes `{ startDate, endDate, programId? }` and returns `{ days }` with a daily summary for every date in an inclusive range of up to 62 civil days. The training calendar uses this operation to display planned and eaten totals in week and month views.
+
+## Nutrition in Metrics
+
+Authenticated users can read the report at `GET /api/paideuo/v1/metrics` or the existing `GET /api/paideuo/metrics`. The service route is `GET /api/paideuo/v1/service/metrics`. MCP exposes the same report through `fetch_metrics`. Service credentials require `metrics:read`. Both service credentials and MCP OAuth grants require `nutrition:read` to receive the granular nutrition fields.
+
+The weekly, block, program, and custom reports include `foodNutrition` on totals and periods, and `nutritionDays` with the daily entry totals, effective targets, and daily metrics. Food totals are owner-wide. A program selection resolves targets for that program, including in custom windows. Windows without a program selection have no program target. Dates follow the existing metrics filters and each food entry's stored civil date.
+
+`loggedDays` counts days with one or more consumed entries. Each macro reports known totals and averages over contributing days, plus the count of days with unknown entry values for planned and consumed food. Attainment is the consumed sum divided by the target sum on matching dates with a known target and known values for all logged entries for that macro. Plan difference is consumed minus planned over active-plan dates where both have entries and known values for that macro. Both report their contributing day counts. A zero target denominator produces a null ratio. Manual check-in calories and protein remain in `nutritionMeasurements`.

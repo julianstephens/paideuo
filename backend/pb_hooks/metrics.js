@@ -166,9 +166,13 @@ const sourceGroups = (tx, programId, start, sessions) => {
 };
 
 const readSessions = (tx, sessionFilter, params, bySchedule) => {
-  const { completionCollection, componentResultCollection, completionData, statusFor } = require(
-    __hooks + "/calendar-sessions.js",
-  );
+  const {
+    completionCollection,
+    componentResultCollection,
+    completionData,
+    statusFor,
+    todayIn,
+  } = require(__hooks + "/calendar-sessions.js");
   const rows = tx.findRecordsByFilter(
     "paideuo_scheduled_sessions",
     "deleted = false && (" + sessionFilter("") + ")",
@@ -203,10 +207,18 @@ const readSessions = (tx, sessionFilter, params, bySchedule) => {
       resultsBySession.get(record.getString("session"))?.push(resultData(record));
     }
   }
+  const now = new DateTime();
+  const oneOffToday = new Map();
   return rows.map((row) => {
     const snapshot = JSON.parse(row.getString("prescription_snapshot"));
     const completion = bySession.get(row.id);
-    const today = bySchedule.get(row.getString("schedule"));
+    const scheduleId = row.getString("schedule");
+    let today = bySchedule.get(scheduleId);
+    if (!scheduleId) {
+      const timezone = row.getString("timezone");
+      if (!oneOffToday.has(timezone)) oneOffToday.set(timezone, todayIn(timezone, now));
+      today = oneOffToday.get(timezone);
+    }
     return {
       id: row.id,
       scheduledDate: row.getString("scheduled_date"),
@@ -312,14 +324,13 @@ const compareBlocks = (event, query) => {
   return event.json(200, result);
 };
 
-const report = (event) => {
+const report = (event, { owner = event.auth.id, includeFoodNutrition = true } = {}) => {
   const { parse } = require(__hooks + "/calendar-dates.js");
   const { todayFor } = require(__hooks + "/schedule-revisions.js");
   const query = event.request.url.query();
   const view = query.get("view");
   const programId = query.get("program");
-  const owner = event.auth.id;
-  if (view === "compare") return compareBlocks(event, query);
+  if (view === "compare" && event.auth?.id === owner) return compareBlocks(event, query);
   if (!["weekly", "block", "program", "custom"].includes(view)) {
     throw new BadRequestError("Choose a metrics view.");
   }
@@ -330,8 +341,7 @@ const report = (event) => {
   let result;
   event.app.runInTransaction((tx) => {
     const scheduleFilter =
-      "program.owner = {:owner}" +
-      (view !== "custom" && programId ? " && program = {:programId}" : "");
+      "program.owner = {:owner}" + (programId ? " && program = {:programId}" : "");
     const params = { owner, programId };
     const schedules = tx.findRecordsByFilter(
       "paideuo_program_schedules",
@@ -342,7 +352,7 @@ const report = (event) => {
       params,
     );
     const [schedule] = schedules;
-    if (view !== "custom" && programId && !schedule) {
+    if (programId && !schedule) {
       throw new NotFoundError("Program schedule not found.");
     }
 
@@ -373,9 +383,10 @@ const report = (event) => {
     }
 
     const bySchedule = new Map(schedules.map((row) => [row.id, todayFor(row)]));
+    const { ownerFilter } = require(__hooks + "/calendar-sessions.js");
     const sessionFilter = (prefix) =>
-      `${prefix}schedule.program.owner = {:owner}` +
-      (view !== "custom" && programId ? ` && ${prefix}schedule.program = {:programId}` : "") +
+      ownerFilter(prefix) +
+      (programId ? ` && ${prefix}schedule.program = {:programId}` : "") +
       (dated ? ` && ${prefix}scheduled_date >= {:start} && ${prefix}scheduled_date <= {:end}` : "");
     if (dated) Object.assign(params, windowFor(start, end));
     const sessions = readSessions(tx, sessionFilter, params, bySchedule);
@@ -420,18 +431,45 @@ const report = (event) => {
 
     const entries = readCheckIns(tx, owner, window);
     const days = view === "weekly" ? dailyBreakdown(entries, window) : [];
+    const { readDailyNutrition } = require(__hooks + "/nutrition.cjs");
+    const { summarizeFoodNutrition } = require(__hooks + "/nutrition-metrics.cjs");
+    const nutritionDays =
+      includeFoodNutrition && window
+        ? readDailyNutrition(tx, owner, {
+            startDate: window.start,
+            endDate: window.end,
+            programId,
+          }).days
+        : [];
+    const foodNutrition = (period) =>
+      includeFoodNutrition
+        ? {
+            foodNutrition: period
+              ? summarizeFoodNutrition(
+                  nutritionDays.filter(({ date }) => date >= period.start && date <= period.end),
+                )
+              : null,
+          }
+        : {};
     result = {
       days,
+      ...(includeFoodNutrition && {
+        nutritionDays: nutritionDays.map((day) => ({
+          ...day,
+          foodNutrition: summarizeFoodNutrition([day]),
+        })),
+      }),
       window,
       blockId: block?.id ?? null,
       blocks: blocks.map(({ id, label }) => ({ id, label })),
       unassigned: view === "program" ? sessions.filter(({ source }) => !source).length : 0,
-      total: summarize(totalSessions, entries, window),
+      total: { ...summarize(totalSessions, entries, window), ...foodNutrition(window) },
       periods: groups.map(({ id, label, window: period, sessions }) => ({
         id,
         label,
         window: period,
         ...summarize(sessions, entries, period),
+        ...foodNutrition(period),
       })),
     };
   });

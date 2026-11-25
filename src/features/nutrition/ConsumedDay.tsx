@@ -1,5 +1,6 @@
 import { Button, Flex, Heading, SimpleGrid, Stack, Text } from "@chakra-ui/react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { metricsKey } from "../compliance/metrics";
 import { useState } from "react";
 import { Link } from "react-router";
 import { ConfirmationDialog } from "../../components/ConfirmationDialog";
@@ -9,6 +10,7 @@ import { fullDate } from "../calendar/dates";
 import { consumedApi, consumedKey } from "./consumed";
 import type { ConsumedChange, ConsumedDraft, ConsumedEntry } from "./consumed";
 import { FoodEntryForm } from "./FoodEntryForm";
+import { nutritionOperation } from "./operation";
 import { macroFields } from "./foods";
 import type { NutritionTotals, PlannedDay, PlannedEntry } from "./planned";
 
@@ -118,17 +120,15 @@ export const ConsumedDay = ({
         setDrafts([]);
         setReview(false);
       }
-      await client.invalidateQueries({ queryKey: key });
+      await Promise.all([
+        client.invalidateQueries({ queryKey: key }),
+        client.invalidateQueries({ queryKey: metricsKey(ownerId) }),
+      ]);
     },
     onSettled: () => onBusy(false),
   });
   const save = (change: ConsumedChange) => {
-    const previous = mutation.variables;
-    mutation.mutate(
-      mutation.isError && previous && JSON.stringify(previous.change) === JSON.stringify(change)
-        ? previous
-        : { change, operationId: crypto.randomUUID() },
-    );
+    mutation.mutate(nutritionOperation(change, mutation.isError ? mutation.variables : undefined));
   };
   const startEdit = (value: LogEditor) => {
     mutation.reset();
@@ -244,18 +244,21 @@ export const ConsumedDay = ({
           timezone={timezone}
           entry={editor.kind === "edit" ? editor.entry : undefined}
           linkedPlan={editor.kind === "new" ? editor.plan : undefined}
-          canQueue={drafts.length < 100}
           pending={mutation.isPending}
           onSave={save}
           onClose={() => {
             mutation.reset();
             onEditor(undefined);
           }}
-          onQueue={(draft, title) => {
-            mutation.reset();
-            setDrafts([...drafts, { draft, title }]);
-            onEditor(undefined);
-          }}
+          onQueue={
+            drafts.length < 100
+              ? (draft, title) => {
+                  mutation.reset();
+                  setDrafts([...drafts, { draft, title }]);
+                  onEditor(undefined);
+                }
+              : undefined
+          }
         />
       )}
       {drafts.length > 0 && (

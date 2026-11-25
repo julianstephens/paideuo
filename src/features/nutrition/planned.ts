@@ -56,7 +56,23 @@ export type Change =
 const send = <T>(action: string, input: object, signal?: AbortSignal) =>
   apiRequest<T>("/api/paideuo/v1/nutrition/planned/" + action, "POST", input, signal);
 
+export const plannedKey = (ownerId: string) => ["nutrition", "planner", ownerId] as const;
+
 export const plannedApi = {
+  list: async (date: string, signal: AbortSignal) => {
+    const entries: PlannedEntry[] = [];
+    let after: string | null = null;
+    do {
+      const page: { items: PlannedEntry[]; next: string | null } = await send(
+        "list",
+        { date, limit: 100, after: after ?? undefined },
+        signal,
+      );
+      entries.push(...page.items);
+      after = page.next;
+    } while (after);
+    return entries.sort((a, b) => (a.data.order ?? 0) - (b.data.order ?? 0));
+  },
   week: (startDate: string, programId: string | undefined, signal: AbortSignal) =>
     send<{ days: PlannedDay[] }>("week", { startDate, programId }, signal),
   preview: (batch: PlannedBatch) => send<Preview>("preview", batch),

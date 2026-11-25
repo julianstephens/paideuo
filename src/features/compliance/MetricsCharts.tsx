@@ -16,6 +16,7 @@ import { comparisonDelta } from "../../components/ComparisonChange";
 import { Disclosure, FormField, Notice, Panel } from "../../components/ui";
 import { formatDate, parseDate } from "../calendar/dates";
 import type { DurationUnit, Preferences } from "../recovery/recovery";
+import { FoodNutritionMetrics } from "./FoodNutritionMetrics";
 import { MetricBar } from "./MetricBars";
 import { MetricPlot, plotColors } from "./MetricPlot";
 import type { PlotPoint } from "./MetricPlot";
@@ -38,12 +39,12 @@ const nutritionDetails = {
   calories: {
     unit: "kcal",
     label: "Daily average",
-    description: "Average calorie intake across days with a recorded value.",
+    description: "Average calories from manual check-ins with a recorded value.",
   },
   proteinGrams: {
     unit: "g",
     label: "Daily average",
-    description: "Average protein intake across days with a recorded value.",
+    description: "Average protein from manual check-ins with a recorded value.",
   },
   morningWeightKg: {
     unit: "kg",
@@ -610,7 +611,9 @@ export const MetricsCharts = ({
       ) : (
         <Notice>Enable dashboard charts in Settings to see comparisons.</Notice>
       )}
-      {recovery.length > 0 && (
+      {(recovery.length > 0 ||
+        !!report.total.foodNutrition?.activePlanDays ||
+        !!report.total.foodNutrition?.loggedDays) && (
         <Stack as="section" gap="3">
           <Flex align="baseline" justify="space-between" gap="2" wrap="wrap">
             <Heading as="h2" size="md">
@@ -621,6 +624,7 @@ export const MetricsCharts = ({
             )}
           </Flex>
           <SummaryGrid metrics={recovery} total={report.total} unit={durationUnit} />
+          <FoodNutritionMetrics report={report} weekly={weekly} />
         </Stack>
       )}
       {coverage.length > 0 && (

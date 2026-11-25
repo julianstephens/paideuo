@@ -127,10 +127,11 @@ const Calendar = ({ ownerId }: { ownerId: string }) => {
     />
   );
   const checkInTrigger = useRef<HTMLButtonElement>(null);
-  const nutritionTrigger = useRef<HTMLButtonElement>(null);
+  const nutritionTriggerId = useRef<string>(null);
+  const calendarTodayButton = useRef<HTMLButtonElement>(null);
   const [nutritionDetails, setNutritionDetails] = useState<{ date: string; open: boolean }>();
   const openNutrition = (date: string, trigger: HTMLButtonElement) => {
-    nutritionTrigger.current = trigger;
+    nutritionTriggerId.current = trigger.id;
     setNutritionDetails({ date, open: true });
   };
   const canUseMonthView = useBreakpointValue({ base: false, lg: true });
@@ -317,6 +318,7 @@ const Calendar = ({ ownerId }: { ownerId: string }) => {
             </Disclosure>
           )}
           <CalendarNutrition
+            id="calendar-nutrition-today"
             day={nutritionByDate.get(todayKey)}
             onOpen={openNutrition}
             {...nutritionDisplay}
@@ -361,7 +363,12 @@ const Calendar = ({ ownerId }: { ownerId: string }) => {
             <Button size="sm" variant="outline" onClick={() => move(-1)}>
               Previous
             </Button>
-            <Button size="sm" variant="outline" onClick={() => navigate(today, view)}>
+            <Button
+              ref={calendarTodayButton}
+              size="sm"
+              variant="outline"
+              onClick={() => navigate(today, view)}
+            >
               Today
             </Button>
             <Button size="sm" variant="outline" onClick={() => move(1)}>
@@ -533,6 +540,7 @@ const Calendar = ({ ownerId }: { ownerId: string }) => {
                   )}
                   <Stack gap={isMonth ? "1" : "2"} mt="auto">
                     <CalendarNutrition
+                      id={`calendar-nutrition-${key}`}
                       day={nutritionByDate.get(key)}
                       onOpen={openNutrition}
                       {...nutritionDisplay}
@@ -551,12 +559,22 @@ const Calendar = ({ ownerId }: { ownerId: string }) => {
       </Grid>
       {nutritionDetails && nutritionDetailDay && (
         <CalendarNutritionDialog
+          key={nutritionDetailDay.date}
           day={nutritionDetailDay}
           {...nutritionDisplay}
+          ownerId={ownerId}
           programId={nutritionProgram}
+          timezone={
+            targetProgram.data?.scheduled
+              ? undefined
+              : Intl.DateTimeFormat().resolvedOptions().timeZone
+          }
           open={nutritionDetails.open}
           close={() => setNutritionDetails({ ...nutritionDetails, open: false })}
-          trigger={() => nutritionTrigger.current}
+          trigger={() =>
+            (nutritionTriggerId.current && document.getElementById(nutritionTriggerId.current)) ||
+            calendarTodayButton.current
+          }
         />
       )}
       {workoutDate && (

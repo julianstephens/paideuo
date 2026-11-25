@@ -2249,6 +2249,18 @@ test("prescription ranges survive import, editing, templates, block duplication 
     });
     const oneOff = (await calendar()).find(({ id }) => id === oneOffId);
     assertRanges(oneOff.prescription, { ...ranges, plannedDurationMin: 0, plannedDurationMax: 0 });
+
+    const programFilter = "&program=" + imported.rows.programId;
+    const weeklyPath = "/api/paideuo/v1/metrics?view=weekly&start=2026-01-07";
+    const weekly = await request(weeklyPath);
+    const programWeek = await request(weeklyPath + programFilter);
+    assert.deepEqual(weekly.window, { start: "2026-01-05", end: "2026-01-11" });
+    assert.deepEqual(programWeek.window, weekly.window);
+    assert.equal(weekly.total.compliance.scheduled, programWeek.total.compliance.scheduled + 1);
+
+    const customPath = "/api/paideuo/v1/metrics?view=custom&start=2026-01-05&end=2026-01-07";
+    assert.equal((await request(customPath)).total.compliance.scheduled, 4);
+    assert.equal((await request(customPath + programFilter)).total.compliance.scheduled, 3);
   });
 });
 
@@ -3067,6 +3079,17 @@ test("ChatGPT OAuth discovers MCP, authorizes a Paideuo user, and rotates creden
       const reader = await connectNutrition("paideuo:mcp nutrition:read");
       assert.equal(reader.scope, "paideuo:mcp nutrition:read");
       const readAuth = "Bearer " + reader.access_token;
+      const metricsArgs = {
+        name: "fetch_metrics",
+        arguments: { view: "custom", start: "2026-11-01", end: "2026-11-01" },
+      };
+      const fetchMetrics = async (auth) =>
+        (await (await rpc("tools/call", metricsArgs, auth)).json()).result.structuredContent;
+      const legacyMetrics = await fetchMetrics(authorization);
+      assert.equal(Object.hasOwn(legacyMetrics.total, "foodNutrition"), false);
+      const nutritionMetrics = await fetchMetrics(readAuth);
+      assert.equal(nutritionMetrics.total.foodNutrition.days, 1);
+      assert.equal(nutritionMetrics.nutritionDays[0].date, "2026-11-01");
       const foodInput = {
         operationId: "oauth-tofu",
         externalId: "oauth-tofu",
@@ -4611,5 +4634,206 @@ test("consumed nutrition logs and batches share production HTTP and MCP contract
       data: { ...rollbackEntry.data, consumedAt: "2026-11-01T01:30:00-05:00" },
     });
     assert.equal(fold.data.date, date);
+  });
+});
+
+test("nutrition metrics share daily totals, comparisons, and coverage across adapters", async () => {
+  await withPocketBase(async ({ admin, baseUrl }) => {
+    const { client } = await createAuthedUser(admin, baseUrl, "nutrition-metrics");
+    const { client: other } = await createAuthedUser(admin, baseUrl, "nutrition-metrics-other");
+    const createProgram = async (owner, name) => {
+      const { id: programId } = await owner.send("/api/paideuo/programs", {
+        method: "POST",
+        body: { name },
+      });
+      await admin.collection("paideuo_blocks").create({
+        program: programId,
+        position: 1,
+        duration_weeks: 1,
+        name: "Base",
+      });
+      const block = await admin.collection("paideuo_blocks").create({
+        program: programId,
+        position: 2,
+        duration_weeks: 1,
+        name: "Build",
+      });
+      await admin.collection("paideuo_program_weeks").create({
+        block: block.id,
+        position: 1,
+        week_type: "normal",
+      });
+      await admin.collection("paideuo_program_schedules").create({
+        program: programId,
+        start_date: "2026-10-19",
+        timezone: "America/New_York",
+        source_revision: "fixture",
+        status: "active",
+      });
+      return { programId, blockId: block.id };
+    };
+    const { programId, blockId } = await createProgram(client, "Metrics program");
+    const { programId: overlap } = await createProgram(client, "Optional nutrition");
+    const { programId: otherProgram } = await createProgram(other, "Other owner's program");
+    const rest = (operation, input) => nutritionRequest(client, operation, input);
+    const create = (operation, key, data, parent = {}) =>
+      rest(operation, { operationId: key, externalId: key, data, ...parent });
+    const plan = await create(
+      "plans.create",
+      "plan",
+      { active: true, macros: { calories: 100, protein: 20, carbohydrate: 0, fat: 8 } },
+      { programId },
+    );
+    const override = (key, date, layer) =>
+      create(
+        "targets.create",
+        key,
+        { selector: { kind: "date", date }, ...layer },
+        { planId: plan.id },
+      );
+    await override("override", "2026-11-01", { macros: { calories: 200, fat: null } });
+    await override("off", "2026-10-30", { active: false });
+
+    const entry = (date, macros) => ({
+      date,
+      timezone: "America/New_York",
+      quantity: 1,
+      source: {
+        kind: "inline",
+        food: {
+          title: "Snack",
+          serving: { size: 1, unit: "bar", description: "One bar" },
+          macros,
+        },
+      },
+    });
+    const date = "2026-11-01";
+    await create("planned.create", "planned", entry(date, { calories: 80, protein: 4 }));
+    const canceled = await create("planned.create", "canceled", entry(date, { calories: 300 }));
+    await rest("planned.update", {
+      operationId: "cancel",
+      id: canceled.id,
+      data: { canceled: true },
+    });
+    const timestampEntry = entry(undefined, { calories: 100, protein: 5, carbohydrate: 0 });
+    await create("consumed.create", "logged", {
+      ...timestampEntry,
+      consumedAt: "2026-11-02T04:30:00Z",
+    });
+    await create("consumed.create", "partial-known", entry("2026-10-31", { calories: 50 }));
+    await create("consumed.create", "partial-unknown", entry("2026-10-31", { protein: 3 }));
+    const removed = await create(
+      "consumed.create",
+      "removed",
+      entry("2026-10-29", { calories: 500 }),
+    );
+    await rest("consumed.delete", { operationId: "remove", id: removed.id });
+    await nutritionRequest(other, "consumed.create", {
+      operationId: "other",
+      externalId: "other",
+      data: entry(date, { calories: 1000 }),
+    });
+    await client.send(`/api/paideuo/check-ins/${date}`, {
+      method: "PUT",
+      body: {
+        calories: 900,
+        proteinGrams: 90,
+        hunger: 2,
+        skippedMeals: 0,
+        nutritionAdequacy: "adequate",
+      },
+    });
+
+    const query = (args) => new URLSearchParams(args).toString();
+    const metrics = (args, owner = client, path = "/api/paideuo/v1/metrics") =>
+      owner.send(`${path}?${query(args)}`);
+    const weeklyArgs = { view: "weekly", program: programId, start: date };
+    const weekly = await metrics(weeklyArgs);
+    assert.deepEqual(weekly, await metrics(weeklyArgs, client, "/api/paideuo/metrics"));
+    const { foodNutrition, nutritionMeasurements, nutrition } = weekly.total;
+    assert.deepEqual(nutritionMeasurements.calories, { value: 900, count: 1 });
+    assert.deepEqual(nutritionMeasurements.proteinGrams, { value: 90, count: 1 });
+    assert.equal(nutrition.adequate, 1);
+    assert.equal(foodNutrition.days, 7);
+    assert.equal(foodNutrition.loggedDays, 2);
+    assert.equal(foodNutrition.activePlanDays, 6);
+    assert.equal(foodNutrition.plannedDays, 1);
+    const { calories, carbohydrate } = foodNutrition.macros;
+    assert.deepEqual(calories.consumed, { total: 150, average: 75, days: 2, partialDays: 1 });
+    assert.deepEqual(calories.target, { total: 700, average: 700 / 6, days: 6 });
+    assert.deepEqual(calories.attainment, { ratio: 0.5, days: 1 });
+    assert.deepEqual(calories.planDifference, { total: 20, average: 20, days: 1 });
+    assert.deepEqual(carbohydrate.attainment, { ratio: null, days: 1 });
+    assert.equal(carbohydrate.consumed.total, 0);
+    const sunday = weekly.nutritionDays.at(-1);
+    assert.equal(sunday.date, date);
+    assert.equal(sunday.target.macros.fat.value, null);
+    assert.equal(sunday.target.macros.protein.value, 20);
+    assert.equal(sunday.planned.macros.calories.subtotal, 80);
+    assert.equal(sunday.consumed.macros.calories.subtotal, 100);
+    assert.equal(weekly.nutritionDays[0].consumed.macros.calories.subtotal, null);
+    assert.equal(
+      weekly.nutritionDays.find(({ date }) => date === "2026-10-30").target.active,
+      false,
+    );
+    assert.deepEqual(weekly.periods[0].foodNutrition, foodNutrition);
+
+    const blockArgs = { view: "block", program: programId, block: blockId };
+    const block = await metrics(blockArgs);
+    assert.deepEqual(block.total.foodNutrition, foodNutrition);
+    assert.deepEqual(block.periods[0].foodNutrition, foodNutrition);
+    const program = await metrics({ view: "program", program: programId });
+    assert.equal(program.nutritionDays.length, 14);
+    assert.deepEqual(program.periods[1].foodNutrition, foodNutrition);
+
+    const noPlan = await metrics({ ...weeklyArgs, program: overlap });
+    assert.equal(noPlan.total.foodNutrition.activePlanDays, 0);
+    assert.deepEqual(noPlan.total.foodNutrition.macros.calories.consumed, calories.consumed);
+    assert.deepEqual(noPlan.total.foodNutrition.macros.calories.attainment, {
+      ratio: null,
+      days: 0,
+    });
+    const custom = await metrics({ view: "custom", start: date, end: date });
+    assert.equal(custom.nutritionDays.length, 1);
+    assert.equal(custom.total.foodNutrition.macros.calories.consumed.total, 100);
+    assert.equal(custom.total.foodNutrition.activePlanDays, 0);
+    const customArgs = { view: "custom", program: programId, start: date, end: date };
+    const filteredCustom = await metrics(customArgs);
+    assert.equal(filteredCustom.total.foodNutrition.activePlanDays, 1);
+    assert.equal(filteredCustom.total.foodNutrition.macros.calories.target.total, 200);
+    const longRange = await metrics({ view: "custom", start: "2026-01-01", end: "2026-12-31" });
+    assert.equal(longRange.nutritionDays.length, 365);
+    assert.deepEqual(longRange.total.foodNutrition.macros.calories.consumed, calories.consumed);
+    await assert.rejects(metrics({ ...weeklyArgs, program: otherProgram }), { status: 404 });
+
+    const issue = async (scopes) =>
+      (await domainRequest(client, "service-credentials/issue", { label: "Metrics test", scopes }))
+        .plaintextToken;
+    const both = await issue(["metrics:read", "nutrition:read"]);
+    const metricsOnly = await issue(["metrics:read"]);
+    const nutritionOnly = await issue(["nutrition:read"]);
+    const service = (args, token) =>
+      fetch(`${baseUrl}/api/paideuo/v1/service/metrics?${query(args)}`, {
+        headers: { Authorization: "Bearer " + token },
+      });
+    const mcp = async (args, token) =>
+      (
+        await serviceImportRequest(baseUrl, "/api/paideuo/v1/service/mcp", token, {
+          jsonrpc: "2.0",
+          id: 1,
+          method: "tools/call",
+          params: { name: "fetch_metrics", arguments: args },
+        })
+      ).result.structuredContent;
+    assert.deepEqual(await (await service(weeklyArgs, both)).json(), weekly);
+    assert.deepEqual(await mcp(weeklyArgs, both), weekly);
+    assert.deepEqual(await mcp(blockArgs, both), block);
+    assert.deepEqual(await mcp(customArgs, both), filteredCustom);
+    assert.equal((await service(weeklyArgs, nutritionOnly)).status, 403);
+    const legacy = await (await service(weeklyArgs, metricsOnly)).json();
+    assert.equal(Object.hasOwn(legacy, "nutritionDays"), false);
+    assert.equal(Object.hasOwn(legacy.total, "foodNutrition"), false);
+    assert.deepEqual(legacy.total.nutritionMeasurements, nutritionMeasurements);
+    assert.deepEqual(await mcp(weeklyArgs, metricsOnly), legacy);
   });
 });

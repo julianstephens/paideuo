@@ -26,7 +26,6 @@ type FormContext = {
   ownerId: string;
   programId?: string;
   timezone?: string;
-  canQueue: boolean;
   pending: boolean;
   onClose: () => void;
 };
@@ -36,7 +35,7 @@ type PlannedForm = {
   entry?: PlannedEntry;
   order: number;
   onSave: (change: Change) => void;
-  onQueue: (draft: DraftEntry, title: string) => void;
+  onQueue?: (draft: DraftEntry, title: string) => void;
 };
 
 type ConsumedForm = {
@@ -44,14 +43,14 @@ type ConsumedForm = {
   entry?: ConsumedEntry;
   linkedPlan?: PlannedEntry;
   onSave: (change: ConsumedChange) => void;
-  onQueue: (draft: ConsumedDraft, title: string) => void;
+  onQueue?: (draft: ConsumedDraft, title: string) => void;
 };
 
 const localTimestamp = (date: Date) =>
   new Date(date.getTime() - date.getTimezoneOffset() * 60000).toISOString().slice(0, 19);
 
 export const FoodEntryForm = (props: FormContext & (PlannedForm | ConsumedForm)) => {
-  const { entry, date, ownerId, programId, timezone, pending, canQueue, onClose } = props;
+  const { entry, date, ownerId, programId, timezone, pending, onClose } = props;
   const linked = props.kind === "consumed" ? props.linkedPlan : undefined;
   const [source, setSource] = useState<FoodSource["kind"] | "planned">(linked ? "planned" : "bank");
   const [timeError, setTimeError] = useState<string>();
@@ -79,6 +78,7 @@ export const FoodEntryForm = (props: FormContext & (PlannedForm | ConsumedForm))
 
   const submit = (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
+    if (pending) return;
     const form = new FormData(event.currentTarget);
     const field = (name: string) => String(form.get(name) ?? "").trim();
     const overrides: NonNullable<PlannedInput["overrides"]> = {};
@@ -167,12 +167,12 @@ export const FoodEntryForm = (props: FormContext & (PlannedForm | ConsumedForm))
           ...(consumedAt ? { consumedAt } : {}),
         },
       };
-      if (queue) props.onQueue(draft, title);
+      if (queue) props.onQueue?.(draft, title);
       else props.onSave({ action: "create", ...draft });
       return;
     }
     const draft = { externalId: id, data: { ...createData, order, source: chosenSource } };
-    if (queue) props.onQueue(draft, title);
+    if (queue) props.onQueue?.(draft, title);
     else props.onSave({ action: "create", ...draft });
   };
 
@@ -413,7 +413,7 @@ export const FoodEntryForm = (props: FormContext & (PlannedForm | ConsumedForm))
             <Button type="submit" colorPalette="teal" loading={pending} disabled={!canSave}>
               Save
             </Button>
-            {canQueue && !entry && (
+            {props.onQueue && !entry && (
               <Button type="submit" value="queue" variant="outline" disabled={pending || !canSave}>
                 Add to batch
               </Button>

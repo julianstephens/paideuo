@@ -1,5 +1,6 @@
 import { Button, Flex, Heading, Input, NativeSelect, Stack, Text } from "@chakra-ui/react";
 import { useMutation, useQueries, useQuery, useQueryClient } from "@tanstack/react-query";
+import { metricsKey } from "../compliance/metrics";
 import { useRef, useState } from "react";
 import { Link } from "react-router";
 import { ConfirmationDialog } from "../../components/ConfirmationDialog";
@@ -7,6 +8,8 @@ import { FormField, Notice, Panel } from "../../components/ui";
 import { errorMessage } from "../../lib/api/request";
 import { blocksApi, programKeys } from "../programs/programs";
 import type { Program } from "../programs/programs";
+import { consumedKey } from "./consumed";
+import { plannedKey } from "./planned";
 import { macroLabels, targetKey, targetMacros, targetsApi } from "./targets";
 import type { EffectiveTarget, NutritionPlan, TargetLayer, TargetSelector } from "./targets";
 
@@ -50,7 +53,15 @@ export const TargetValues = ({
   );
 };
 
-export const ProgramTargets = ({ program, ownerId }: { program: Program; ownerId: string }) => {
+export const ProgramTargets = ({
+  program,
+  ownerId,
+  date,
+}: {
+  program: Program;
+  ownerId: string;
+  date?: string;
+}) => {
   const key = targetKey(ownerId, program.id);
   const plan = useQuery({
     queryKey: [...key, "plan"],
@@ -104,7 +115,7 @@ export const ProgramTargets = ({ program, ownerId }: { program: Program; ownerId
         <Notice role="alert">{errorMessage(plan.error, "Unable to load nutrition plan.")}</Notice>
       )}
       {open && plan.isSuccess && (
-        <TargetEditor program={program} ownerId={ownerId} plan={plan.data} />
+        <TargetEditor key={date} program={program} ownerId={ownerId} plan={plan.data} date={date} />
       )}
     </Panel>
   );
@@ -114,16 +125,18 @@ const TargetEditor = ({
   program,
   ownerId,
   plan,
+  date,
 }: {
   program: Program;
   ownerId: string;
   plan: NutritionPlan | null;
+  date?: string;
 }) => {
   const key = targetKey(ownerId, program.id);
   const client = useQueryClient();
   const [layer, setLayer] = useState("program");
   const [previewDate, setPreviewDate] = useState<string>();
-  const preview = previewDate ?? program.schedule?.startDate ?? "";
+  const preview = previewDate ?? date ?? program.schedule?.startDate ?? "";
   const overrides = useQuery({
     queryKey: [...key, "overrides", plan?.id],
     queryFn: ({ signal }) => targetsApi.overrides(plan!.id, signal),
@@ -191,7 +204,12 @@ const TargetEditor = ({
           planId={plan?.id}
           weeks={weeks}
           onSaved={async (id) => {
-            await client.invalidateQueries({ queryKey: key });
+            await Promise.all([
+              client.invalidateQueries({ queryKey: key }),
+              client.invalidateQueries({ queryKey: metricsKey(ownerId) }),
+              client.invalidateQueries({ queryKey: plannedKey(ownerId) }),
+              client.invalidateQueries({ queryKey: [...consumedKey(ownerId), "summary"] }),
+            ]);
             setLayer(id ?? "program");
           }}
         />

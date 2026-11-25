@@ -1,8 +1,10 @@
+import type { NutritionDaySummary } from "../nutrition/consumed";
+import type { macroLabels } from "../nutrition/targets";
 import type { ComplianceTotals } from "./compliance";
 
 export const nutritionMetricLabels = {
-  calories: "Calories consumed",
-  proteinGrams: "Protein intake",
+  calories: "Manual check-in calories",
+  proteinGrams: "Manual check-in protein",
   mealTiming: "Meal timing",
   skippedMeals: "Skipped meals",
   morningWeightKg: "Morning body weight",
@@ -37,7 +39,25 @@ export const metricsKey = (ownerId: string) => ["metrics", ownerId] as const;
 
 type Window = { start: string; end: string };
 type RecoveryValue = { mean: number | null; count: number };
+type FoodMeasurement = { total: number | null; average: number | null; days: number };
+export type FoodNutrition = {
+  days: number;
+  loggedDays: number;
+  plannedDays: number;
+  activePlanDays: number;
+  macros: Record<
+    keyof typeof macroLabels,
+    {
+      planned: FoodMeasurement & { partialDays: number };
+      consumed: FoodMeasurement & { partialDays: number };
+      target: FoodMeasurement;
+      attainment: { ratio: number | null; days: number };
+      planDifference: FoodMeasurement;
+    }
+  >;
+};
 export type MetricsTotal = {
+  foodNutrition?: FoodNutrition | null;
   compliance: ComplianceTotals;
   load: number | null;
   measuredLoad: number;
@@ -56,6 +76,7 @@ export type MetricsReport = {
   total: MetricsTotal;
   periods: MetricsPeriod[];
   days: MetricsPeriod[];
+  nutritionDays?: (NutritionDaySummary & { foodNutrition: FoodNutrition })[];
 };
 
 export type ComparedBlock = MetricsPeriod & {

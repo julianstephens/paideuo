@@ -107,12 +107,14 @@ const tools = [
   {
     name: "fetch_metrics",
     annotations: { readOnlyHint: true, openWorldHint: false },
-    description: "Fetch metrics for an owned program or custom date window.",
+    description:
+      "Fetch metrics for an owned program or custom date window. Nutrition totals require nutrition:read for service credentials and OAuth grants.",
     inputSchema: {
       type: "object",
       properties: {
         view: { enum: ["weekly", "block", "program", "custom"] },
         program: { type: "string" },
+        block: { type: "string" },
         start: { type: "string", format: "date" },
         end: { type: "string", format: "date" },
       },
@@ -605,7 +607,6 @@ const callTool = (event, principal, name, args = {}, oauthPrincipal) => {
     requireScope(principal, "metrics:read");
     const metricEvent = {
       app: event.app,
-      auth: { id: principal.ownerId },
       request: {
         url: {
           query: () => ({
@@ -613,6 +614,7 @@ const callTool = (event, principal, name, args = {}, oauthPrincipal) => {
               ({
                 view: args.view,
                 program: args.program,
+                block: args.block,
                 start: args.start,
                 end: args.end,
               })[key] ?? null,
@@ -621,7 +623,12 @@ const callTool = (event, principal, name, args = {}, oauthPrincipal) => {
       },
       json: (status, value) => ({ status, value }),
     };
-    const result = require(__hooks + "/metrics.js").report(metricEvent);
+    const result = require(__hooks + "/metrics.js").report(metricEvent, {
+      owner: principal.ownerId,
+      includeFoodNutrition: oauthPrincipal
+        ? oauthPrincipal.scopes.has("nutrition:read")
+        : principal.type === "user" || principal.scopes.has("nutrition:read"),
+    });
     return result.status ? serviceResult(result) : result;
   }
   if (name === "list_workouts") return listWorkouts(event, principal, args);

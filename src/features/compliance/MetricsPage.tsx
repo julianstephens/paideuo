@@ -52,7 +52,7 @@ const Metrics = ({ ownerId }: { ownerId: string }) => {
   });
   const preferences = useCheckInPreferences(ownerId);
   const scheduled = programs.data?.filter(({ scheduled }) => scheduled) ?? [];
-  const program = scheduled.find(({ id }) => id === params.get("program")) ?? scheduled[0];
+  const requestedProgram = params.get("program");
   const tab = params.get("tab") ?? "";
   const requested = params.get("view") ?? tab;
   const view =
@@ -66,12 +66,16 @@ const Metrics = ({ ownerId }: { ownerId: string }) => {
   const dashboard =
     view === "weekly" || view === "block" || view === "program" || view === "custom";
   const requiresProgram = view === "block" || view === "program";
-  const allPrograms = view === "weekly" && params.get("program") === "all";
-  const needsPrograms = view !== "custom" && view !== "settings";
+  const dated = view === "weekly" || view === "custom";
+  const selectedProgram = scheduled.find(({ id }) => id === requestedProgram);
+  const program = selectedProgram ?? (dated ? undefined : scheduled[0]);
+  const programFilter = dated && requestedProgram !== "all" ? requestedProgram : program?.id;
+  const needsPrograms = view !== "settings";
   const currentWeek = monday(localToday());
-  const start = params.get("start") ?? dateKey(currentWeek);
-  const end = params.get("end") ?? dateKey(addDays(currentWeek, 6));
   const requestedWeek = parseDate(params.get("week"));
+  const reportWeek = requestedWeek ? monday(requestedWeek) : currentWeek;
+  const start = params.get("start") ?? dateKey(reportWeek);
+  const end = params.get("end") ?? dateKey(addDays(reportWeek, 6));
   const block = params.get("block") ?? "";
   const first = parseDate(start);
   const last = parseDate(end);
@@ -95,11 +99,8 @@ const Metrics = ({ ownerId }: { ownerId: string }) => {
     });
 
   const filters = new URLSearchParams({ view });
-  if (program && view !== "custom" && !allPrograms) filters.set("program", program.id);
-  if (view === "weekly") {
-    if (requestedWeek) filters.set("start", dateKey(requestedWeek));
-    else if (!program || allPrograms) filters.set("start", dateKey(currentWeek));
-  }
+  if (programFilter) filters.set("program", programFilter);
+  if (view === "weekly") filters.set("start", dateKey(reportWeek));
   if (view === "custom") {
     filters.set("start", start);
     filters.set("end", end);
@@ -114,31 +115,32 @@ const Metrics = ({ ownerId }: { ownerId: string }) => {
         ? previous
         : undefined,
     queryFn: ({ signal }) =>
-      apiRequest<MetricsReport>(`/api/paideuo/metrics?${filters}`, "GET", undefined, signal),
+      apiRequest<MetricsReport>(`/api/paideuo/v1/metrics?${filters}`, "GET", undefined, signal),
     enabled:
-      dashboard &&
-      (view === "custom" || programs.isSuccess) &&
-      (!requiresProgram || !!program) &&
-      !dateError,
+      dashboard && (dated || programs.isSuccess) && (!requiresProgram || !!program) && !dateError,
     retry: false,
   });
 
-  const programPicker = program && (
+  const programPicker = (dated || program) && (
     <FormField as="div" flex="1 1 12rem" minW="0" maxW="sm">
       <label htmlFor="metrics-program">Program</label>
       <NativeSelect.Root>
         <NativeSelect.Field
           id="metrics-program"
-          value={allPrograms ? "all" : program.id}
+          value={programFilter || "all"}
           onChange={({ target }) =>
             updateParams({
               program: target.value,
               block: null,
-              week: allPrograms || target.value === "all" ? params.get("week") : null,
             })
           }
         >
-          {view === "weekly" && <option value="all">All programs</option>}
+          {dated && <option value="all">All programs and one-off sessions</option>}
+          {dated && programFilter && !selectedProgram && (
+            <option value={programFilter}>
+              {programs.isPending ? "Loading program…" : "Selected program"}
+            </option>
+          )}
           {scheduled.map(({ id, name }) => (
             <option key={id} value={id}>
               {name}
@@ -195,18 +197,14 @@ const Metrics = ({ ownerId }: { ownerId: string }) => {
                   ))}
                 </Flex>
                 <Flex gap="3" wrap="wrap" align="end">
-                  {view !== "custom" && programPicker}
+                  {programPicker}
                   {view === "weekly" && (
                     <FormField as="div" flex="1 1 12rem" minW="0" maxW="sm">
                       <label htmlFor="metrics-week">Date within week</label>
                       <Input
                         id="metrics-week"
                         type="date"
-                        value={
-                          requestedWeek
-                            ? dateKey(requestedWeek)
-                            : (report.data?.window?.start ?? "")
-                        }
+                        value={dateKey(requestedWeek ?? currentWeek)}
                         onChange={({ target }) => updateParams({ week: target.value || null })}
                       />
                     </FormField>
@@ -281,7 +279,7 @@ const Metrics = ({ ownerId }: { ownerId: string }) => {
                   <Notice role="alert">Choose valid dates spanning at most 366 days.</Notice>
                 )}
               </Panel>
-              {((needsPrograms && programs.isPending) ||
+              {((requiresProgram && programs.isPending) ||
                 report.isLoading ||
                 report.isPlaceholderData ||
                 preferences.isPending) && <Notice role="status">Loading metrics…</Notice>}

@@ -1,13 +1,22 @@
 import { Box, Button, Dialog, Flex, Grid, Link, Portal, Stack, Text } from "@chakra-ui/react";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { metricsKey } from "../compliance/metrics";
+import { useRef, useState } from "react";
 import { Link as RouterLink } from "react-router";
 import { AppIcon } from "../../app/AppIcon";
-import type { NutritionDaySummary } from "../nutrition/consumed";
+import { Notice } from "../../components/ui";
+import { errorMessage } from "../../lib/api/request";
+import { consumedApi, consumedKey } from "../nutrition/consumed";
+import type { ConsumedChange, ConsumedEntry, NutritionDaySummary } from "../nutrition/consumed";
+import { FoodEntryForm } from "../nutrition/FoodEntryForm";
 import { macroFields } from "../nutrition/foods";
-import type { NutritionTotals } from "../nutrition/planned";
+import { nutritionOperation } from "../nutrition/operation";
+import { plannedApi, plannedKey } from "../nutrition/planned";
+import type { Change, NutritionTotals, PlannedEntry } from "../nutrition/planned";
 import type { CalendarMacroTolerance } from "../recovery/recovery";
 import { fullDate } from "./dates";
 
-const hasCalendarNutrition = (day?: NutritionDaySummary): day is NutritionDaySummary =>
+const hasCalendarNutrition = (day?: NutritionDaySummary) =>
   !!day && (day.target.active || day.planned.entryCount > 0 || day.consumed.entryCount > 0);
 
 const nutritionValues = (day: NutritionDaySummary) =>
@@ -154,19 +163,38 @@ const NutritionBar = ({
 };
 
 export const CalendarNutrition = ({
+  id,
   day,
   compact,
   today,
   tolerance,
   onOpen,
 }: {
+  id: string;
   day?: NutritionDaySummary;
   compact?: boolean;
   today: string;
   tolerance: CalendarMacroTolerance;
   onOpen: (date: string, trigger: HTMLButtonElement) => void;
 }) => {
-  if (!hasCalendarNutrition(day)) return null;
+  if (!day) return null;
+  if (!hasCalendarNutrition(day)) {
+    return compact ? null : (
+      <Button
+        id={id}
+        size="xs"
+        variant="ghost"
+        minH="44px"
+        alignSelf="start"
+        aria-label={`Add food for ${fullDate(day.date)}`}
+        aria-haspopup="dialog"
+        onClick={(event) => onOpen(day.date, event.currentTarget)}
+      >
+        Add food
+      </Button>
+    );
+  }
+  const showPlan = day.target.active || day.planned.entryCount > 0;
   const pastTolerance = day.date < today ? tolerance : undefined;
   const values = nutritionValues(day).map(({ key, label, planned, eaten }) => {
     const plan = completeAmount(planned);
@@ -187,6 +215,7 @@ export const CalendarNutrition = ({
 
   return (
     <Button
+      id={id}
       type="button"
       variant={compact ? "ghost" : "outline"}
       size="xs"
@@ -200,10 +229,10 @@ export const CalendarNutrition = ({
       maxW="full"
       css={!compact && hasChart ? { container: "nutrition-preview / inline-size" } : undefined}
       focusVisibleRing={compact ? "inside" : "outside"}
-      aria-label={`Nutrition details for ${fullDate(day.date)}. ${day.planned.entryCount} planned, ${day.consumed.entryCount} eaten.${comparisons.length ? " " + comparisons.join(". ") : ""}`}
+      aria-label={`Nutrition details for ${fullDate(day.date)}. ${showPlan ? `${day.planned.entryCount} planned, ` : ""}${day.consumed.entryCount} eaten.${comparisons.length ? " " + comparisons.join(". ") : ""}`}
       aria-haspopup="dialog"
       title={
-        hasChart
+        hasChart && day.planned.entryCount > 0
           ? "Nutrition details. Gray ticks mark planned amounts. Up arrows show past totals above plan."
           : "Nutrition details"
       }
@@ -271,9 +300,19 @@ export const CalendarNutrition = ({
   );
 };
 
+type FoodEditor =
+  | { kind: "planned"; entry?: PlannedEntry }
+  | { kind: "consumed"; entry?: ConsumedEntry; linkedPlan?: PlannedEntry };
+
+type FoodChange =
+  | { kind: "planned"; change: Change }
+  | { kind: "consumed"; change: ConsumedChange };
+
 export const CalendarNutritionDialog = ({
   day,
+  ownerId,
   programId,
+  timezone,
   today,
   tolerance,
   open,
@@ -281,21 +320,96 @@ export const CalendarNutritionDialog = ({
   trigger,
 }: {
   day: NutritionDaySummary;
+  ownerId: string;
   programId?: string;
+  timezone?: string;
   today: string;
   tolerance: CalendarMacroTolerance;
   open: boolean;
   close: () => void;
-  trigger: () => HTMLButtonElement | null;
+  trigger: () => HTMLElement | null;
 }) => {
-  const params = new URLSearchParams({ date: day.date });
+  const { date } = day;
+  const client = useQueryClient();
+  const [editor, setEditor] = useState<FoodEditor>();
+  const editorTrigger = useRef<HTMLButtonElement>(null);
+  const closeTrigger = useRef<HTMLButtonElement>(null);
+  const closeEditor = () => {
+    setEditor(undefined);
+    requestAnimationFrame(() => {
+      const button = editorTrigger.current;
+      (button?.isConnected ? button : closeTrigger.current)?.focus();
+    });
+  };
+  const planned = useQuery({
+    queryKey: [...plannedKey(ownerId), "date", date],
+    queryFn: ({ signal }) => plannedApi.list(date, signal),
+    enabled: open,
+  });
+  const eaten = useQuery({
+    queryKey: [...consumedKey(ownerId), "date", date],
+    queryFn: ({ signal }) => consumedApi.list({ date }, signal),
+    enabled: open,
+  });
+  const mutation = useMutation({
+    mutationFn: ({ change, operationId }: { change: FoodChange; operationId: string }) =>
+      change.kind === "planned"
+        ? plannedApi.mutate({ change: change.change, operationId })
+        : consumedApi.mutate({ change: change.change, operationId }),
+    onSuccess: async (_, { change }) => {
+      await Promise.all([
+        client.invalidateQueries({ queryKey: metricsKey(ownerId) }),
+        ...(change.kind === "planned"
+          ? [
+              client.invalidateQueries({ queryKey: plannedKey(ownerId) }),
+              client.invalidateQueries({ queryKey: [...consumedKey(ownerId), "summary"] }),
+            ]
+          : [client.invalidateQueries({ queryKey: consumedKey(ownerId) })]),
+      ]);
+      closeEditor();
+    },
+  });
+  const startEditor = (next: FoodEditor, button: HTMLButtonElement) => {
+    editorTrigger.current = button;
+    mutation.reset();
+    setEditor(next);
+  };
+  const save = (change: FoodChange) =>
+    mutation.mutate(nutritionOperation(change, mutation.isError ? mutation.variables : undefined));
+  const closeDialog = () => {
+    if (mutation.isPending) return;
+    setEditor(undefined);
+    mutation.reset();
+    close();
+  };
+  const formContext = {
+    date,
+    ownerId,
+    programId,
+    timezone,
+    pending: mutation.isPending,
+    onClose: () => {
+      mutation.reset();
+      closeEditor();
+    },
+  };
+  const lastPlannedEntry = planned.data?.at(-1);
+  const nextOrder = lastPlannedEntry
+    ? Math.min(1000000, (lastPlannedEntry.data.order ?? 0) + 1)
+    : 0;
+
+  const showPlan = day.target.active || day.planned.entryCount > 0;
+  const params = new URLSearchParams({ date });
   if (programId) params.set("program", programId);
 
   return (
     <Dialog.Root
       open={open}
-      onOpenChange={({ open }) => !open && close()}
+      onOpenChange={({ open }) => !open && closeDialog()}
+      closeOnEscape={!mutation.isPending}
+      closeOnInteractOutside={!mutation.isPending}
       finalFocusEl={trigger}
+      onExitComplete={() => requestAnimationFrame(() => trigger()?.focus())}
       size={{ smDown: "full", sm: "md" }}
       placement="center"
       scrollBehavior="inside"
@@ -307,53 +421,186 @@ export const CalendarNutritionDialog = ({
             <Dialog.Header>
               <Dialog.Title>Nutrition · {fullDate(day.date)}</Dialog.Title>
             </Dialog.Header>
-            <Dialog.CloseTrigger aria-label="Close nutrition details">×</Dialog.CloseTrigger>
+            <Dialog.CloseTrigger
+              ref={closeTrigger}
+              aria-label="Close nutrition details"
+              disabled={mutation.isPending}
+            >
+              ×
+            </Dialog.CloseTrigger>
             <Dialog.Body>
               <Stack gap="4">
                 <Text fontSize="sm" color="fg.muted">
-                  {day.planned.entryCount} planned · {day.consumed.entryCount} eaten
+                  {showPlan && `${day.planned.entryCount} planned · `}
+                  {day.consumed.entryCount} eaten
                 </Text>
-                <Text fontSize="xs" color="fg.muted">
-                  Bars show eaten amounts. Gray ticks mark planned amounts and dashed ticks mark
-                  targets.
-                </Text>
-                {nutritionValues(day).map(({ key, label, unit, planned, eaten, target }) => {
-                  const plan = completeAmount(planned);
-                  const actual = completeAmount(eaten);
-                  const pastTolerance = day.date < today ? tolerance : undefined;
-                  const status = adherence(plan, actual, pastTolerance);
-                  return (
-                    <Stack key={key} as="section" aria-label={label} gap="2">
-                      <Text fontWeight="semibold">
-                        {label} ({unit})
-                      </Text>
-                      <NutritionBar
-                        planned={plan}
-                        eaten={actual}
-                        target={target}
-                        status={status}
-                        tolerance={pastTolerance}
-                      />
-                      <Flex gapX="4" gapY="1" wrap="wrap" fontSize="sm">
-                        <Text>Planned {formatAmount(planned)}</Text>
-                        <Text>
-                          Eaten{" "}
-                          <Text as="span" color={status?.text}>
-                            {formatAmount(eaten)}
+                {hasCalendarNutrition(day) && (
+                  <Text fontSize="xs" color="fg.muted">
+                    Bars show eaten amounts.
+                    {showPlan && " Gray ticks mark planned amounts."}
+                    {day.target.active && " Dashed ticks mark targets."}
+                  </Text>
+                )}
+                {hasCalendarNutrition(day) &&
+                  nutritionValues(day).map(({ key, label, unit, planned, eaten, target }) => {
+                    const plan = completeAmount(planned);
+                    const actual = completeAmount(eaten);
+                    const pastTolerance = day.date < today ? tolerance : undefined;
+                    const status = adherence(plan, actual, pastTolerance);
+                    return (
+                      <Stack key={key} as="section" aria-label={label} gap="2">
+                        <Text fontWeight="semibold">
+                          {label} ({unit})
+                        </Text>
+                        <NutritionBar
+                          planned={plan}
+                          eaten={actual}
+                          target={target}
+                          status={status}
+                          tolerance={pastTolerance}
+                        />
+                        <Flex gapX="4" gapY="1" wrap="wrap" fontSize="sm">
+                          {showPlan && <Text>Planned {formatAmount(planned)}</Text>}
+                          <Text>
+                            Eaten{" "}
+                            <Text as="span" color={status?.text}>
+                              {formatAmount(eaten)}
+                            </Text>
                           </Text>
-                        </Text>
-                        {target != null && <Text>Target {target}</Text>}
+                          {target != null && <Text>Target {target}</Text>}
+                        </Flex>
+                        {status && (
+                          <Text fontSize="xs" color="fg.muted">
+                            {isAbovePlan(plan, actual)
+                              ? `Above plan · ${status.label}`
+                              : status.label}
+                          </Text>
+                        )}
+                      </Stack>
+                    );
+                  })}
+                <Stack as="section" aria-label="Planned foods" gap="2">
+                  <Flex justify="space-between" align="center" wrap="wrap" gap="2">
+                    <Text as="h3" fontWeight="semibold">
+                      Planned
+                    </Text>
+                    <Button
+                      size="sm"
+                      disabled={!!editor || !planned.isSuccess}
+                      onClick={(event) => startEditor({ kind: "planned" }, event.currentTarget)}
+                    >
+                      Add planned food
+                    </Button>
+                  </Flex>
+                  {planned.isPending && <Text role="status">Loading planned foods…</Text>}
+                  {planned.isError && (
+                    <Notice role="alert">
+                      {errorMessage(planned.error, "Unable to load planned foods.")}
+                    </Notice>
+                  )}
+                  {planned.data?.length === 0 && <Text color="fg.muted">No food scheduled.</Text>}
+                  {planned.data?.map((entry) => (
+                    <Flex key={entry.id} justify="space-between" align="start" wrap="wrap" gap="2">
+                      <CalendarFoodLabel
+                        entry={entry}
+                        detail={entry.data.canceled ? "Canceled" : undefined}
+                      />
+                      <Flex wrap="wrap" gap="1">
+                        <Button
+                          size="sm"
+                          variant="outline"
+                          aria-label={`Log eaten portion of ${entry.data.snapshot.title}`}
+                          disabled={!!editor || entry.data.canceled}
+                          onClick={(event) =>
+                            startEditor(
+                              { kind: "consumed", linkedPlan: entry },
+                              event.currentTarget,
+                            )
+                          }
+                        >
+                          Log eaten
+                        </Button>
+                        <Button
+                          size="sm"
+                          variant="ghost"
+                          aria-label={`Edit planned ${entry.data.snapshot.title}`}
+                          disabled={!!editor}
+                          onClick={(event) =>
+                            startEditor({ kind: "planned", entry }, event.currentTarget)
+                          }
+                        >
+                          Edit
+                        </Button>
                       </Flex>
-                      {status && (
-                        <Text fontSize="xs" color="fg.muted">
-                          {isAbovePlan(plan, actual)
-                            ? `Above plan · ${status.label}`
-                            : status.label}
-                        </Text>
-                      )}
-                    </Stack>
-                  );
-                })}
+                    </Flex>
+                  ))}
+                </Stack>
+                <Stack as="section" aria-label="Eaten foods" gap="2">
+                  <Flex justify="space-between" align="center" wrap="wrap" gap="2">
+                    <Text as="h3" fontWeight="semibold">
+                      Eaten
+                    </Text>
+                    <Button
+                      size="sm"
+                      disabled={!!editor}
+                      onClick={(event) => startEditor({ kind: "consumed" }, event.currentTarget)}
+                    >
+                      Log food
+                    </Button>
+                  </Flex>
+                  {eaten.isPending && <Text role="status">Loading eaten foods…</Text>}
+                  {eaten.isError && (
+                    <Notice role="alert">
+                      {errorMessage(eaten.error, "Unable to load eaten foods.")}
+                    </Notice>
+                  )}
+                  {eaten.data?.length === 0 && <Text color="fg.muted">No food logged.</Text>}
+                  {eaten.data?.map((entry) => (
+                    <Flex key={entry.id} justify="space-between" align="start" wrap="wrap" gap="2">
+                      <CalendarFoodLabel
+                        entry={entry}
+                        detail={
+                          entry.data.plannedId &&
+                          (entry.data.source.kind === "planned" ? "Linked to plan" : "Substitution")
+                        }
+                      />
+                      <Button
+                        size="sm"
+                        variant="ghost"
+                        aria-label={`Edit eaten ${entry.data.snapshot.title}`}
+                        disabled={!!editor}
+                        onClick={(event) =>
+                          startEditor({ kind: "consumed", entry }, event.currentTarget)
+                        }
+                      >
+                        Edit
+                      </Button>
+                    </Flex>
+                  ))}
+                </Stack>
+                {mutation.isError && (
+                  <Notice role="alert">
+                    {errorMessage(mutation.error, "Unable to save food. Try again.")}
+                  </Notice>
+                )}
+                {editor?.kind === "planned" && (
+                  <FoodEntryForm
+                    {...formContext}
+                    kind="planned"
+                    entry={editor.entry}
+                    order={nextOrder}
+                    onSave={(change) => save({ kind: "planned", change })}
+                  />
+                )}
+                {editor?.kind === "consumed" && (
+                  <FoodEntryForm
+                    {...formContext}
+                    kind="consumed"
+                    entry={editor.entry}
+                    linkedPlan={editor.linkedPlan}
+                    onSave={(change) => save({ kind: "consumed", change })}
+                  />
+                )}
               </Stack>
             </Dialog.Body>
             <Dialog.Footer justifyContent="start">
@@ -373,3 +620,20 @@ export const CalendarNutritionDialog = ({
     </Dialog.Root>
   );
 };
+
+const CalendarFoodLabel = ({
+  entry: { data },
+  detail,
+}: {
+  entry: PlannedEntry | ConsumedEntry;
+  detail?: string;
+}) => (
+  <Stack gap="0">
+    <Text fontWeight="medium">{data.snapshot.title}</Text>
+    <Text fontSize="sm" color="fg.muted">
+      {[data.meal, data.quantity + " × " + data.snapshot.serving.description, detail]
+        .filter(Boolean)
+        .join(" · ")}
+    </Text>
+  </Stack>
+);

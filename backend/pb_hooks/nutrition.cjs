@@ -426,12 +426,9 @@ const entriesByDate = (db, kind, owner, start, end) => {
   return grouped;
 };
 
-const summarizeRange = (db, owner, { startDate, endDate, programId }) => {
+const readDailyNutrition = (db, owner, { startDate, endDate, programId }) => {
   const start = civilDate(startDate).getTime();
   const end = civilDate(endDate).getTime();
-  if (end < start || end - start >= maxTargetDays * dayMilliseconds) {
-    throw new BadRequestError("Provide an ordered range of up to " + maxTargetDays + " days.");
-  }
   const context = targetContext(db, owner, programId);
   const planned = entriesByDate(db, "planned", owner, startDate, endDate);
   const consumed = entriesByDate(db, "consumed", owner, startDate, endDate);
@@ -447,6 +444,16 @@ const summarizeRange = (db, owner, { startDate, endDate, programId }) => {
     });
   }
   return { days };
+};
+
+const summarizeRange = (db, owner, input) => {
+  const { startDate, endDate } = input;
+  const start = civilDate(startDate).getTime();
+  const end = civilDate(endDate).getTime();
+  if (end < start || end - start >= maxTargetDays * dayMilliseconds) {
+    throw new BadRequestError("Provide an ordered range of up to " + maxTargetDays + " days.");
+  }
+  return readDailyNutrition(db, owner, input);
 };
 
 const shiftDay = (date, offset) => {
@@ -705,4 +712,4 @@ const execute = (app, principal, operation, input) => {
   return result;
 };
 
-module.exports = { execute };
+module.exports = { execute, readDailyNutrition };

@@ -1,5 +1,6 @@
 import { Button, Flex, Heading, Input, NativeSelect, Stack, Text } from "@chakra-ui/react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { metricsKey } from "../compliance/metrics";
 import { useRef, useState } from "react";
 import type { FormEvent } from "react";
 import { Link, useSearchParams } from "react-router";
@@ -20,9 +21,11 @@ import { programKeys, programsApi } from "../programs/programs";
 import { consumedKey } from "./consumed";
 import { ConsumedDay, LinkedPortions } from "./ConsumedDay";
 import type { LogEditor } from "./ConsumedDay";
-import { plannedApi } from "./planned";
+import { ProgramTargets } from "./ProgramTargets";
+import { plannedApi, plannedKey } from "./planned";
 import type { Change, DraftEntry, PlannedBatch, PlannedEntry } from "./planned";
 import { FoodEntryForm } from "./FoodEntryForm";
+import { nutritionOperation } from "./operation";
 
 type CopySource =
   | { kind: "copy"; entry: PlannedEntry }
@@ -46,7 +49,7 @@ const Planner = ({ ownerId }: { ownerId: string }) => {
   const dayKey = dateKey(date);
   const startDate = dateKey(start);
   const endDate = dateKey(addDays(start, 6));
-  const key = ["nutrition", "planner", ownerId];
+  const key = plannedKey(ownerId);
   const client = useQueryClient();
   const [editor, setEditor] = useState<"add" | PlannedEntry>();
   const [logEditor, setLogEditor] = useState<LogEditor>();
@@ -80,18 +83,14 @@ const Planner = ({ ownerId }: { ownerId: string }) => {
       setCopy(undefined);
       await Promise.all([
         client.invalidateQueries({ queryKey: key }),
+        client.invalidateQueries({ queryKey: metricsKey(ownerId) }),
         client.invalidateQueries({ queryKey: [...consumedKey(ownerId), "summary"] }),
       ]);
     },
   });
   const save = (change: Change) => {
-    const previous = mutation.variables;
     setNotice(undefined);
-    mutation.mutate(
-      mutation.isError && previous && JSON.stringify(previous.change) === JSON.stringify(change)
-        ? previous
-        : { change, operationId: crypto.randomUUID() },
-    );
+    mutation.mutate(nutritionOperation(change, mutation.isError ? mutation.variables : undefined));
   };
   const navigate = (next: Date, program = programId ?? "") => {
     setEditor(undefined);
@@ -125,6 +124,11 @@ const Planner = ({ ownerId }: { ownerId: string }) => {
 
   const day = week.data?.days.find(({ date }) => date === dayKey);
   const selectedProgram = programs.data?.find(({ id }) => id === programId);
+  const program = useQuery({
+    queryKey: programKeys.detail(ownerId, programId ?? ""),
+    queryFn: ({ signal }) => programsApi.get(programId!, signal),
+    enabled: !!selectedProgram,
+  });
   const timezone = selectedProgram?.scheduled
     ? undefined
     : Intl.DateTimeFormat().resolvedOptions().timeZone;
@@ -218,6 +222,22 @@ const Planner = ({ ownerId }: { ownerId: string }) => {
           ))}
         </Flex>
       </Panel>
+      {program.fetchStatus === "fetching" && program.isPending && (
+        <Notice role="status">Loading program targets…</Notice>
+      )}
+      {program.isError && selectedProgram && (
+        <Notice role="alert">
+          {errorMessage(program.error, "Unable to load program targets.")}
+        </Notice>
+      )}
+      {program.data && selectedProgram && (
+        <ProgramTargets
+          key={program.data.id}
+          program={program.data}
+          ownerId={ownerId}
+          date={dayKey}
+        />
+      )}
       {week.isPending && <Notice role="status">Loading planned foods…</Notice>}
       {week.isError && (
         <Notice role="alert">{errorMessage(week.error, "Unable to load the week.")}</Notice>
@@ -345,18 +365,21 @@ const Planner = ({ ownerId }: { ownerId: string }) => {
           ownerId={ownerId}
           programId={programId}
           timezone={timezone}
-          canQueue={queue.length < 100}
           pending={mutation.isPending}
           onSave={save}
           onClose={() => {
             mutation.reset();
             setEditor(undefined);
           }}
-          onQueue={(draft, title) => {
-            mutation.reset();
-            setQueue([...queue, { draft, title }]);
-            setEditor(undefined);
-          }}
+          onQueue={
+            queue.length < 100
+              ? (draft, title) => {
+                  mutation.reset();
+                  setQueue([...queue, { draft, title }]);
+                  setEditor(undefined);
+                }
+              : undefined
+          }
         />
       )}
       {queue.length > 0 && (
@@ -417,7 +440,12 @@ const Planner = ({ ownerId }: { ownerId: string }) => {
                   name="destination"
                   type="date"
                   defaultValue={dateKey(
-                    addDays(date, copy.kind === "copy" || copy.startDate === copy.endDate ? 1 : 7),
+                    copy.kind === "copy"
+                      ? addDays(date, 1)
+                      : addDays(
+                          parseDate(copy.startDate) ?? date,
+                          copy.startDate === copy.endDate ? 1 : 7,
+                        ),
                   )}
                   required
                 />
