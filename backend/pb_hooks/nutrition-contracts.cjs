@@ -49,6 +49,21 @@ const recipe = object(
   },
   ["ingredients"],
 );
+const measuredIngredient = object(ingredient.properties, ["name", "quantity", "unit"]);
+const unmeasuredIngredient = object(
+  { name: ingredient.properties.name, prep: ingredient.properties.prep },
+  ["name"],
+);
+const recipeInput = object(
+  {
+    ...recipe.properties,
+    ingredients: {
+      ...recipe.properties.ingredients,
+      items: { anyOf: [measuredIngredient, unmeasuredIngredient] },
+    },
+  },
+  ["ingredients"],
+);
 const targetFields = { active: boolean, macros: overrides };
 const plan = object(targetFields);
 const selector = {
@@ -192,8 +207,8 @@ const define = (name, scope, inputSchema, outputSchema) => {
 };
 for (const [entityName, create, edit, parent, deletable] of [
   ["foods", food, food],
-  ["recipes", recipe, recipe, "foodId", true],
-  ["plans", plan, plan, "programId"],
+  ["recipes", recipeInput, recipeInput, "foodId", true],
+  ["plans", plan, plan, "programId", true],
   ["targets", target, plan, "planId", true],
   ["planned", planned, plannedEdit, undefined, true],
   ["consumed", consumed, consumedEdit, undefined, true],
@@ -276,16 +291,59 @@ define(
   resultSchemas.foods,
 );
 
-const foodDescriptions = {
+define(
+  "recipes.for_entry",
+  "read",
+  object({ entryKind: enumOf("planned", "consumed"), entryId: id }, ["entryKind", "entryId"]),
+  object({ recipe: nullable(resultSchemas.recipes) }, ["recipe"]),
+);
+
+const maxTargetDays = 62;
+const publishedDescriptions = {
+  "plans.list": "List owned nutrition plans, optionally for a specific program.",
+  "plans.get": "Get an owned program nutrition plan.",
+  "plans.create": "Create a nutrition plan for an owned program.",
+  "plans.update": "Replace a program's default nutrition target layer.",
+  "plans.delete": "Remove a program nutrition plan and its overrides.",
+  "targets.list": "List owned target overrides, optionally for a specific plan.",
+  "targets.get": "Get an owned nutrition target override.",
+  "targets.create": "Create a block, week, weekday, or exact-date target override.",
+  "targets.update": "Replace an owned target override's activation and macros.",
+  "targets.delete": "Remove an owned target override.",
+  "targets.resolve": "Resolve a program's nutrition targets on a civil date.",
+  "targets.resolve_bulk":
+    "Resolve daily nutrition targets for an inclusive range of up to 62 days.",
   "foods.list": "List owned foods with search, category, status, and pagination filters.",
   "foods.get": "Get an owned food by ID, including archived foods.",
   "foods.create": "Create a food with manual per-serving macro estimates.",
   "foods.update": "Edit an owned food and its per-serving estimates.",
   "foods.duplicate": "Copy an owned food into a new active item without its recipe.",
   "foods.set_archive": "Archive or restore an owned food.",
+  "recipes.list": "List owned recipes, optionally for a specific food.",
+  "recipes.get": "Get an owned recipe by ID.",
+  "recipes.create": "Attach an ordered recipe to an owned food.",
+  "recipes.update": "Replace the ingredients, instructions, and portions of an owned recipe.",
+  "recipes.delete": "Remove a recipe attachment from an owned food.",
+  "recipes.for_entry":
+    "Get the current recipe associated with an owned planned or consumed food entry.",
 };
 
 define("targets.resolve", "read", object({ date, programId: id }, ["date", "programId"]), targets);
+define(
+  "targets.resolve_bulk",
+  "read",
+  object({ programId: id, startDate: date, endDate: date }, ["programId", "startDate", "endDate"]),
+  object(
+    {
+      days: {
+        type: "array",
+        items: object({ date, target: targets }, ["date", "target"]),
+        maxItems: maxTargetDays,
+      },
+    },
+    ["days"],
+  ),
+);
 define(
   "days.summary",
   "read",
@@ -367,7 +425,7 @@ const mcpContract = (name) => {
   return (
     contract && {
       name: "nutrition_" + name.replace(".", "_"),
-      ...(foodDescriptions[name] ? { description: foodDescriptions[name] } : {}),
+      ...(publishedDescriptions[name] ? { description: publishedDescriptions[name] } : {}),
       annotations: { readOnlyHint: contract.scope === "nutrition:read" },
       inputSchema: contract.inputSchema,
       outputSchema: contract.outputSchema,
@@ -375,18 +433,20 @@ const mcpContract = (name) => {
   );
 };
 
-const foodToolScopes = new Map(
-  Object.keys(foodDescriptions).map((operation) => [
+const publishedToolScopes = new Map(
+  Object.keys(publishedDescriptions).map((operation) => [
     mcpContract(operation).name,
     operations[operation].scope,
   ]),
 );
 module.exports = {
   macroKeys,
+  maxTargetDays,
   matches,
   operations,
   contractFor,
   restContract,
   mcpContract,
-  foodToolScopes,
+  publishedToolScopes,
+  publishedOperations: Object.keys(publishedDescriptions),
 };

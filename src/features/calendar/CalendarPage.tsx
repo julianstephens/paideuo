@@ -20,13 +20,16 @@ import { ClientResponseError } from "pocketbase";
 import { useEffect, useRef, useState } from "react";
 import { Link as RouterLink, useSearchParams } from "react-router";
 import { AppIcon } from "../../app/AppIcon";
+import { ConfirmationDialog } from "../../components/ConfirmationDialog";
 import { Disclosure, FormField, Notice, PageHeader, Panel } from "../../components/ui";
 import { errorMessage } from "../../lib/api/request";
 import { CalendarCompliance } from "../compliance/CalendarCompliance";
 import { formatPlannedDuration, formatPlannedRpe } from "../prescriptions/format";
 import { metricsKey } from "../compliance/metrics";
 import { useSession } from "../auth/session";
-import { programKeys } from "../programs/programs";
+import { programKeys, programsApi } from "../programs/programs";
+import { TargetValues } from "../nutrition/ProgramTargets";
+import { targetKey, targetsApi } from "../nutrition/targets";
 import { CheckInDialog } from "../recovery/CheckInDialog";
 import { checkInApi, checkInKey, checkInSections, hasCheckInResponse } from "../recovery/recovery";
 import type { CheckInSection } from "../recovery/recovery";
@@ -132,6 +135,25 @@ const Calendar = ({ ownerId }: { ownerId: string }) => {
   const start = dateKey(first);
   const end = dateKey(last);
   const queryClient = useQueryClient();
+  const targetProgramId = params.get("program") ?? "";
+  const targetProgram = useQuery({
+    queryKey: programKeys.detail(ownerId, targetProgramId),
+    queryFn: ({ signal }) => programsApi.get(targetProgramId, signal),
+    enabled: !!targetProgramId,
+    retry: false,
+  });
+  const targets = useQuery({
+    queryKey: [...targetKey(ownerId, targetProgramId), "calendar", start, end],
+    queryFn: ({ signal }) => targetsApi.bulk(targetProgramId, start, end, signal),
+    enabled: !!targetProgramId,
+    retry: false,
+  });
+  const targetsByDate = new Map(targets.data?.days.map(({ date, target }) => [date, target]));
+  const clearTargetProgram = () => {
+    const next = new URLSearchParams(params);
+    next.delete("program");
+    setParams(next);
+  };
   const queryKey = [...calendarKey(ownerId), start, end] as const;
   const query = useQuery({
     queryKey,
@@ -199,7 +221,9 @@ const Calendar = ({ ownerId }: { ownerId: string }) => {
   const navigate = (nextDate: Date, nextView: View) => {
     setCheckIn(undefined);
     setWorkoutDate(undefined);
-    setParams({ date: dateKey(nextDate), view: nextView });
+    const next = new URLSearchParams({ date: dateKey(nextDate), view: nextView });
+    if (targetProgramId) next.set("program", targetProgramId);
+    setParams(next);
   };
   const move = (direction: number) =>
     navigate(view === "month" ? monthStart(date, direction) : addDays(date, direction * 7), view);
@@ -214,6 +238,26 @@ const Calendar = ({ ownerId }: { ownerId: string }) => {
   return (
     <Stack gap={{ base: "4", md: "5" }}>
       <PageHeader title="Calendar" />
+      {targetProgramId && (
+        <Flex align="center" gap="2" wrap="wrap">
+          {targetProgram.data && (
+            <Link asChild variant="underline">
+              <RouterLink to={`/programs/${targetProgramId}`}>
+                {targetProgram.data.name} nutrition targets
+              </RouterLink>
+            </Link>
+          )}
+          {targets.isFetching && <Text role="status">Loading nutrition targets…</Text>}
+          {targets.isError && (
+            <Notice role="alert">
+              {errorMessage(targets.error, "Unable to load nutrition targets.")}
+            </Notice>
+          )}
+          <Button variant="ghost" size="sm" onClick={clearTargetProgram}>
+            Hide nutrition targets
+          </Button>
+        </Flex>
+      )}
       {query.isSuccess && start <= todayKey && todayKey <= end && (
         <Panel as="section" gap="3">
           <Flex justify="space-between" align="baseline" gap="2" wrap="wrap">
@@ -531,6 +575,7 @@ const Calendar = ({ ownerId }: { ownerId: string }) => {
                       +{extraSessions} more
                     </Button>
                   )}
+                  <TargetValues target={targetsByDate.get(key)} />
                   <Flex gap="1" wrap="wrap" mt="auto">
                     {checkInButtons(key)}
                     {addWorkoutButton(key)}
@@ -548,6 +593,7 @@ const Calendar = ({ ownerId }: { ownerId: string }) => {
           </Heading>
           {query.isSuccess && !byDay.has(dateKey(date)) && <Text>No sessions scheduled.</Text>}
           <SessionButtons sessions={byDay.get(dateKey(date)) ?? []} select={selectSession} />
+          <TargetValues target={targetsByDate.get(dateKey(date))} />
           <Flex gap="2" wrap="wrap">
             {checkInButtons(dateKey(date))}
             {addWorkoutButton(dateKey(date))}
@@ -708,6 +754,8 @@ const SessionDetail = ({
   const { prescription } = session;
   const [moveDate, setMoveDate] = useState<string>();
   const [editing, setEditing] = useState<CalendarSession>();
+  const [confirmDelete, setConfirmDelete] = useState(false);
+  const actionsTrigger = useRef<HTMLButtonElement>(null);
   const past = session.scheduledDate < todayInTimezone(session.timezone);
   const [completionRevision, setCompletionRevision] = useState<string | undefined>(() =>
     startLogging && session.status !== "rest" ? session.revision : undefined,
@@ -770,16 +818,6 @@ const SessionDetail = ({
       }
     },
   });
-  const confirmDelete = () => {
-    const details = session.completion ? " This also deletes its completion details." : "";
-    if (
-      window.confirm(
-        `Delete “${prescription.title}” on ${fullDate(session.scheduledDate)}?${details}`,
-      )
-    ) {
-      remove.mutate();
-    }
-  };
   const busy = move.isPending || execute.isPending || reloadSession.isPending || remove.isPending;
 
   const screen =
@@ -1072,7 +1110,7 @@ const SessionDetail = ({
                 )}
                 <Menu.Root positioning={{ placement: "top-end", strategy: "fixed" }}>
                   <Menu.Trigger asChild>
-                    <Button variant="ghost" disabled={busy}>
+                    <Button ref={actionsTrigger} variant="ghost" disabled={busy}>
                       More actions
                     </Button>
                   </Menu.Trigger>
@@ -1113,13 +1151,28 @@ const SessionDetail = ({
                           </RouterLink>
                         </Menu.Item>
                       )}
-                      <Menu.Item value="delete" color="fg.error" onSelect={confirmDelete}>
+                      <Menu.Item
+                        value="delete"
+                        color="fg.error"
+                        onSelect={() => setConfirmDelete(true)}
+                      >
                         Delete workout
                       </Menu.Item>
                     </Menu.Content>
                   </Menu.Positioner>
                 </Menu.Root>
               </Dialog.Footer>
+            )}
+            {confirmDelete && (
+              <ConfirmationDialog
+                title="Delete workout?"
+                description={`Delete “${prescription.title}” on ${fullDate(session.scheduledDate)}?${session.completion ? " This also deletes its completion details." : ""}`}
+                confirmLabel="Delete workout"
+                destructive
+                returnFocus={() => actionsTrigger.current}
+                onDismiss={() => setConfirmDelete(false)}
+                onConfirm={() => remove.mutate()}
+              />
             )}
           </Dialog.Content>
         </Dialog.Positioner>

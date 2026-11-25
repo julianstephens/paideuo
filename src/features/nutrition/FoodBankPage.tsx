@@ -11,9 +11,12 @@ import {
 } from "@chakra-ui/react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useState } from "react";
+import { Link as RouterLink } from "react-router";
+import { foodRecipePath } from "./recipes";
 import { FormField, Notice, PageHeader, Panel } from "../../components/ui";
 import { errorMessage } from "../../lib/api/request";
 import { useSession } from "../auth/session";
+import { foodCategoriesKey, useFoodCategories } from "./foodCategories";
 import { FoodForm } from "./FoodForm";
 import { foodQueryKey, foodsApi, macroFields } from "./foods";
 import type { Food, FoodChange, FoodFilters } from "./foods";
@@ -28,15 +31,22 @@ export const FoodBankPage = () => {
 
 const FoodBank = ({ ownerId }: { ownerId: string }) => {
   const [editor, setEditor] = useState<ComponentProps<typeof FoodForm>["editor"]>();
-  const [filters, setFilters] = useState<FoodFilters>({
+  const [requestedFilters, setFilters] = useState<FoodFilters>({
     search: "",
     category: "",
     status: "active",
   });
   const [pages, setPages] = useState<string[]>([]);
-  const after = pages.at(-1);
   const queryClient = useQueryClient();
   const queryKey = foodQueryKey(ownerId);
+  const categories = useFoodCategories(ownerId);
+  const categoryIsAvailable =
+    !requestedFilters.category ||
+    !categories.data ||
+    categories.data.categories.includes(requestedFilters.category) ||
+    categories.data.previousCategories.includes(requestedFilters.category);
+  const filters = categoryIsAvailable ? requestedFilters : { ...requestedFilters, category: "" };
+  const after = categoryIsAvailable ? pages.at(-1) : undefined;
   const foods = useQuery({
     queryKey: [...queryKey, filters, after],
     queryFn: ({ signal }) => foodsApi.list(filters, after, signal),
@@ -46,7 +56,10 @@ const FoodBank = ({ ownerId }: { ownerId: string }) => {
     onSuccess: async () => {
       setEditor(undefined);
       setPages([]);
-      await queryClient.invalidateQueries({ queryKey });
+      await Promise.all([
+        queryClient.invalidateQueries({ queryKey }),
+        queryClient.invalidateQueries({ queryKey: foodCategoriesKey(ownerId) }),
+      ]);
     },
   });
   const save = (change: FoodChange) => {
@@ -86,19 +99,32 @@ const FoodBank = ({ ownerId }: { ownerId: string }) => {
       <PageHeader
         title="Food bank"
         action={
-          <Button disabled={locked} onClick={() => startEdit({ action: "create" })}>
+          <Button
+            disabled={locked || !categories.data}
+            onClick={() => startEdit({ action: "create" })}
+          >
             Add food
           </Button>
         }
       />
       {editor && (
         <FoodForm
+          ownerId={ownerId}
           editor={editor}
+          categories={categories.data?.categories ?? []}
           pending={mutation.isPending}
           error={failure}
           close={() => startEdit(undefined)}
           save={save}
         />
+      )}
+      {categories.isError && (
+        <Notice role="alert">
+          {errorMessage(categories.error, "Unable to load food categories.")}
+          <Button size="sm" variant="ghost" onClick={() => void categories.refetch()}>
+            Retry
+          </Button>
+        </Notice>
       )}
       {!editor && failure && <Notice role="alert">{failure}</Notice>}
       <SimpleGrid columns={{ base: 1, md: 3 }} gap="3">
@@ -113,11 +139,29 @@ const FoodBank = ({ ownerId }: { ownerId: string }) => {
         </FormField>
         <FormField>
           Category
-          <Input
-            maxLength={100}
-            value={filters.category}
-            onChange={(event) => filter({ category: event.target.value })}
-          />
+          <NativeSelect.Root disabled={!categories.data}>
+            <NativeSelect.Field
+              value={filters.category}
+              onChange={(event) => filter({ category: event.target.value })}
+            >
+              <option value="">All categories</option>
+              {categories.data?.categories.map((category) => (
+                <option key={category} value={category}>
+                  {category}
+                </option>
+              ))}
+              {categories.data?.previousCategories.length ? (
+                <optgroup label="Previously assigned">
+                  {categories.data.previousCategories.map((category) => (
+                    <option key={category} value={category}>
+                      {category}
+                    </option>
+                  ))}
+                </optgroup>
+              ) : null}
+            </NativeSelect.Field>
+            <NativeSelect.Indicator />
+          </NativeSelect.Root>
         </FormField>
         <FormField>
           Status
@@ -151,7 +195,7 @@ const FoodBank = ({ ownerId }: { ownerId: string }) => {
           <FoodCard
             key={food.id}
             food={food}
-            locked={locked}
+            locked={locked || !categories.data}
             edit={() => startEdit({ action: "update", food })}
             duplicate={() => startEdit({ action: "duplicate", food })}
             archive={() =>
@@ -160,13 +204,9 @@ const FoodBank = ({ ownerId }: { ownerId: string }) => {
           />
         ))}
       </SimpleGrid>
-      {(pages.length > 0 || foods.data?.next) && (
+      {(after || foods.data?.next) && (
         <Flex gap="2">
-          <Button
-            variant="outline"
-            disabled={pages.length === 0}
-            onClick={() => setPages(pages.slice(0, -1))}
-          >
+          <Button variant="outline" disabled={!after} onClick={() => setPages(pages.slice(0, -1))}>
             Previous
           </Button>
           <Button
@@ -174,7 +214,10 @@ const FoodBank = ({ ownerId }: { ownerId: string }) => {
             disabled={!foods.data?.next}
             onClick={() => {
               const next = foods.data?.next;
-              if (next) setPages([...pages, next]);
+              if (next) {
+                if (!categoryIsAvailable) setFilters(filters);
+                setPages([...(categoryIsAvailable ? pages : []), next]);
+              }
             }}
           >
             Next
@@ -186,7 +229,7 @@ const FoodBank = ({ ownerId }: { ownerId: string }) => {
 };
 
 const FoodCard = ({
-  food: { data },
+  food: { id, data },
   locked,
   edit,
   duplicate,
@@ -215,6 +258,9 @@ const FoodCard = ({
       <Text>{estimates.length ? estimates.join(" · ") : "No macro estimates"}</Text>
       {data.notes && <Text color="fg.muted">{data.notes}</Text>}
       <Flex gap="2" wrap="wrap" mt="auto">
+        <Button variant="outline" size="sm" asChild>
+          <RouterLink to={foodRecipePath(id)}>Recipe</RouterLink>
+        </Button>
         <Button variant="outline" size="sm" disabled={locked} onClick={edit}>
           Edit
         </Button>

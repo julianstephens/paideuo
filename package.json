@@ -12,7 +12,8 @@
     "test": "node --test backend/pb_hooks/*.test.cjs",
     "fmt": "oxfmt",
     "fmt:check": "oxfmt --check",
-    "seed:program": "node --env-file-if-exists=.env scripts/seed-program.mjs"
+    "seed:program": "node --env-file-if-exists=.env scripts/seed-program.mjs",
+    "seed:food-bank": "node --env-file-if-exists=.env scripts/seed-food-bank.mjs"
   },
   "dependencies": {
     "@chakra-ui/charts": "^3.38.0",

@@ -3037,6 +3037,17 @@
         "required": false,
         "system": false,
         "type": "json"
+      },
+      {
+        "help": "",
+        "hidden": false,
+        "id": "json1572271817",
+        "maxSize": 32768,
+        "name": "food_categories",
+        "presentable": false,
+        "required": false,
+        "system": false,
+        "type": "json"
       }
     ],
     "indexes": [
@@ -3506,5 +3517,78 @@
       "CREATE UNIQUE INDEX idx_paideuo_result_session_component ON paideuo_workout_component_results (session, component_key)"
     ],
     "system": false
+  },
+  {
+    "createRule": null,
+    "deleteRule": null,
+    "fields": [
+      {
+        "autogeneratePattern": "[a-z0-9]{15}",
+        "help": "",
+        "hidden": false,
+        "id": "text3208210256",
+        "max": 15,
+        "min": 15,
+        "name": "id",
+        "pattern": "^[a-z0-9]+$",
+        "presentable": false,
+        "primaryKey": true,
+        "required": true,
+        "system": true,
+        "type": "text"
+      },
+      {
+        "cascadeDelete": true,
+        "collectionId": "pai85380df53e11",
+        "help": "",
+        "hidden": false,
+        "id": "relation3479234172",
+        "maxSelect": 1,
+        "minSelect": 0,
+        "name": "owner",
+        "presentable": false,
+        "required": true,
+        "system": false,
+        "type": "relation"
+      },
+      {
+        "autogeneratePattern": "",
+        "help": "",
+        "hidden": true,
+        "id": "text3066852253",
+        "max": 0,
+        "min": 0,
+        "name": "encrypted_api_key",
+        "pattern": "",
+        "presentable": false,
+        "primaryKey": false,
+        "required": true,
+        "system": false,
+        "type": "text"
+      },
+      {
+        "autogeneratePattern": "",
+        "help": "",
+        "hidden": false,
+        "id": "text3616895705",
+        "max": 200,
+        "min": 0,
+        "name": "model",
+        "pattern": "",
+        "presentable": false,
+        "primaryKey": false,
+        "required": true,
+        "system": false,
+        "type": "text"
+      }
+    ],
+    "id": "pbc_4238651652",
+    "indexes": ["CREATE UNIQUE INDEX idx_openai_settings_owner ON paideuo_openai_settings (owner)"],
+    "listRule": null,
+    "name": "paideuo_openai_settings",
+    "system": false,
+    "type": "base",
+    "updateRule": null,
+    "viewRule": null
   }
 ]

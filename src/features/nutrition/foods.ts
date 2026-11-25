@@ -15,6 +15,16 @@ export type FoodFields = {
   serving: { description: string; size: number; unit: string };
   macros: Partial<Record<(typeof macroFields)[number]["key"], number>>;
 };
+export type FoodPredictionInput = {
+  title: string;
+  category: string;
+  servingDescription: string;
+  servingSize: number;
+  servingUnit: string;
+  description?: string;
+};
+export type MacroEstimate = Required<FoodFields["macros"]>;
+
 export type Food = { id: string; externalId: string; data: FoodFields & { archived?: boolean } };
 export type FoodFilters = {
   search: string;
@@ -35,6 +45,10 @@ const endpoint = "/api/paideuo/v1/nutrition/foods/";
 export const foodQueryKey = (owner: string) => ["nutrition", "foods", owner] as const;
 
 export const foodsApi = {
+  predictMacros: (input: FoodPredictionInput, signal: AbortSignal) =>
+    apiRequest<{ macros: MacroEstimate }>(endpoint + "predict-macros", "POST", input, signal),
+  get: (id: string, signal: AbortSignal) =>
+    apiRequest<Food>(endpoint + "get", "POST", { id }, signal),
   list: (filters: FoodFilters, after: string | undefined, signal: AbortSignal) =>
     apiRequest<FoodPage>(endpoint + "list", "POST", { ...filters, after, limit: 25 }, signal),
   mutate: ({ change, operationId, externalId }: FoodMutation) => {

@@ -25,6 +25,7 @@ import { useSession } from "../auth/session";
 import { SavedReviews } from "../reviews/SavedReviews";
 import { ProgramScheduling } from "../calendar/ProgramScheduling";
 import { ProgramCompliance } from "../compliance/ComplianceSummary";
+import { ProgramTargets } from "../nutrition/ProgramTargets";
 import { ProgramActions } from "./ProgramActions";
 import { ProgramForm } from "./ProgramForm";
 import {
@@ -154,6 +155,7 @@ const ProgramEditor = ({ program, ownerId }: { program: Program; ownerId: string
         <ProgramActions program={program} ownerId={ownerId} onDetailPage />
       </Panel>
       {program.scheduled && <ProgramCompliance ownerId={ownerId} programId={program.id} />}
+      <ProgramTargets ownerId={ownerId} program={program} />
       <SavedReviews ownerId={ownerId} programId={program.id} />
       <Stack gap="3">
         <Flex justify="space-between" align="center" wrap="wrap" gap="3">

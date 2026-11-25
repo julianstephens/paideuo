@@ -3,6 +3,7 @@ dist/
 *.tsbuildinfo
 .env
 .env.*
+.env*
 !.env.example
 /backend/pb_data/
 /pb_data/

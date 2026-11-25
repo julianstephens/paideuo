@@ -11,6 +11,7 @@ import { MetricsPage } from "../features/compliance/MetricsPage";
 import { WeeklyReviewPage } from "../features/reviews/WeeklyReviewPage";
 import { ProgramsPage } from "../features/programs/ProgramsPage";
 import { FoodBankPage } from "../features/nutrition/FoodBankPage";
+import { EntryRecipePage, FoodRecipePage } from "../features/nutrition/RecipePage";
 import { LibraryPage } from "../features/templates/LibraryPage";
 import { PageHeader, Panel } from "../components/ui";
 import { AppLayout } from "./AppLayout";
@@ -39,6 +40,8 @@ export const router = createBrowserRouter([
               { path: "programs/:programId/blocks/:blockId", Component: BlockPage },
               { path: "library", Component: LibraryPage },
               { path: "nutrition", Component: FoodBankPage },
+              { path: "nutrition/foods/:foodId/recipe", Component: FoodRecipePage },
+              { path: "nutrition/recipes/:entryKind/:entryId", Component: EntryRecipePage },
               { path: "imports", Component: ImportsPage },
               { path: "settings", Component: SettingsPage },
               {

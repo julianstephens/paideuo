@@ -3,11 +3,11 @@ const credentials = require(__hooks + "/service-credentials.cjs");
 const imports = require(__hooks + "/imports.js");
 const programEdits = require(__hooks + "/mcp-program-edits.cjs");
 
-const { foodMcpOperations } = require(__hooks + "/nutrition-adapters.cjs");
-const foodToolScopes = require(__hooks + "/nutrition-contracts.cjs").foodToolScopes;
+const { publishedMcpOperations } = require(__hooks + "/nutrition-adapters.cjs");
+const publishedToolScopes = require(__hooks + "/nutrition-contracts.cjs").publishedToolScopes;
 
 const tools = [
-  ...Array.from(foodMcpOperations.values(), ({ contract }) => contract),
+  ...Array.from(publishedMcpOperations.values(), ({ contract }) => contract),
   ...Array.from(programEdits.operations.values(), ({ tool }) => tool),
   {
     name: "list_programs",
@@ -543,8 +543,8 @@ const deleteOneOffWorkout = (event, principal, args) => {
 };
 
 const callTool = (event, principal, name, args = {}, oauthPrincipal) => {
-  const food = foodMcpOperations.get(name);
-  if (food) return food.invoke(event.app, oauthPrincipal ?? principal, args);
+  const nutrition = publishedMcpOperations.get(name);
+  if (nutrition) return nutrition.invoke(event.app, oauthPrincipal ?? principal, args);
   const operation = programEdits.operations.get(name);
   if (operation) {
     requireScope(principal, operation.readOnly ? "programs:read" : "programs:write");
@@ -658,8 +658,8 @@ const jsonRpc = (event, principal, request, oauthScope, oauthPrincipal) => {
           securitySchemes: [
             {
               type: "oauth2",
-              scopes: foodToolScopes.has(tool.name)
-                ? [oauthScope, foodToolScopes.get(tool.name)]
+              scopes: publishedToolScopes.has(tool.name)
+                ? [oauthScope, publishedToolScopes.get(tool.name)]
                 : [oauthScope],
             },
           ],

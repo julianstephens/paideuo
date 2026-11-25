@@ -1,13 +1,48 @@
-import { Button, Flex } from "@chakra-ui/react";
+import { targetKey } from "../nutrition/targets";
+import { Button, Checkbox, Flex } from "@chakra-ui/react";
+import { ConfirmationDialog } from "../../components/ConfirmationDialog";
 import { Disclosure, Notice } from "../../components/ui";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
-import { useRef } from "react";
+import { useRef, useState } from "react";
 import { useNavigate } from "react-router";
 import { calendarKey } from "../calendar/scheduling";
 import { metricsKey } from "../compliance/metrics";
 import { reviewKey } from "../reviews/reviews";
 import { errorMessage, programKeys, programsApi } from "./programs";
 import type { ProgramSummary } from "./programs";
+
+const confirmations = {
+  complete: {
+    title: "Mark program complete?",
+    description: (name: string) =>
+      `Unresolved sessions in “${name}” will keep their current status. You can still record them later.`,
+    confirmLabel: "Mark complete",
+    destructive: false,
+  },
+  unschedule: {
+    title: "Unschedule workouts?",
+    description: (name: string) =>
+      `This removes scheduled workouts for “${name}” from the calendar.`,
+    confirmLabel: "Unschedule workouts",
+    destructive: true,
+  },
+  archive: {
+    title: "Archive program?",
+    description: (name: string) => `Archive “${name}”.`,
+    confirmLabel: "Archive",
+    destructive: false,
+  },
+  delete: {
+    title: "Permanently delete program?",
+    description: (name: string) =>
+      `This permanently deletes “${name}” and its training plan, scheduled workouts, workout history, and weekly reviews.`,
+    confirmLabel: "Delete program",
+    destructive: true,
+  },
+};
+
+type ConfirmedAction = keyof typeof confirmations;
+type ProgramAction = ConfirmedAction | "duplicate";
 
 export const ProgramActions = ({
   program,
@@ -21,7 +56,9 @@ export const ProgramActions = ({
   const navigate = useNavigate();
   const queryClient = useQueryClient();
   const operationId = useRef<string | undefined>(undefined);
-  type ProgramAction = "archive" | "complete" | "delete" | "duplicate" | "unschedule";
+  const [actionToConfirm, setActionToConfirm] = useState<ConfirmedAction>();
+  const [unscheduleWorkouts, setUnscheduleWorkouts] = useState(false);
+  const confirmationTrigger = useRef<HTMLButtonElement>(null);
   const mutation = useMutation({
     mutationFn: ({
       action,
@@ -47,6 +84,7 @@ export const ProgramActions = ({
         );
         queryClient.removeQueries({ queryKey: programKeys.detail(ownerId, id) });
         queryClient.removeQueries({ queryKey: reviewKey(ownerId, id) });
+        queryClient.removeQueries({ queryKey: targetKey(ownerId, id) });
         await Promise.all([
           queryClient.invalidateQueries({ queryKey: programKeys.owner(ownerId) }),
           queryClient.invalidateQueries({ queryKey: calendarKey(ownerId) }),
@@ -54,13 +92,23 @@ export const ProgramActions = ({
         ]);
         return;
       }
-      await queryClient.invalidateQueries({ queryKey: programKeys.owner(ownerId) });
+      await Promise.all([
+        queryClient.invalidateQueries({ queryKey: programKeys.owner(ownerId) }),
+        queryClient.invalidateQueries({ queryKey: targetKey(ownerId, program.id) }),
+      ]);
       if (action === "duplicate") {
         operationId.current = undefined;
         void navigate(`/programs/${id}`);
       }
     },
   });
+
+  const requestConfirmation = (action: ConfirmedAction, trigger: HTMLButtonElement) => {
+    confirmationTrigger.current = trigger;
+    setUnscheduleWorkouts(false);
+    setActionToConfirm(action);
+  };
+  const confirmation = actionToConfirm && confirmations[actionToConfirm];
 
   return (
     <>
@@ -79,14 +127,7 @@ export const ProgramActions = ({
               size="sm"
               variant="outline"
               disabled={mutation.isPending}
-              onClick={() => {
-                if (
-                  window.confirm(
-                    `Mark “${program.name}” complete? Unresolved sessions will keep their current status. You can still record them later.`,
-                  )
-                )
-                  mutation.mutate({ action: "complete" });
-              }}
+              onClick={(event) => requestConfirmation("complete", event.currentTarget)}
             >
               Mark program complete
             </Button>
@@ -96,14 +137,7 @@ export const ProgramActions = ({
               size="sm"
               variant="outline"
               disabled={mutation.isPending}
-              onClick={() => {
-                if (
-                  window.confirm(
-                    `Unschedule workouts for “${program.name}”? This removes this program’s scheduled workouts from the calendar.`,
-                  )
-                )
-                  mutation.mutate({ action: "unschedule" });
-              }}
+              onClick={(event) => requestConfirmation("unschedule", event.currentTarget)}
             >
               Unschedule workouts
             </Button>
@@ -113,15 +147,7 @@ export const ProgramActions = ({
               size="sm"
               variant="outline"
               disabled={mutation.isPending}
-              onClick={() => {
-                if (!window.confirm(`Archive “${program.name}”?`)) return;
-                const unscheduleWorkouts =
-                  program.scheduled &&
-                  window.confirm(
-                    `Also unschedule this program’s workouts? Choosing “OK” removes scheduled workouts from the calendar. Choosing “Cancel” keeps them scheduled.`,
-                  );
-                mutation.mutate({ action: "archive", unscheduleWorkouts });
-              }}
+              onClick={(event) => requestConfirmation("archive", event.currentTarget)}
             >
               Archive
             </Button>
@@ -131,19 +157,38 @@ export const ProgramActions = ({
             variant="outline"
             colorPalette="red"
             disabled={mutation.isPending}
-            onClick={() => {
-              if (
-                window.confirm(
-                  `Permanently delete “${program.name}” and its training plan, scheduled workouts, workout history, and weekly reviews? This cannot be undone.`,
-                )
-              )
-                mutation.mutate({ action: "delete" });
-            }}
+            onClick={(event) => requestConfirmation("delete", event.currentTarget)}
           >
             Delete program
           </Button>
         </Flex>
       </Disclosure>
+      {actionToConfirm && confirmation && (
+        <ConfirmationDialog
+          {...confirmation}
+          description={confirmation.description(program.name)}
+          returnFocus={() => confirmationTrigger.current}
+          onDismiss={() => setActionToConfirm(undefined)}
+          onConfirm={() =>
+            mutation.mutate({
+              action: actionToConfirm,
+              unscheduleWorkouts:
+                actionToConfirm === "archive" && program.scheduled && unscheduleWorkouts,
+            })
+          }
+        >
+          {actionToConfirm === "archive" && program.scheduled && (
+            <Checkbox.Root
+              checked={unscheduleWorkouts}
+              onCheckedChange={({ checked }) => setUnscheduleWorkouts(checked === true)}
+            >
+              <Checkbox.HiddenInput />
+              <Checkbox.Control />
+              <Checkbox.Label>Also unschedule workouts</Checkbox.Label>
+            </Checkbox.Root>
+          )}
+        </ConfirmationDialog>
+      )}
       {mutation.isPending && <Notice role="status">Saving…</Notice>}
       {mutation.isError && (
         <Notice role="alert">

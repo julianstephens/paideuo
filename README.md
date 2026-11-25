@@ -134,6 +134,20 @@ Keep the encryption key in your server's secret store and back it up separately
 from the PocketBase database. Users need an active profile in the Google Health
 app before they can connect in **Settings → Google Health**.
 
+## OpenAI macro estimates
+
+Apply migration
+[`1760000035_openai_settings.js`](backend/pb_migrations/1760000035_openai_settings.js)
+or import the updated collections export. Set `PAIDEUO_OPENAI_ENCRYPTION_KEY`
+in the PocketBase process environment and restart PocketBase. Generate a
+persistent 32-character secret with `openssl rand -base64 24` and back it up
+separately from the database. For local development, ensure your terminal loads
+the variable before running `pnpm run dev:backend`.
+
+Each user can save their own API key and model in **Settings → OpenAI**.
+Prediction requests use that key and send the food title, category, serving
+description, serving size, serving unit, and any food description to OpenAI.
+
 ## Seed a test program
 
 With PocketBase running, set `TEST_EMAIL` and `TEST_PASSWORD` for an existing
@@ -158,6 +172,20 @@ and program routes for both cycles.
 
 The default PocketBase URL is `http://127.0.0.1:8090`. Set `POCKETBASE_URL` to
 use another instance.
+
+## Seed a test food bank
+
+With PocketBase running, use the same `TEST_EMAIL`, `TEST_PASSWORD`, and optional
+`POCKETBASE_URL` as the program seeder, then run:
+
+```sh
+pnpm run seed:food-bank
+```
+
+Open **Plan → Nutrition** to see sample dishes, ingredients, and drinks with
+per-serving macro estimates and two recipe attachments. New samples use matching
+categories from your settings and stay uncategorized when a match is unavailable.
+Reruns preserve edits and archives and avoid duplicate records.
 
 ## Verify
 

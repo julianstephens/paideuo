@@ -44,11 +44,15 @@ export const McpConsentPage = () => {
           training data, log workouts, and submit check-ins.
         </Text>
         {scopes.includes("nutrition:read") && (
-          <Text>ChatGPT can search your food bank and read serving sizes and macro estimates.</Text>
+          <Text>
+            ChatGPT can search your food bank and read serving sizes, macro estimates, and attached
+            recipes.
+          </Text>
         )}
         {scopes.includes("nutrition:write") && (
           <Text>
-            ChatGPT can create, edit, duplicate, archive, and restore foods in your food bank.
+            ChatGPT can create, edit, duplicate, archive, and restore foods in your food bank and
+            manage their recipe attachments.
           </Text>
         )}
         {error && <Notice role="alert">{error}</Notice>}

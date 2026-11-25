@@ -1,6 +1,6 @@
 /* oxlint-disable import/no-commonjs */
 
-const { contractFor, matches } = require("./nutrition-contracts.cjs");
+const { contractFor, matches, maxTargetDays } = require("./nutrition-contracts.cjs");
 const { targetSource, resolveTargets, summarize, canonical } = require("./nutrition-domain.cjs");
 const dates = require("./calendar-dates.js");
 const credentials = require("./service-credentials.cjs");
@@ -57,26 +57,34 @@ const scheduleFor = (db, programId) =>
   first(db, "paideuo_program_schedules", "program = {:programId}", { programId });
 const blocksFor = (db, programId) =>
   find(db, "paideuo_blocks", "program = {:programId}", { programId }, "position,id");
-const dayInProgram = (db, programId, date) => {
+const dayMilliseconds = 86400000;
+
+const programWindow = (db, programId) => {
   const schedule = scheduleFor(db, programId);
   if (!schedule) return null;
-  const day = civilDate(date);
-  const start = civilDate(schedule.getString("start_date"));
-  let offset = Math.floor((day.getTime() - start.getTime()) / 86400000);
+  const weeks = find(db, "paideuo_program_weeks", "block.program = {:programId}", { programId });
+  return {
+    start: civilDate(schedule.getString("start_date")),
+    blocks: blocksFor(db, programId),
+    weeks: new Map(
+      weeks.map((week) => [week.getString("block") + ":" + week.getInt("position"), week.id]),
+    ),
+  };
+};
+
+const dayInProgram = (window, day) => {
+  if (!window) return null;
+  let offset = Math.floor((day.getTime() - window.start.getTime()) / dayMilliseconds);
   if (offset < 0) return null;
-  for (const block of blocksFor(db, programId)) {
+  for (const block of window.blocks) {
     const duration = block.getInt("duration_weeks") * 7;
     if (offset < duration) {
-      const week = first(
-        db,
-        "paideuo_program_weeks",
-        "block = {:block} && position = {:position}",
-        {
-          block: block.id,
-          position: Math.floor(offset / 7) + 1,
-        },
-      );
-      return { blockId: block.id, weekId: week?.id, weekday: day.getUTCDay() || 7 };
+      const position = Math.floor(offset / 7) + 1;
+      return {
+        blockId: block.id,
+        weekId: window.weeks.get(block.id + ":" + position),
+        weekday: day.getUTCDay() || 7,
+      };
     }
     offset -= duration;
   }
@@ -97,7 +105,7 @@ const selectorKey = (selector) => {
 };
 const validateSelector = (db, programId, selector) => {
   if (selector.kind === "date") {
-    if (!dayInProgram(db, programId, selector.date)) {
+    if (!dayInProgram(programWindow(db, programId), civilDate(selector.date))) {
       throw new BadRequestError("Date override must fall within the scheduled program.");
     }
     return;
@@ -115,37 +123,64 @@ const validateSelector = (db, programId, selector) => {
   if (!belongs) throw new NotFoundError("Training block or week not found.");
 };
 
-const effective = (db, owner, programId, date) => {
-  if (!programId) return resolveTargets([]);
+const targetContext = (db, owner, programId) => {
+  if (!programId) return null;
   owned(db, "paideuo_programs", owner, programId);
   const plan = first(db, collection("plans"), "owner = {:owner} && program = {:programId}", {
     owner,
     programId,
   });
-  const day = plan && dayInProgram(db, programId, date);
+  const window = plan && programWindow(db, programId);
+  if (!window) return null;
+  const overrides = find(db, collection("targets"), "owner = {:owner} && plan = {:plan}", {
+    owner,
+    plan: plan.id,
+  });
+  return {
+    window,
+    base: { source: targetSource("program", plan.id), data: dataOf(plan) },
+    overrides: new Map(
+      overrides.map((record) => {
+        const data = dataOf(record);
+        return [
+          record.getString("selector"),
+          { source: targetSource(data.selector.kind, record.id), data },
+        ];
+      }),
+    ),
+  };
+};
+
+const effective = (context, date) => {
+  const day = context && dayInProgram(context.window, date);
   if (!day) return resolveTargets([]);
-  const layers = [{ source: targetSource("program", plan.id), data: dataOf(plan) }];
+  const layers = [context.base];
   const selectors = [{ kind: "block", blockId: day.blockId }];
   if (day.weekId) {
     selectors.push({ kind: "week", weekId: day.weekId });
     selectors.push({ kind: "weekday", weekId: day.weekId, weekday: day.weekday });
   }
-  selectors.push({ kind: "date", date });
+  selectors.push({ kind: "date", date: dates.format(date) });
   for (const selector of selectors) {
-    const record = first(
-      db,
-      collection("targets"),
-      "owner = {:owner} && plan = {:plan} && selector = {:selector}",
-      {
-        owner,
-        plan: plan.id,
-        selector: selectorKey(selector),
-      },
-    );
-    if (record)
-      layers.push({ source: targetSource(selector.kind, record.id), data: dataOf(record) });
+    const layer = context.overrides.get(selectorKey(selector));
+    if (layer) layers.push(layer);
   }
   return resolveTargets(layers);
+};
+
+const resolveBulk = (db, owner, input) => {
+  const start = civilDate(input.startDate).getTime();
+  const end = civilDate(input.endDate).getTime();
+  if (end < start || end - start >= maxTargetDays * dayMilliseconds) {
+    throw new BadRequestError("Provide an ordered range of up to " + maxTargetDays + " days.");
+  }
+  const context = targetContext(db, owner, input.programId);
+  const days = [];
+  for (let time = start; time <= end; time += dayMilliseconds) {
+    const date = new Date(time);
+    days.push({ date: dates.format(date), target: effective(context, date) });
+  }
+  return { days };
 };
 
 const capture = (db, owner, source, planned) => {
@@ -215,6 +250,20 @@ const foodData = (data) => {
   };
 };
 
+const recipeData = (data) => ({
+  ...data,
+  ingredients: data.ingredients.map((ingredient) => {
+    const name = ingredient.name.trim();
+    const unit = ingredient.unit?.trim();
+    if (!name || (ingredient.quantity !== undefined && !unit)) {
+      throw new BadRequestError(
+        "Provide an ingredient name and a unit for each measured ingredient.",
+      );
+    }
+    return { ...ingredient, name, ...(unit === undefined ? {} : { unit }) };
+  }),
+});
+
 const conflict = (message) => new ApiError(409, message);
 
 const create = (db, principal, kind, input) => {
@@ -243,6 +292,7 @@ const create = (db, principal, kind, input) => {
     }
     if (first(db, name, filter, params)) throw conflict("Nutrition resource already exists.");
   }
+  if (kind === "recipes") data = recipeData(data);
   if (isEntry(kind)) {
     data = createEntry(db, principal, data);
     fields.date = data.date;
@@ -270,6 +320,7 @@ const mutate = (db, principal, kind, action, input) => {
     }
     data = action === "set_archive" ? { ...previous, archived: input.archived } : foodData(data);
   }
+  if (kind === "recipes") data = recipeData({ ...input.data, foodId: previous.foodId });
   // The whole target layer is replaced so an omitted field can resume inheritance.
   if (kind === "plans") data = { programId: previous.programId, ...input.data };
   if (kind === "targets") {
@@ -330,11 +381,26 @@ const dailyEntries = (db, kind, owner, date) =>
     .map(dataOf)
     .filter((data) => !data.deleted && !data.canceled);
 
+const recipeForEntry = (db, owner, { entryKind, entryId }) => {
+  let { source, plannedId } = dataOf(entryRecord(db, entryKind, owner, entryId));
+  if (source.kind === "planned" && plannedId) {
+    source = dataOf(entryRecord(db, "planned", owner, plannedId, true)).source;
+  }
+  if (source.kind !== "bank") return { recipe: null };
+  const record = first(db, collection("recipes"), "owner = {:owner} && food = {:food}", {
+    owner,
+    food: source.foodId,
+  });
+  return { recipe: record ? resultOf(record) : null };
+};
+
 const read = (db, owner, kind, action, input) => {
   if (action === "get") return resultOf(entryRecord(db, kind, owner, input.id));
   if (action === "list") return list(db, kind, owner, input);
-  civilDate(input.date);
-  const target = effective(db, owner, input.programId, input.date);
+  if (action === "for_entry") return recipeForEntry(db, owner, input);
+  if (action === "resolve_bulk") return resolveBulk(db, owner, input);
+  const date = civilDate(input.date);
+  const target = effective(targetContext(db, owner, input.programId), date);
   if (action === "resolve") return target;
   return {
     date: input.date,

@@ -3097,6 +3097,36 @@ test("ChatGPT OAuth discovers MCP, authorizes a Paideuo user, and rotates creden
           .structuredContent.status,
         404,
       );
+      const recipeCall = async (name, args, auth) =>
+        (
+          await (
+            await rpc(
+              "tools/call",
+              {
+                name: "nutrition_recipes_" + name,
+                arguments: args,
+              },
+              auth,
+            )
+          ).json()
+        ).result;
+      const recipeInput = {
+        operationId: "oauth-tofu-recipe",
+        externalId: "oauth-tofu-recipe",
+        foodId: createdFood.structuredContent.id,
+        data: { ingredients: [{ name: "Tofu", quantity: 100, unit: "g" }] },
+      };
+      assert.equal(
+        (await recipeCall("create", recipeInput, readAuth)).structuredContent.status,
+        403,
+      );
+      const oauthRecipe = await recipeCall("create", recipeInput, "Bearer " + writer.access_token);
+      assert.equal(oauthRecipe.isError, false, JSON.stringify(oauthRecipe));
+      assert.deepEqual(
+        (await recipeCall("get", { id: oauthRecipe.structuredContent.id }, readAuth))
+          .structuredContent,
+        oauthRecipe.structuredContent,
+      );
       const narrowedResponse = await tokenRequest("/token", {
         grant_type: "refresh_token",
         refresh_token: writer.refresh_token,
@@ -3334,7 +3364,7 @@ const nutritionFixture = (hooksDir) => {
     `
 const nutrition = require(__hooks + "/nutrition-adapters.cjs");
 for (const path of nutrition.restOperations.keys()) {
-  if (nutrition.foodRestOperations.has(path)) continue;
+  if (nutrition.publishedRestOperations.has(path)) continue;
   routerAdd("POST", path, (event) => {
     const credentials = require(__hooks + "/service-credentials.cjs");
     const principal = credentials.importPrincipalFromEvent(event);
@@ -3519,6 +3549,30 @@ test("nutrition targets follow training weeks and keep exact-date overrides on c
     async ({ admin, baseUrl }) => {
       const { client } = await createAuthedUser(admin, baseUrl, "nutrition-targets");
       const rest = (operation, input) => nutritionRequest(client, operation, input);
+      const { client: other } = await createAuthedUser(admin, baseUrl, "nutrition-targets-other");
+      const credential = async (scopes) =>
+        (
+          await domainRequest(client, "service-credentials/issue", {
+            label: "Nutrition targets test",
+            scopes,
+          })
+        ).plaintextToken;
+      const reader = await credential(["nutrition:read"]);
+      const writer = await credential(["nutrition:write"]);
+      const service = (operation, input, token) =>
+        serviceImportRequest(
+          baseUrl,
+          "/api/paideuo/v1/service/nutrition/" + operation.replace(".", "/"),
+          token,
+          input,
+        );
+      const mcp = (operation, input, token) =>
+        serviceImportRequest(baseUrl, "/api/paideuo/v1/service/mcp", token, {
+          jsonrpc: "2.0",
+          id: 1,
+          method: "tools/call",
+          params: { name: "nutrition_" + operation.replace(".", "_"), arguments: input },
+        });
       const { id: programId } = await client.send("/api/paideuo/programs", {
         method: "POST",
         body: { name: "Training program" },
@@ -3557,11 +3611,35 @@ test("nutrition targets follow training weeks and keep exact-date overrides on c
         status: "active",
       });
 
-      const plan = await rest("plans.create", {
+      const planInput = {
         operationId: "program-default",
         externalId: "program-default",
         programId,
         data: { active: true, macros: { calories: 2200, protein: 100, fat: 60 } },
+      };
+      const plan = await rest("plans.create", planInput);
+      assert.deepEqual(await service("plans.create", planInput, writer), plan);
+      assert.deepEqual(
+        (await mcp("plans.create", planInput, writer)).result.structuredContent,
+        plan,
+      );
+      await assert.rejects(service("plans.create", planInput, reader), { status: 403 });
+      const consumed = await rest("consumed.create", {
+        operationId: "record-snack",
+        externalId: "snack",
+        data: {
+          date: "2026-11-03",
+          timezone: "America/New_York",
+          quantity: 1,
+          source: {
+            kind: "inline",
+            food: {
+              title: "Snack",
+              serving: { description: "One", size: 1, unit: "bar" },
+              macros: { protein: 9 },
+            },
+          },
+        },
       });
       const target = (key, data) =>
         rest("targets.create", {
@@ -3610,6 +3688,33 @@ test("nutrition targets follow training weeks and keep exact-date overrides on c
         },
       });
       assert.equal((await resolve("2026-11-03", overlappingId)).active, false);
+      const range = { programId, startDate: "2026-11-01", endDate: "2026-11-03" };
+      const bulk = await rest("targets.resolve_bulk", range);
+      assert.deepEqual(bulk, {
+        days: await Promise.all(
+          ["2026-11-01", "2026-11-02", "2026-11-03"].map(async (date) => ({
+            date,
+            target: await resolve(date),
+          })),
+        ),
+      });
+      assert.deepEqual(await service("targets.resolve_bulk", range, reader), bulk);
+      assert.deepEqual(
+        (await mcp("targets.resolve_bulk", range, reader)).result.structuredContent,
+        bulk,
+      );
+      await assert.rejects(service("targets.resolve_bulk", range, writer), { status: 403 });
+      await assert.rejects(nutritionRequest(other, "targets.resolve_bulk", range), { status: 404 });
+      await assert.rejects(rest("targets.resolve_bulk", { ...range, endDate: "2026-10-31" }), {
+        status: 400,
+      });
+      await assert.rejects(rest("targets.resolve_bulk", { ...range, endDate: "2027-01-02" }), {
+        status: 400,
+      });
+      await assert.rejects(rest("targets.resolve_bulk", { ...range, startDate: "2026-11-00" }), {
+        status: 400,
+      });
+
       await rest("targets.update", {
         id: weekdayTarget.id,
         operationId: "inherit-protein",
@@ -3625,8 +3730,14 @@ test("nutrition targets follow training weeks and keep exact-date overrides on c
       assert.equal((await resolve("2026-11-10")).macros.protein.value, 140);
       assert.equal((await resolve("2026-02-28")).active, false);
       await assert.rejects(resolve("2026-02-29"), { status: 400 });
+      const removePlan = { id: plan.id, operationId: "remove-plan" };
+      assert.deepEqual(await service("plans.delete", removePlan, writer), { id: plan.id });
+      assert.deepEqual(await rest("plans.delete", removePlan), { id: plan.id });
+      await assert.rejects(rest("targets.get", { id: exactTarget.id }), { status: 404 });
+      assert.equal((await resolve("2026-11-03")).active, false);
+      assert.deepEqual(await rest("consumed.get", { id: consumed.id }), consumed);
     },
-    { prepareHooks: nutritionFixture, useCollectionsExport: true },
+    { prepareHooks: nutritionFixture },
   );
 });
 
@@ -3755,5 +3866,356 @@ test("OAuth scope migration preserves preexisting grants", async () => {
       assert.equal(migrated.owner, userId);
     },
     { pendingMigration: "1760000033_mcp_oauth_scopes.js" },
+  );
+});
+
+test("recipes use shared production contracts and preserve food entry provenance", async () => {
+  await withPocketBase(
+    async ({ admin, baseUrl }) => {
+      const { client } = await createAuthedUser(admin, baseUrl, "recipes");
+      const { client: other } = await createAuthedUser(admin, baseUrl, "recipes-other");
+      const call = (name, input) => nutritionRequest(client, name, input);
+      const http = (name, input) => call("recipes." + name, input);
+      const issue = async (scopes) =>
+        (
+          await domainRequest(client, "service-credentials/issue", {
+            label: "recipes test",
+            scopes,
+          })
+        ).plaintextToken;
+      const reader = await issue(["nutrition:read"]);
+      const writer = await issue(["nutrition:write"]);
+      const service = (name, input, token) =>
+        serviceImportRequest(
+          baseUrl,
+          "/api/paideuo/v1/service/nutrition/recipes/" + name,
+          token,
+          input,
+        );
+      const mcp = async (name, input, token) =>
+        (
+          await serviceImportRequest(baseUrl, "/api/paideuo/v1/service/mcp", token, {
+            jsonrpc: "2.0",
+            id: 1,
+            method: "tools/call",
+            params: { name: "nutrition_recipes_" + name, arguments: input },
+          })
+        ).result;
+
+      const foodData = {
+        title: "Rice bowl",
+        serving: { description: "bowl", size: 1, unit: "bowl" },
+        macros: { calories: 240, protein: 0 },
+      };
+      const food = await call("foods.create", {
+        operationId: "create-food",
+        externalId: "rice-bowl",
+        data: foodData,
+      });
+      const foodId = food.id;
+      const entry = (kind, key, source, extra = {}) =>
+        call(kind + ".create", {
+          operationId: key,
+          externalId: key,
+          data: { date: "2026-11-25", timezone: "UTC", quantity: 1, source, ...extra },
+        });
+      const planned = await entry("planned", "planned-rice", { kind: "bank", foodId });
+      const consumed = await entry(
+        "consumed",
+        "consumed-rice",
+        { kind: "planned" },
+        { plannedId: planned.id },
+      );
+      const direct = await entry("consumed", "bank-rice", { kind: "bank", foodId });
+      const substitute = await entry(
+        "consumed",
+        "substitute",
+        { kind: "inline", food: foodData },
+        { plannedId: planned.id },
+      );
+      const resolve = (entryKind, entryId) => http("for_entry", { entryId, entryKind });
+      assert.deepEqual(await resolve("planned", planned.id), { recipe: null });
+      assert.deepEqual(await http("list", { foodId }), { items: [], next: null });
+
+      const data = {
+        ingredients: [
+          { name: " Rice ", quantity: 150.25, unit: " g ", prep: "Rinsed" },
+          { name: "Salt", prep: "To taste" },
+        ],
+        instructions: "Simmer until tender.",
+        portions: 2.5,
+      };
+      const input = { operationId: "attach", externalId: "rice-recipe", foodId, data };
+      assert.equal((await mcp("create", input, reader)).structuredContent.status, 403);
+      await assert.rejects(nutritionRequest(other, "recipes.create", input), { status: 404 });
+      await assert.rejects(
+        http("create", {
+          ...input,
+          data: { ingredients: [{ name: "Rice", quantity: 150 }] },
+        }),
+        { status: 400 },
+      );
+      await assert.rejects(
+        http("create", {
+          ...input,
+          data: { ingredients: [{ name: "Rice", quantity: 150, unit: " " }] },
+        }),
+        { status: 400 },
+      );
+      await assert.rejects(
+        http("create", {
+          ...input,
+          data: { ingredients: [{ name: "Rice", unit: "g" }] },
+        }),
+        { status: 400 },
+      );
+      const attached = await service("create", input, writer);
+      assert.deepEqual(attached.data.ingredients, [
+        { name: "Rice", quantity: 150.25, unit: "g", prep: "Rinsed" },
+        { name: "Salt", prep: "To taste" },
+      ]);
+      assert.deepEqual(await http("create", input), attached);
+      await assert.rejects(
+        http("create", { ...input, operationId: "second", externalId: "second" }),
+        { status: 409 },
+      );
+      assert.deepEqual((await mcp("get", { id: attached.id }, reader)).structuredContent, attached);
+      assert.deepEqual((await mcp("list", { foodId }, reader)).structuredContent.items, [attached]);
+      assert.deepEqual(await resolve("planned", planned.id), { recipe: attached });
+      assert.deepEqual(await resolve("consumed", direct.id), { recipe: attached });
+      assert.deepEqual(await resolve("consumed", substitute.id), { recipe: null });
+      await assert.rejects(
+        nutritionRequest(other, "recipes.for_entry", {
+          entryKind: "consumed",
+          entryId: consumed.id,
+        }),
+        { status: 404 },
+      );
+
+      await call("foods.set_archive", { id: foodId, operationId: "archive-food", archived: true });
+      await call("planned.delete", { id: planned.id, operationId: "delete-planned" });
+      assert.deepEqual(
+        (await mcp("for_entry", { entryKind: "consumed", entryId: consumed.id }, reader))
+          .structuredContent,
+        { recipe: attached },
+      );
+      await assert.rejects(resolve("planned", planned.id), { status: 404 });
+
+      const reordered = { ingredients: [...attached.data.ingredients].reverse() };
+      const update = { id: attached.id, operationId: "update-recipe", data: reordered };
+      const updated = (await mcp("update", update, writer)).structuredContent;
+      assert.deepEqual(updated.data, { ...reordered, foodId });
+      assert.deepEqual(await http("update", update), updated);
+      assert.deepEqual(await resolve("consumed", consumed.id), { recipe: updated });
+      const detach = { id: attached.id, operationId: "detach" };
+      assert.deepEqual((await mcp("delete", detach, writer)).structuredContent, {
+        id: attached.id,
+      });
+      assert.deepEqual(await http("delete", detach), { id: attached.id });
+      assert.deepEqual(await resolve("consumed", consumed.id), { recipe: null });
+      assert.deepEqual((await call("foods.get", { id: foodId })).data.macros, foodData.macros);
+      assert.deepEqual(
+        (await call("consumed.get", { id: consumed.id })).data.snapshot,
+        consumed.data.snapshot,
+      );
+      const savedPlanned = await admin.collection("paideuo_nutrition_planned").getOne(planned.id);
+      assert.deepEqual(savedPlanned.data.snapshot, planned.data.snapshot);
+    },
+    { prepareHooks: nutritionFixture },
+  );
+});
+
+test("food category preferences are owner-scoped and preserve earlier assignments", async () => {
+  await withPocketBase(
+    async ({ admin, baseUrl, upgrade }) => {
+      const { client } = await createAuthedUser(admin, baseUrl, "food-categories");
+      const { client: other } = await createAuthedUser(admin, baseUrl, "food-categories-other");
+      const endpoint = "/api/paideuo/v1/nutrition/food-categories";
+      const seedFood = (account, title, category) =>
+        nutritionRequest(account, "foods.create", {
+          operationId: title,
+          externalId: title,
+          data: {
+            title,
+            category,
+            serving: { description: "One", size: 1, unit: "bowl" },
+            macros: { calories: 200, fat: 0 },
+          },
+        });
+      const food = await seedFood(client, "Rice bowl", "Meals");
+      await seedFood(client, "Prepared rice", "Old category");
+      const foreign = await seedFood(other, "Soup", "Meals");
+      await upgrade();
+
+      const change = (body) => client.send(endpoint, { method: "PUT", body });
+      const defaults = await client.send(endpoint);
+      assert.ok(defaults.categories.includes("Meals"));
+      assert.deepEqual(defaults.previousCategories, ["Old category"]);
+      assert.deepEqual((await other.send(endpoint)).previousCategories, []);
+      assert.ok((await change({ action: "add", newName: "Sides" })).categories.includes("Sides"));
+      await assert.rejects(change({ action: "add", newName: " sides " }), { status: 409 });
+      await assert.rejects(change({ action: "add", newName: " " }), { status: 400 });
+      await change({ action: "rename", name: "Meals", newName: "Main dishes" });
+      const getFood = (account, id) => nutritionRequest(account, "foods.get", { id });
+      const renamed = await getFood(client, food.id);
+      assert.deepEqual(renamed.data, { ...food.data, category: "Main dishes" });
+      assert.equal((await getFood(other, foreign.id)).data.category, "Meals");
+      const removed = await change({ action: "remove", name: "Main dishes" });
+      assert.ok(!removed.categories.includes("Main dishes"));
+      assert.deepEqual(removed.previousCategories, ["Main dishes", "Old category"]);
+      assert.equal((await getFood(client, food.id)).data.category, "Main dishes");
+      assert.deepEqual(await client.send(endpoint), removed);
+      assert.deepEqual((await other.send(endpoint)).categories, defaults.categories);
+
+      for (const name of removed.categories) await change({ action: "remove", name });
+      assert.deepEqual((await client.send(endpoint)).categories, []);
+    },
+    { pendingMigration: "1760000034_food_categories.js" },
+  );
+});
+
+test("OpenAI macro estimates use encrypted owner credentials and validate provider output", async () => {
+  const endpoint = "/api/paideuo/v1/settings/openai";
+  const prediction = "/api/paideuo/v1/nutrition/foods/predict-macros";
+  const collection = "paideuo_openai_settings";
+  const secret = "0123456789abcdef0123456789abcdef";
+  const food = {
+    title: "Tofu",
+    category: "Ingredients",
+    servingDescription: "One portion",
+    servingSize: 150,
+    servingUnit: "g",
+    description: "Firm tofu",
+  };
+
+  await withPocketBase(
+    async ({ admin, baseUrl }) => {
+      const { client, userId } = await createAuthedUser(admin, baseUrl, "openai-owner");
+      const { client: other } = await createAuthedUser(admin, baseUrl, "openai-other");
+      const put = (body) => client.send(endpoint, { method: "PUT", body });
+      const predict = (account, body) => account.send(prediction, { method: "POST", body });
+      const defaults = { available: true, configured: false, model: "gpt-5.4-mini" };
+      await assert.rejects(new PocketBase(baseUrl).send(endpoint), { status: 401 });
+      await assert.rejects(predict(new PocketBase(baseUrl), food), { status: 401 });
+      assert.deepEqual(await client.send(endpoint), defaults);
+      await assert.rejects(put({ model: "gpt-5.4-mini" }), { status: 400 });
+      assert.deepEqual(await put({ model: defaults.model, apiKey: "owner-key" }), {
+        ...defaults,
+        configured: true,
+      });
+      await assert.rejects(client.collection(collection).getList(), { status: 403 });
+      assert.deepEqual(await other.send(endpoint), defaults);
+      await assert.rejects(predict(other, food), { status: 400 });
+
+      const foodWithoutDescription = { ...food, description: undefined };
+      for (const field of Object.keys(food)) {
+        if (field === "description") continue;
+        const invalid = { ...food };
+        delete invalid[field];
+        await assert.rejects(predict(client, invalid), { status: 400 });
+      }
+      for (const servingSize of [0, -1, 0.0001, 1001, "150"]) {
+        await assert.rejects(predict(client, { ...food, servingSize }), { status: 400 });
+      }
+
+      const model = "gpt-5.4-mini-test";
+      assert.deepEqual(await put({ model }), { ...defaults, configured: true, model });
+      const inspect = (expected) =>
+        admin.send("/api/test/openai-storage", {
+          method: "POST",
+          body: { owner: userId, expected },
+        });
+      assert.deepEqual(await inspect("owner-key"), { encrypted: true });
+      const estimate = { macros: { calories: 145.125, protein: 16, carbohydrate: 4, fat: 8 } };
+      assert.deepEqual(
+        await predict(client, { ...food, title: " Tofu ", notes: "private" }),
+        estimate,
+      );
+      assert.deepEqual(await predict(client, foodWithoutDescription), estimate);
+      assert.deepEqual(await predict(client, { ...food, description: "   " }), estimate);
+      for (const description of [123, "x".repeat(4001)]) {
+        await assert.rejects(predict(client, { ...food, description }), { status: 400 });
+      }
+      for (const [description, message] of [
+        ["rejected", "OpenAI rejected the API key or model access. Check your OpenAI settings."],
+        ["quota", "OpenAI rate limit or quota reached."],
+        ["timeout", "Unable to reach OpenAI. Try predicting again."],
+        ...["refusal", "incomplete", "bad-json", "bad-value"].map((input) => [
+          input,
+          "OpenAI did not return a complete macro estimate.",
+        ]),
+      ]) {
+        await assert.rejects(
+          predict(client, { ...food, description }),
+          (error) => error.status === 400 && error.response.message === message,
+        );
+      }
+
+      assert.deepEqual(await put({ model, apiKey: "replacement-key" }), {
+        ...defaults,
+        configured: true,
+        model,
+      });
+      assert.deepEqual(await inspect("replacement-key"), { encrypted: true });
+      assert.deepEqual(await client.send(endpoint, { method: "DELETE" }), defaults);
+      assert.deepEqual(await client.send(endpoint, { method: "DELETE" }), defaults);
+      await assert.rejects(predict(client, food), { status: 400 });
+    },
+    {
+      env: { PAIDEUO_OPENAI_ENCRYPTION_KEY: secret },
+      prepareHooks: (hooksDir) => {
+        const hook = path.join(hooksDir, "openai.cjs");
+        fs.writeFileSync(
+          hook,
+          fs.readFileSync(hook, "utf8").replace("$http.send({", "mockOpenAI({") +
+            `
+const mockOpenAI = (request) => {
+  const body = JSON.parse(request.body);
+  const input = JSON.parse(body.input);
+  const expected = ${JSON.stringify(food)};
+  if (input.description === undefined) delete expected.description;
+  if (request.url !== "https://api.openai.com/v1/responses" ||
+      request.headers.Authorization !== "Bearer owner-key" ||
+      request.timeout !== 25 ||
+      body.model !== "gpt-5.4-mini-test" ||
+      body.store !== false ||
+      body.text.format.strict !== true ||
+      Object.keys(input).length !== Object.keys(expected).length ||
+      Object.keys(expected).some((field) => field !== "description" && input[field] !== expected[field])) {
+    return { statusCode: 500 };
+  }
+  if (input.description === "rejected") return { statusCode: 401 };
+  if (input.description === "quota") return { statusCode: 429 };
+  if (input.description === "timeout") throw new Error("Timed out");
+  if (![undefined, "Firm tofu", "refusal", "incomplete", "bad-json", "bad-value"].includes(input.description)) {
+    return { statusCode: 500 };
+  }
+  const text = JSON.stringify({
+    calories: input.description === "bad-value" ? -1 : 145.1251,
+    protein: 16, carbohydrate: 4, fat: 8,
+  });
+  const content = input.description === "refusal"
+    ? { type: "refusal", refusal: "Declined" }
+    : { type: "output_text", text: input.description === "bad-json" ? "{" : text };
+  return { statusCode: 200, json: {
+    status: input.description === "incomplete" ? "incomplete" : "completed",
+    output: [{ type: "reasoning" }, { type: "message", role: "assistant", content: [content] }],
+  } };
+};
+`,
+        );
+        fs.writeFileSync(
+          path.join(hooksDir, "zz_openai_storage_test.pb.js"),
+          `routerAdd("POST", "/api/test/openai-storage", (event) => {
+  const { owner, expected } = event.requestInfo().body;
+  const row = event.app.findFirstRecordByFilter("${collection}", "owner = {:owner}", { owner });
+  const ciphertext = row.getString("encrypted_api_key");
+  return event.json(200, {
+    encrypted: ciphertext !== expected && toString($security.decrypt(ciphertext, "${secret}")) === expected,
+  });
+}, $apis.requireSuperuserAuth());`,
+        );
+      },
+    },
   );
 });
