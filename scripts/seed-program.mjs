@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import { isDeepStrictEqual } from "node:util";
 import PocketBase, { ClientResponseError } from "pocketbase";
 
@@ -608,8 +609,74 @@ const seedProgram = async (pb, fields, planBlocks, startDate, timezone) => {
   const schedulePath = `${programPath}/schedule`;
   const dates = { startDate, timezone };
   const { revision } = await post(`${schedulePath}/preview`, dates);
-  const schedule = await post(schedulePath, { ...dates, revision });
-  return { ...currentProgram, status: "active", schedule };
+  await post(schedulePath, { ...dates, revision });
+  return pb.send(programPath);
+};
+
+const seedMacroTargets = async (pb, program, macros, { includeOverrides = false } = {}) => {
+  const post = (operation, body) =>
+    pb.send(`/api/paideuo/v1/nutrition/${operation}`, { method: "POST", body });
+  const programId = program.id;
+  const prefix = `seed-project-cycle:${programId}`;
+  const externalId = prefix + ":macros";
+  const { items } = await post("plans/list", { programId, limit: 1 });
+  let [plan] = items;
+  if (plan && plan.externalId !== externalId) return;
+
+  plan ??= await post("plans/create", {
+    programId,
+    externalId,
+    operationId: randomUUID(),
+    data: { active: true, macros },
+  });
+
+  if (!includeOverrides) return;
+  const firstBlock = program.blocks[0];
+  if (firstBlock?.name !== blocks[0].name) return;
+  const block = await pb.send(`/api/paideuo/programs/${programId}/blocks/${firstBlock.id}`);
+  const weekTwo = block.weeks.find(({ position }) => position === 2);
+  const deload = block.weeks.find(({ position }) => position === 4);
+  const examples = [["block", { kind: "block", blockId: block.id }, { macros: { protein: 140 } }]];
+  if (weekTwo) {
+    examples.push(
+      ["week-two", { kind: "week", weekId: weekTwo.id }, { macros: { protein: 150 } }],
+      [
+        "week-two-tuesday",
+        { kind: "weekday", weekId: weekTwo.id, weekday: 2 },
+        { macros: { carbohydrate: 320 } },
+      ],
+      [
+        "date-exception",
+        { kind: "date", date: shiftDate(program.schedule.startDate, 8) },
+        { macros: { protein: 165 } },
+      ],
+    );
+  }
+  if (deload) examples.push(["deload", { kind: "week", weekId: deload.id }, { active: false }]);
+
+  const existing = [];
+  let after;
+  do {
+    const page = await post("targets/list", { planId: plan.id, limit: 100, after });
+    existing.push(...page.items);
+    after = page.next;
+  } while (after);
+
+  for (const [key, selector, fields] of examples) {
+    const externalId = `${prefix}:${key}`;
+    if (
+      existing.some(
+        (item) => item.externalId === externalId || isDeepStrictEqual(item.data.selector, selector),
+      )
+    )
+      continue;
+    await post("targets/create", {
+      planId: plan.id,
+      externalId,
+      operationId: randomUUID(),
+      data: { selector, ...fields },
+    });
+  }
 };
 
 const seed = async () => {
@@ -630,6 +697,13 @@ const seed = async () => {
     timezone,
   );
 
+  await seedMacroTargets(
+    pb,
+    active,
+    { calories: 2400, protein: 130, carbohydrate: 290, fat: 80 },
+    { includeOverrides: true },
+  );
+
   const today = localDate(active.schedule.timezone);
   const thisWeek = mondayOf(today);
   const historyEnd = active.schedule.startDate < thisWeek ? active.schedule.startDate : thisWeek;
@@ -642,6 +716,7 @@ const seed = async () => {
     historyStart,
     active.schedule.timezone,
   );
+  await seedMacroTargets(pb, history, { calories: 2200, protein: 120, carbohydrate: 250, fat: 80 });
   const historyToday = localDate(history.schedule.timezone);
   const historicalSessions = await recordHistory(pb, history, historyToday, durationDays);
   if (
@@ -672,10 +747,10 @@ const seed = async () => {
   }
   console.log(`Added ${createdCheckIns} daily check-ins through ${today}.`);
   console.log(
-    `Active program: /programs/${active.id} · Calendar: /?date=${active.schedule.startDate}`,
+    `Active program: /programs/${active.id} · Calendar: /?date=${active.schedule.startDate}&program=${active.id}`,
   );
   console.log(
-    `Previous cycle: /programs/${history.id} · Calendar: /?date=${history.schedule.startDate}`,
+    `Previous cycle: /programs/${history.id} · Calendar: /?date=${history.schedule.startDate}&program=${history.id}`,
   );
 };
 

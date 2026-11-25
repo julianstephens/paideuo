@@ -161,7 +161,11 @@ The script seeds an active eight-week climbing program and an earlier completed
 cycle with two training blocks. The earlier cycle has completed and skipped
 sessions with varied durations, effort ratings, and notes. Daily check-ins cover
 the earlier cycle and recent days, with varied sleep, soreness, readiness,
-nutrition, and occasional gaps.
+nutrition, and occasional gaps. Both cycles include sample macro targets.
+The active cycle also has block, week, weekday, and date overrides, plus an
+inactive deload week.
+Reruns fill missing sample targets while preserving existing target values and
+leaving independently created nutrition plans alone.
 
 The active schedule defaults to the current week's Monday in the local
 timezone. Set `SEED_START_DATE` to a Monday in `YYYY-MM-DD` format or

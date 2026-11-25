@@ -65,4 +65,18 @@ const canonical = (value) => {
   return value;
 };
 
-module.exports = { targetSource, resolveTargets, summarize, canonical };
+const remainingMacros = (planned, target) =>
+  Object.fromEntries(
+    macroKeys.map((key) => {
+      const value = target.macros?.[key].value;
+      const { subtotal, knownCount } = planned.macros[key];
+      return [
+        key,
+        value == null || knownCount !== planned.entryCount
+          ? null
+          : (scaled(value) - scaled(subtotal ?? 0)) / 1000,
+      ];
+    }),
+  );
+
+module.exports = { targetSource, resolveTargets, summarize, canonical, remainingMacros };

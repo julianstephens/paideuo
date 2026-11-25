@@ -1,17 +1,18 @@
 # Nutrition contracts v1
 
-The contracts and shared PocketBase services are implemented in NUT-01. Food-bank, recipe, nutrition plan, and target operations are live through HTTP and MCP. The remaining operations are shared contracts for follow-up features. The contract catalog in `backend/pb_hooks/nutrition-contracts.cjs` defines each operation's request and response JSON Schema. Both adapters in `backend/pb_hooks/nutrition-adapters.cjs` call the same service.
+The contracts and shared PocketBase services are implemented in NUT-01. Food-bank, recipe, nutrition plan, target, and planned-food operations are live through HTTP and MCP. Consumed-food and day-summary operations are shared contracts for follow-up features. The contract catalog in `backend/pb_hooks/nutrition-contracts.cjs` defines each operation's request and response JSON Schema. Both adapters in `backend/pb_hooks/nutrition-adapters.cjs` call the same service.
 
 ## Operations
 
-| Resource              | Operations                                               |
-| --------------------- | -------------------------------------------------------- |
-| `foods`               | get, list, create, update, duplicate, set_archive        |
-| `recipes`             | get, list, create, update, delete, for_entry             |
-| `plans`               | get, list, create, update, delete                        |
-| `targets`             | get, list, create, update, delete, resolve, resolve_bulk |
-| `planned`, `consumed` | get, list, create, update, delete                        |
-| `days`                | summary                                                  |
+| Resource   | Operations                                               |
+| ---------- | -------------------------------------------------------- |
+| `foods`    | get, list, create, update, duplicate, set_archive        |
+| `recipes`  | get, list, create, update, delete, for_entry             |
+| `plans`    | get, list, create, update, delete                        |
+| `targets`  | get, list, create, update, delete, resolve, resolve_bulk |
+| `planned`  | get, list, create, update, delete, week, preview, commit |
+| `consumed` | get, list, create, update, delete                        |
+| `days`     | summary                                                  |
 
 For example, `planned.create` maps to `POST /api/paideuo/v1/nutrition/planned/create` and the MCP tool `nutrition_planned_create`. HTTP accepts the operation input as a JSON body and returns the output directly. MCP accepts the same fields as tool arguments and returns the output as structured content. HTTP reads also use a JSON body so filters and cursors share the same schema with MCP. Lists use an opaque `next` ID as the next request's `after` cursor. Page sizes default to 50 and allow up to 100. Entity responses contain `id`, `externalId`, and `data`.
 
@@ -50,3 +51,17 @@ Food-bank macros describe one serving, using kcal for `calories` and grams for `
 Entry updates edit fields such as quantity, date, or macros while preserving the original snapshot and provenance. A supplied `overrides` object replaces the previous overrides. A numeric override applies to the entire entry, `null` clears that entry's estimate, and an omitted macro uses the captured per-serving estimate. An empty override object restores all captured estimates. Archiving a food hides it from default lists and prevents new bank selections. Planned entries can be canceled and restored with `canceled`. Canceled and deleted planned entries cannot be newly logged through their plan link. Deleting food entries hides them from reads and totals without removing their snapshots or linked consumption.
 
 Values accept up to three decimal places. Serving and recipe quantities are limited to 1,000 and individual macro estimates and overrides to 1,000,000. Arithmetic uses thousandths, rounds each calculated entry amount half up to three places, and sums the rounded amounts independently. Daily summaries report owner-wide planned and consumed totals for the requested date, plus the target for the explicitly selected program when provided. Each total reports its eligible entry count and, per macro, the subtotal of known values and their count. An unknown subtotal is `null`. A known zero contributes to coverage. Subjective nutrition check-ins and their existing quantitative fields continue to use the check-in APIs and metrics.
+
+## Planned-food scheduling
+
+The meal planner opens from Nutrition or an active target preview. The planner links to the food bank. Use `planned.create` with `{ operationId, externalId, data }` to schedule one entry. The data supplies `date`, `quantity`, and either a bank or inline source. It can also include `programId`, `timezone`, `meal`, `order`, `overrides`, and `notes`. Use `planned.update` with `{ operationId, id, data }` to move an entry by changing its date or reorder it by changing its order. A null meal label clears it. Entries with equal order are shown in record ID order.
+
+`planned.week` accepts `{ startDate, programId? }` and returns seven consecutive civil days with ordered owner-wide entries, planned subtotals, the selected program's effective target, and remaining macros. A configured remaining macro is target minus the planned subtotal. An empty day uses zero planned for that difference. Unknown estimates on a populated day leave the corresponding remaining value null. Canceled entries are visible for reference and excluded from totals.
+
+Send one of these batch inputs to `planned.preview`:
+
+- `{ kind: "schedule", entries: [{ externalId, data }, ...] }` schedules new entries and captures current estimates.
+- `{ kind: "copy", id, destinationDate }` copies an existing active entry with its captured snapshot.
+- `{ kind: "clone", startDate, endDate, destinationDate }` copies an inclusive range of up to 62 civil days, preserving gaps and skipping canceled and deleted entries. Each copied entry retains its source program and timezone.
+
+A batch adds between 1 and 100 entries. Preview returns `{ previewToken, additions, destinations }`, including existing rows on dates that will receive additions. Review the additions and send `{ operationId, previewToken, batch }` to `planned.commit` with the exact batch input. Commit appends after existing rows and returns `{ items: [{ id, externalId }, ...] }`. A preview is owner-bound and expires after 15 minutes. If the proposed additions or destination rows change before commit, preview again after the conflict. An identical retry of a successful operation returns its receipt even after expiry. Preview requires `nutrition:read` and commit requires `nutrition:write`.

@@ -24,7 +24,7 @@ export const EntryRecipeLink = ({
 
 const BackToFoodBank = () => (
   <Link alignSelf="start" asChild variant="underline">
-    <RouterLink to="/nutrition">Back to food bank</RouterLink>
+    <RouterLink to="/nutrition/foods">Back to food bank</RouterLink>
   </Link>
 );
 

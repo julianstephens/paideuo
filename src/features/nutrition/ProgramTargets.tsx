@@ -69,6 +69,37 @@ export const ProgramTargets = ({ program, ownerId }: { program: Program; ownerId
           </Button>
         )}
       </Flex>
+      {plan.isPending && <Text role="status">Loading nutrition targets…</Text>}
+      {plan.isSuccess &&
+        !open &&
+        (plan.data ? (
+          <Stack gap="2" align="start">
+            <Text fontSize="sm" color="fg.muted">
+              Program defaults{plan.data.data.active !== true && " · Off by default"}
+            </Text>
+            <Flex gap="2" columnGap="5" wrap="wrap" aria-label="Program macro defaults">
+              {targetMacros.map((key) => {
+                const value = plan.data?.data.macros?.[key];
+                return typeof value === "number" ? (
+                  <Text key={key} fontSize="sm">
+                    {macroLabels[key]} {value}
+                  </Text>
+                ) : null;
+              })}
+            </Flex>
+            {program.schedule && (
+              <Button asChild variant="ghost" size="sm">
+                <Link to={`/?program=${program.id}&date=${program.schedule.startDate}`}>
+                  View targets in calendar
+                </Link>
+              </Button>
+            )}
+          </Stack>
+        ) : (
+          <Text fontSize="sm" color="fg.muted">
+            No nutrition targets are set for this program.
+          </Text>
+        ))}
       {plan.isError && (
         <Notice role="alert">{errorMessage(plan.error, "Unable to load nutrition plan.")}</Notice>
       )}
@@ -178,6 +209,11 @@ const TargetEditor = ({
             </Notice>
           )}
           <TargetValues target={resolved.data} showSources />
+          {resolved.data?.active && (
+            <Button asChild variant="outline">
+              <Link to={`/nutrition?program=${program.id}&date=${preview}`}>Open meal planner</Link>
+            </Button>
+          )}
           <Button asChild variant="outline">
             <Link to={`/?program=${program.id}&date=${preview || program.schedule.startDate}`}>
               View targets in calendar

@@ -299,7 +299,95 @@ define(
 );
 
 const maxTargetDays = 62;
+const maxPlannedBatch = 100;
+const array = (items, maxItems, minItems = 0) => ({ type: "array", items, maxItems, minItems });
+const plannedBatch = {
+  anyOf: [
+    object(
+      {
+        kind: enumOf("schedule"),
+        entries: array(
+          object({ externalId, data: planned }, ["externalId", "data"]),
+          maxPlannedBatch,
+          1,
+        ),
+      },
+      ["kind", "entries"],
+    ),
+    object({ kind: enumOf("copy"), id, destinationDate: date }, ["kind", "id", "destinationDate"]),
+    object({ kind: enumOf("clone"), startDate: date, endDate: date, destinationDate: date }, [
+      "kind",
+      "startDate",
+      "endDate",
+      "destinationDate",
+    ]),
+  ],
+};
+const previewToken = { type: "string", pattern: "^[0-9a-f]{64}$" };
+const plannedItems = array(resultSchemas.planned, Number.MAX_SAFE_INTEGER);
+const proposal = object({ externalId, data: storedPlanned }, ["externalId", "data"]);
+define(
+  "planned.week",
+  "read",
+  object({ startDate: date, programId: id }, ["startDate"]),
+  object(
+    {
+      days: array(
+        object(
+          {
+            date,
+            entries: plannedItems,
+            planned: totals,
+            target: targets,
+            remaining: macros(nullable({ type: "number" })),
+          },
+          ["date", "entries", "planned", "target", "remaining"],
+        ),
+        7,
+        7,
+      ),
+    },
+    ["days"],
+  ),
+);
+define(
+  "planned.preview",
+  "read",
+  plannedBatch,
+  object(
+    {
+      previewToken,
+      additions: array(proposal, maxPlannedBatch),
+      destinations: array(
+        object({ date, entries: plannedItems }, ["date", "entries"]),
+        maxPlannedBatch,
+      ),
+    },
+    ["previewToken", "additions", "destinations"],
+  ),
+);
+define(
+  "planned.commit",
+  "write",
+  object({ operationId: externalId, previewToken, batch: plannedBatch }, [
+    "operationId",
+    "previewToken",
+    "batch",
+  ]),
+  object({ items: array(object({ id, externalId }, ["id", "externalId"]), maxPlannedBatch) }, [
+    "items",
+  ]),
+);
 const publishedDescriptions = {
+  "planned.get": "Get an owned planned-food entry.",
+  "planned.list": "List owned planned-food entries, optionally by civil date.",
+  "planned.create": "Schedule a bank food or one-off food.",
+  "planned.update": "Edit, move, reorder, cancel, or restore an owned planned-food entry.",
+  "planned.delete": "Remove an owned planned-food entry from the schedule.",
+  "planned.week": "Show seven days of scheduled food, estimated totals, and optional targets.",
+  "planned.preview":
+    "Preview scheduling or copying planned food, with existing destination entries.",
+  "planned.commit": "Append a reviewed batch of planned food atomically.",
   "plans.list": "List owned nutrition plans, optionally for a specific program.",
   "plans.get": "Get an owned program nutrition plan.",
   "plans.create": "Create a nutrition plan for an owned program.",
@@ -377,7 +465,8 @@ const matches = (schema, value) => {
     case "array":
       return (
         Array.isArray(value) &&
-        value.length <= schema.maxItems &&
+        value.length >= (schema.minItems ?? 0) &&
+        value.length <= (schema.maxItems ?? Infinity) &&
         value.every((item) => matches(schema.items, item))
       );
     case "string":
@@ -442,6 +531,7 @@ const publishedToolScopes = new Map(
 module.exports = {
   macroKeys,
   maxTargetDays,
+  maxPlannedBatch,
   matches,
   operations,
   contractFor,

@@ -1,7 +1,18 @@
 /* oxlint-disable import/no-commonjs */
 
-const { contractFor, matches, maxTargetDays } = require("./nutrition-contracts.cjs");
-const { targetSource, resolveTargets, summarize, canonical } = require("./nutrition-domain.cjs");
+const {
+  contractFor,
+  matches,
+  maxTargetDays,
+  maxPlannedBatch,
+} = require("./nutrition-contracts.cjs");
+const {
+  targetSource,
+  resolveTargets,
+  summarize,
+  canonical,
+  remainingMacros,
+} = require("./nutrition-domain.cjs");
 const dates = require("./calendar-dates.js");
 const credentials = require("./service-credentials.cjs");
 
@@ -184,7 +195,8 @@ const resolveBulk = (db, owner, input) => {
 };
 
 const capture = (db, owner, source, planned) => {
-  if (source.kind === "inline") return { source: { kind: "inline" }, snapshot: source.food };
+  if (source.kind === "inline")
+    return { source: { kind: "inline" }, snapshot: foodData(source.food) };
   if (source.kind === "planned") {
     if (!planned) throw new BadRequestError("Provide the linked planned entry.");
     return { source, snapshot: planned.snapshot };
@@ -266,6 +278,12 @@ const recipeData = (data) => ({
 
 const conflict = (message) => new ApiError(409, message);
 
+const externalIdInUse = (db, kind, owner, externalId) =>
+  first(db, collection(kind), "owner = {:owner} && external_id = {:id}", {
+    owner,
+    id: externalId,
+  });
+
 const create = (db, principal, kind, input) => {
   const owner = principal.ownerId;
   const name = collection(kind);
@@ -273,7 +291,7 @@ const create = (db, principal, kind, input) => {
   const fields = { owner, external_id: input.externalId };
   let data = kind === "foods" ? foodData(input.data) : input.data;
 
-  if (first(db, name, "owner = {:owner} && external_id = {:id}", { owner, id: input.externalId })) {
+  if (externalIdInUse(db, kind, owner, input.externalId)) {
     throw conflict("External ID is already in use.");
   }
   if (parent) {
@@ -303,6 +321,7 @@ const create = (db, principal, kind, input) => {
 };
 
 const mutate = (db, principal, kind, action, input) => {
+  if (action === "commit") return commitPlanned(db, principal, input);
   if (action === "create") return create(db, principal, kind, input);
   const record = entryRecord(db, kind, principal.ownerId, input.id, action === "delete");
   if (action === "delete" && !isEntry(kind)) {
@@ -381,6 +400,191 @@ const dailyEntries = (db, kind, owner, date) =>
     .map(dataOf)
     .filter((data) => !data.deleted && !data.canceled);
 
+const shiftDay = (date, offset) => {
+  const shifted = dates.format(new Date(civilDate(date).getTime() + offset * dayMilliseconds));
+  civilDate(shifted);
+  return shifted;
+};
+
+const plannedRange = (db, owner, start, end) =>
+  find(
+    db,
+    collection("planned"),
+    "owner = {:owner} && date >= {:start} && date <= {:end} && (data.deleted = null || data.deleted = false)",
+    { owner, start, end },
+    "date,id",
+  )
+    .map(resultOf)
+    .sort((a, b) =>
+      a.data.date < b.data.date
+        ? -1
+        : a.data.date > b.data.date
+          ? 1
+          : (a.data.order ?? 0) - (b.data.order ?? 0),
+    );
+
+const plannedWeek = (db, owner, { startDate, programId }) => {
+  const entries = plannedRange(db, owner, startDate, shiftDay(startDate, 6));
+  const context = targetContext(db, owner, programId);
+  return {
+    days: Array.from({ length: 7 }, (_, index) => {
+      const date = shiftDay(startDate, index);
+      const dayEntries = entries.filter((entry) => entry.data.date === date);
+      const planned = summarize(
+        dayEntries.filter(({ data }) => !data.canceled).map(({ data }) => data),
+      );
+      const target = effective(context, civilDate(date));
+      return {
+        date,
+        entries: dayEntries,
+        planned,
+        target,
+        remaining: remainingMacros(planned, target),
+      };
+    }),
+  };
+};
+
+const cloneSources = (db, owner, batch) => {
+  if (batch.kind === "copy") {
+    const entry = resultOf(entryRecord(db, "planned", owner, batch.id));
+    if (entry.data.canceled) throw new BadRequestError("Canceled food cannot be copied.");
+    civilDate(batch.destinationDate);
+    return [entry];
+  }
+  const span = (civilDate(batch.endDate) - civilDate(batch.startDate)) / dayMilliseconds;
+  if (span < 0 || span >= maxTargetDays) {
+    throw new BadRequestError(
+      "Provide an ordered source range of up to " + maxTargetDays + " days.",
+    );
+  }
+  shiftDay(batch.destinationDate, span);
+  return plannedRange(db, owner, batch.startDate, batch.endDate).filter(
+    ({ data }) => !data.canceled,
+  );
+};
+
+const plannedPreviewPrefix = "paideuo:nutrition-planned-preview:";
+const plannedFingerprint = (value) => $security.sha256(JSON.stringify(canonical(value)));
+
+const preparePlanned = (db, owner, batch, token) => {
+  const principal = { ownerId: owner, credentialRef: "preview" };
+  let additions;
+  if (batch.kind === "schedule") {
+    additions = batch.entries
+      .map(({ externalId, data }) => ({
+        externalId,
+        data: createEntry(db, principal, data),
+      }))
+      .sort((a, b) => (a.data.order ?? 0) - (b.data.order ?? 0));
+  } else {
+    const sources = cloneSources(db, owner, batch);
+    const start = batch.kind === "clone" ? civilDate(batch.startDate) : null;
+    additions = sources.map(({ data }, index) => ({
+      externalId: "copy:" + token + ":" + index,
+      data: {
+        ...data,
+        date: shiftDay(
+          batch.destinationDate,
+          start ? (civilDate(data.date) - start) / dayMilliseconds : 0,
+        ),
+        createdBy: principal.credentialRef,
+        updatedBy: principal.credentialRef,
+      },
+    }));
+  }
+  if (!additions.length || additions.length > maxPlannedBatch) {
+    throw new BadRequestError(
+      "A batch must add between 1 and " + maxPlannedBatch + " planned entries.",
+    );
+  }
+  if (new Set(additions.map(({ externalId }) => externalId)).size !== additions.length) {
+    throw conflict("Batch external IDs must be unique.");
+  }
+  const byDate = new Map();
+  for (const addition of additions) {
+    if (externalIdInUse(db, "planned", owner, addition.externalId)) {
+      throw conflict("External ID is already in use.");
+    }
+    const date = addition.data.date;
+    if (!byDate.has(date)) {
+      const entries = plannedRange(db, owner, date, date);
+      const nextOrder = entries.reduce(
+        (next, { data }) => Math.max(next, (data.order ?? 0) + 1),
+        0,
+      );
+      byDate.set(date, { date, entries, nextOrder });
+    }
+    const destination = byDate.get(date);
+    if (destination.nextOrder > 1000000)
+      throw conflict("The destination has no remaining order positions.");
+    addition.data.order = destination.nextOrder++;
+  }
+  return {
+    additions,
+    destinations: [...byDate.values()].map(({ date, entries }) => ({ date, entries })),
+  };
+};
+
+const previewPlanned = (db, owner, batch) => {
+  const previewToken = $security.sha256($security.randomString(64));
+  const prepared = preparePlanned(db, owner, batch, previewToken);
+  const store = db.store();
+  const now = Date.now();
+  const active = [];
+  for (const [key, value] of Object.entries(store.getAll())) {
+    if (!key.startsWith(plannedPreviewPrefix)) continue;
+    const { expiresAt } = JSON.parse(value);
+    if (expiresAt <= now) store.remove(key);
+    else active.push({ key, expiresAt });
+  }
+  if (active.length >= 10000) {
+    active.sort((a, b) => a.expiresAt - b.expiresAt);
+    store.remove(active[0].key);
+  }
+  store.set(
+    plannedPreviewPrefix + previewToken,
+    JSON.stringify({
+      owner,
+      expiresAt: now + 15 * 60 * 1000,
+      fingerprint: plannedFingerprint([batch, prepared]),
+    }),
+  );
+  return { previewToken, ...prepared };
+};
+
+const commitPlanned = (db, principal, { previewToken, batch }) => {
+  const owner = principal.ownerId;
+  const preview = JSON.parse(db.store().get(plannedPreviewPrefix + previewToken) ?? "null");
+  const stale = () => conflict("This planned-food preview is stale. Preview the batch again.");
+  if (!preview || preview.owner !== owner || preview.expiresAt <= Date.now()) throw stale();
+  let prepared;
+  try {
+    prepared = preparePlanned(db, owner, batch, previewToken);
+  } catch (error) {
+    if (
+      error instanceof ApiError ||
+      error instanceof BadRequestError ||
+      error instanceof NotFoundError
+    )
+      throw stale();
+    throw error;
+  }
+  if (preview.fingerprint !== plannedFingerprint([batch, prepared])) throw stale();
+  const target = db.findCollectionByNameOrId(collection("planned"));
+  const items = prepared.additions.map(({ externalId, data }) => {
+    const record = new Record(target, {
+      owner,
+      external_id: externalId,
+      date: data.date,
+      data: { ...data, createdBy: principal.credentialRef, updatedBy: principal.credentialRef },
+    });
+    db.save(record);
+    return { id: record.id, externalId };
+  });
+  return { items };
+};
+
 const recipeForEntry = (db, owner, { entryKind, entryId }) => {
   let { source, plannedId } = dataOf(entryRecord(db, entryKind, owner, entryId));
   if (source.kind === "planned" && plannedId) {
@@ -395,6 +599,8 @@ const recipeForEntry = (db, owner, { entryKind, entryId }) => {
 };
 
 const read = (db, owner, kind, action, input) => {
+  if (action === "week") return plannedWeek(db, owner, input);
+  if (action === "preview") return previewPlanned(db, owner, input);
   if (action === "get") return resultOf(entryRecord(db, kind, owner, input.id));
   if (action === "list") return list(db, kind, owner, input);
   if (action === "for_entry") return recipeForEntry(db, owner, input);

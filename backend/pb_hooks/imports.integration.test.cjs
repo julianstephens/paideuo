@@ -4219,3 +4219,215 @@ const mockOpenAI = (request) => {
     },
   );
 });
+
+test("planned nutrition batches preview and append atomically through production adapters", async () => {
+  const { contractFor, matches } = require("./nutrition-contracts.cjs");
+  await withPocketBase(
+    async ({ admin, baseUrl }) => {
+      const { client } = await createAuthedUser(admin, baseUrl, "meal-planner");
+      const { client: other } = await createAuthedUser(admin, baseUrl, "meal-planner-other");
+      const rest = async (name, input) => {
+        const operation = "planned." + name;
+        const result = await nutritionRequest(client, operation, input);
+        assert.ok(matches(contractFor(operation).outputSchema, result), operation);
+        return result;
+      };
+      const credential = async (scope) =>
+        (
+          await domainRequest(client, "service-credentials/issue", {
+            label: scope,
+            scopes: [scope],
+          })
+        ).plaintextToken;
+      const reader = await credential("nutrition:read");
+      const writer = await credential("nutrition:write");
+      const service = (name, input, token) =>
+        serviceImportRequest(
+          baseUrl,
+          "/api/paideuo/v1/service/nutrition/planned/" + name,
+          token,
+          input,
+        );
+      const mcp = async (name, input, token) => {
+        const { result } = await serviceImportRequest(
+          baseUrl,
+          "/api/paideuo/v1/service/mcp",
+          token,
+          {
+            jsonrpc: "2.0",
+            id: 1,
+            method: "tools/call",
+            params: { name: "nutrition_planned_" + name, arguments: input },
+          },
+        );
+        assert.equal(result.isError, false, JSON.stringify(result));
+        return result.structuredContent;
+      };
+      const { id: programId } = await client.send("/api/paideuo/programs", {
+        method: "POST",
+        body: { name: "Meal planner training" },
+      });
+      await admin.collection("paideuo_blocks").create({
+        program: programId,
+        position: 1,
+        duration_weeks: 3,
+        name: "Base",
+      });
+      await admin.collection("paideuo_program_schedules").create({
+        program: programId,
+        start_date: "2026-10-26",
+        timezone: "America/New_York",
+        source_revision: "fixture",
+        status: "active",
+      });
+      await nutritionRequest(client, "plans.create", {
+        operationId: "target",
+        externalId: "target",
+        programId,
+        data: { active: true, macros: { calories: 250, protein: 10 } },
+      });
+      const food = {
+        title: "Rice",
+        serving: { description: "one bowl", size: 150, unit: "g" },
+        macros: { calories: 100.001, protein: 0 },
+      };
+      const bank = await nutritionRequest(client, "foods.create", {
+        externalId: "rice",
+        operationId: "create-rice",
+        data: food,
+      });
+      const inline = {
+        kind: "inline",
+        food: { ...food, title: "One-off", macros: { calories: 20 } },
+      };
+      const entry = (externalId, date, source = inline) => ({
+        externalId,
+        data: { date, source, programId, quantity: 1 },
+      });
+      const batch = {
+        kind: "schedule",
+        entries: [
+          entry("friday", "2026-10-30", { kind: "bank", foodId: bank.id }),
+          entry("sunday", "2026-11-01"),
+        ],
+      };
+      const { previewToken } = await mcp("preview", batch, reader);
+      await assert.rejects(service("preview", batch, writer), { status: 403 });
+      const commit = { batch, previewToken, operationId: "schedule" };
+      await assert.rejects(service("commit", commit, reader), { status: 403 });
+      await assert.rejects(nutritionRequest(other, "planned.commit", commit), { status: 409 });
+      const committed = await mcp("commit", commit, writer);
+      assert.deepEqual(await rest("commit", commit), committed);
+      await assert.rejects(rest("commit", { ...commit, operationId: "new-op" }), { status: 409 });
+      const weekInput = { startDate: "2026-10-26", programId };
+      const week = await rest("week", weekInput);
+      assert.deepEqual(await service("week", weekInput, reader), week);
+      assert.deepEqual(await mcp("week", weekInput, reader), week);
+      assert.equal(week.days[0].remaining.calories, 250);
+      assert.equal(week.days[4].planned.macros.protein.subtotal, 0);
+      assert.equal(week.days[4].remaining.calories, 149.999);
+      assert.equal(week.days[6].remaining.protein, null);
+      assert.equal(
+        (await rest("week", { startDate: weekInput.startDate })).days[4].target.active,
+        false,
+      );
+
+      await nutritionRequest(client, "foods.update", {
+        id: bank.id,
+        operationId: "edit-rice",
+        data: { ...food, macros: { calories: 500 } },
+      });
+      await nutritionRequest(client, "foods.set_archive", {
+        id: bank.id,
+        operationId: "archive-rice",
+        archived: true,
+      });
+      const clone = {
+        kind: "clone",
+        startDate: "2026-10-30",
+        endDate: "2026-11-01",
+        destinationDate: "2026-10-31",
+      };
+      let review = await rest("preview", clone);
+      assert.deepEqual(
+        review.additions.map(({ data }) => data.date),
+        ["2026-10-31", "2026-11-02"],
+      );
+      assert.equal(review.additions[0].data.snapshot.macros.calories, 100.001);
+      const existing = await rest("create", {
+        ...entry("existing", "2026-10-31"),
+        operationId: "occupy",
+      });
+      await assert.rejects(
+        rest("commit", { batch: clone, previewToken: review.previewToken, operationId: "clone" }),
+        { status: 409 },
+      );
+      review = await rest("preview", clone);
+      assert.equal(review.destinations[0].entries[0].id, existing.id);
+      const copied = await rest("commit", {
+        batch: clone,
+        previewToken: review.previewToken,
+        operationId: "clone",
+      });
+      const copiedEntry = await rest("get", { id: copied.items[0].id });
+      assert.equal(copiedEntry.data.order, 1);
+      assert.equal(copiedEntry.data.timezone, "America/New_York");
+      const move = {
+        id: copiedEntry.id,
+        operationId: "move",
+        data: { date: "2026-11-03", quantity: 2, order: 2 },
+      };
+      const moved = await rest("update", move);
+      assert.equal(moved.data.date, "2026-11-03");
+      assert.deepEqual(moved.data.snapshot, copiedEntry.data.snapshot);
+      assert.deepEqual((await rest("list", { date: "2026-10-31" })).items, [existing]);
+
+      const single = { kind: "copy", id: moved.id, destinationDate: "2026-11-04" };
+      const copiedSingle = await rest("preview", single);
+      assert.equal(copiedSingle.additions[0].data.quantity, 2);
+      await rest("delete", { id: moved.id, operationId: "delete" });
+      await assert.rejects(
+        rest("commit", {
+          batch: single,
+          previewToken: copiedSingle.previewToken,
+          operationId: "copy-stale",
+        }),
+        { status: 409 },
+      );
+      await assert.rejects(rest("week", { startDate: "2026-02-30" }), { status: 400 });
+
+      const brokenBatch = {
+        kind: "schedule",
+        entries: [entry("rollback-first", "2026-11-05"), entry("rollback-sentinel", "2026-11-05")],
+      };
+      const rollback = await rest("preview", brokenBatch);
+      await assert.rejects(
+        rest("commit", {
+          batch: brokenBatch,
+          previewToken: rollback.previewToken,
+          operationId: "rollback",
+        }),
+        { status: 400 },
+      );
+      assert.deepEqual((await rest("list", { date: "2026-11-05" })).items, []);
+      assert.equal(
+        (await nutritionRequest(client, "foods.list", { status: "all" })).items.length,
+        1,
+      );
+    },
+    {
+      prepareHooks: (hooksDir) =>
+        fs.writeFileSync(
+          path.join(hooksDir, "nutrition-rollback.pb.js"),
+          `
+onRecordValidate((event) => {
+  if (event.record.getString("external_id") === "rollback-sentinel") {
+    throw new BadRequestError("Injected planned-food write failure.");
+  }
+  event.next();
+}, "paideuo_nutrition_planned");
+`,
+        ),
+    },
+  );
+});

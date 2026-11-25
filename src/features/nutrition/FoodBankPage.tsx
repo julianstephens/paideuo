@@ -99,12 +99,17 @@ const FoodBank = ({ ownerId }: { ownerId: string }) => {
       <PageHeader
         title="Food bank"
         action={
-          <Button
-            disabled={locked || !categories.data}
-            onClick={() => startEdit({ action: "create" })}
-          >
-            Add food
-          </Button>
+          <Flex gap="2" wrap="wrap">
+            <Button asChild variant="outline">
+              <RouterLink to="/nutrition">Meal planner</RouterLink>
+            </Button>
+            <Button
+              disabled={locked || !categories.data}
+              onClick={() => startEdit({ action: "create" })}
+            >
+              Add food
+            </Button>
+          </Flex>
         }
       />
       {editor && (
