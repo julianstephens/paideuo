@@ -33,6 +33,7 @@ const defaultServiceScopes: ServiceCredentialScope[] = [
   "metrics:write",
   "nutrition:read",
   "nutrition:write",
+  "nutrition:estimate",
   "recordings:write",
 ];
 

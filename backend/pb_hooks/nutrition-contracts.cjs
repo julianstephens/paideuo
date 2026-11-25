@@ -226,13 +226,23 @@ for (const [entityName, create, edit, parent, deletable] of [
           category: text(100, 0),
         }
       : {};
-  if (entityName === "planned" || entityName === "consumed") filters.date = date;
+  const dated = entityName === "planned" || entityName === "consumed";
   if (entityName === "consumed") filters.plannedId = id;
+  const listFields = { ...pagination, ...children, ...filters };
+  const listSchema = dated
+    ? {
+        type: "object",
+        anyOf: [
+          object({ ...listFields, date }),
+          object({ ...listFields, startDate: date, endDate: date }, ["startDate", "endDate"]),
+        ],
+      }
+    : object(listFields);
   define(entityName + ".get", "read", identity, result);
   define(
     entityName + ".list",
     "read",
-    object({ ...pagination, ...children, ...filters }),
+    listSchema,
     object({ items: { type: "array", items: result }, next: nullable(id) }, ["items", "next"]),
   );
   define(
@@ -301,7 +311,12 @@ define(
 
 const maxTargetDays = 62;
 const maxPlannedBatch = 100;
-const array = (items, maxItems, minItems = 0) => ({ type: "array", items, maxItems, minItems });
+const array = (items, maxItems, minItems = 0) => ({
+  type: "array",
+  items,
+  ...(maxItems === undefined ? {} : { maxItems }),
+  minItems,
+});
 const plannedBatch = {
   anyOf: [
     object(
@@ -398,7 +413,64 @@ define(
     "items",
   ]),
 );
+for (const [kind, parent, data] of [
+  ["plans", "programId", plan],
+  ["targets", "planId", target],
+]) {
+  define(
+    kind + ".upsert",
+    "write",
+    object({ operationId: externalId, externalId, [parent]: id, data }, [
+      "operationId",
+      parent,
+      "data",
+    ]),
+    resultSchemas[kind],
+  );
+}
+
+const categoryResult = object(
+  { categories: array(text(100), 50), previousCategories: array(text(100)) },
+  ["categories", "previousCategories"],
+);
+define("categories.list", "read", object({}), categoryResult);
+for (const [action, fields] of [
+  ["add", { newName: text(100) }],
+  ["rename", { name: text(100), newName: text(100) }],
+  ["remove", { name: text(100) }],
+]) {
+  define(
+    "categories." + action,
+    "write",
+    object({ operationId: externalId, ...fields }, ["operationId", ...Object.keys(fields)]),
+    categoryResult,
+  );
+}
+
+const predictionFields = {
+  title: text(200),
+  category: text(100),
+  servingDescription: text(200),
+  servingUnit: text(100),
+  servingSize: { ...quantity, minimum: 0.001 },
+};
+define(
+  "foods.predict-macros",
+  "estimate",
+  object({ ...predictionFields, description: notes }, Object.keys(predictionFields)),
+  object({ macros: { ...estimates, required: macroKeys } }, ["macros"]),
+);
+
 const publishedDescriptions = {
+  "plans.upsert": "Create or replace the default nutrition target layer for an owned program.",
+  "targets.upsert": "Create or replace a target layer for an owned plan and selector.",
+  "categories.list": "List food categories and previously used labels.",
+  "categories.add": "Add an owned food category.",
+  "categories.rename": "Rename an owned category and its food assignments.",
+  "categories.remove":
+    "Remove a category from new selections while preserving existing assignments.",
+  "foods.predict-macros":
+    "Estimate macros for one serving using the owner's configured OpenAI key. This may incur a provider charge and returns editable values.",
   "consumed.get": "Get an owned consumed-food entry.",
   "consumed.list": "List owned consumed-food entries by civil date or linked planned entry.",
   "consumed.create":
@@ -476,6 +548,57 @@ define(
   object({ days: array(daySummary, maxTargetDays) }, ["days"]),
 );
 
+const metricValue = nullable({ type: "number" });
+const metricMeasureFields = { total: metricValue, average: metricValue, days: count };
+const metricMeasure = object(metricMeasureFields, Object.keys(metricMeasureFields));
+const partialMeasure = object({ ...metricMeasureFields, partialDays: count }, [
+  ...Object.keys(metricMeasureFields),
+  "partialDays",
+]);
+const macroMetric = object(
+  {
+    planned: partialMeasure,
+    consumed: partialMeasure,
+    target: metricMeasure,
+    attainment: object({ ratio: metricValue, days: count }, ["ratio", "days"]),
+    planDifference: metricMeasure,
+  },
+  ["planned", "consumed", "target", "attainment", "planDifference"],
+);
+const foodNutrition = object(
+  {
+    days: count,
+    loggedDays: count,
+    plannedDays: count,
+    activePlanDays: count,
+    macros: {
+      ...macros(macroMetric),
+      required: macroKeys,
+    },
+  },
+  ["days", "loggedDays", "plannedDays", "activePlanDays", "macros"],
+);
+const metricsPeriod = {
+  ...object({ foodNutrition: nullable(foodNutrition) }),
+  additionalProperties: true,
+};
+const metricsOutput = {
+  ...object(
+    {
+      total: metricsPeriod,
+      periods: array(metricsPeriod),
+      nutritionDays: array(
+        object({ ...daySummary.properties, foodNutrition }, [
+          ...daySummary.required,
+          "foodNutrition",
+        ]),
+      ),
+    },
+    ["total", "periods"],
+  ),
+  additionalProperties: true,
+};
+
 const matches = (schema, value) => {
   if (schema.anyOf) return schema.anyOf.some((alternative) => matches(alternative, value));
   if (schema.enum && !schema.enum.includes(value)) return false;
@@ -486,9 +609,10 @@ const matches = (schema, value) => {
         typeof value === "object" &&
         !Array.isArray(value) &&
         (schema.required ?? []).every((key) => Object.hasOwn(value, key)) &&
-        Object.keys(value).every(
-          (key) =>
-            Object.hasOwn(schema.properties, key) && matches(schema.properties[key], value[key]),
+        Object.keys(value).every((key) =>
+          Object.hasOwn(schema.properties, key)
+            ? matches(schema.properties[key], value[key])
+            : schema.additionalProperties === true,
         )
       );
     case "array":
@@ -542,9 +666,15 @@ const mcpContract = (name) => {
   const contract = contractFor(name);
   return (
     contract && {
-      name: "nutrition_" + name.replace(".", "_"),
+      name: "nutrition_" + name.replace(/[.-]/g, "_"),
       ...(publishedDescriptions[name] ? { description: publishedDescriptions[name] } : {}),
-      annotations: { readOnlyHint: contract.scope === "nutrition:read" },
+      annotations: {
+        readOnlyHint: contract.scope === "nutrition:read",
+        ...(contract.scope === "nutrition:estimate" && {
+          openWorldHint: true,
+          destructiveHint: false,
+        }),
+      },
       inputSchema: contract.inputSchema,
       outputSchema: contract.outputSchema,
     }
@@ -559,6 +689,7 @@ const publishedToolScopes = new Map(
 );
 module.exports = {
   macroKeys,
+  metricsOutput,
   maxTargetDays,
   maxPlannedBatch,
   matches,

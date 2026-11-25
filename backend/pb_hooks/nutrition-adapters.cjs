@@ -1,16 +1,11 @@
 /* oxlint-disable import/no-commonjs */
 
-const {
-  operations,
-  restContract,
-  mcpContract,
-  publishedOperations,
-} = require("./nutrition-contracts.cjs");
+const { restContract, mcpContract, publishedOperations } = require("./nutrition-contracts.cjs");
 const { execute } = require("./nutrition.cjs");
 
-const bind = (describe, key, names = Object.keys(operations)) =>
+const bind = (describe, key) =>
   new Map(
-    names.map((operation) => {
+    publishedOperations.map((operation) => {
       const contract = describe(operation);
       return [
         contract[key],
@@ -22,10 +17,7 @@ const bind = (describe, key, names = Object.keys(operations)) =>
     }),
   );
 
-const restOperations = bind(restContract, "path");
-const mcpOperations = bind(mcpContract, "name");
+const publishedRestOperations = bind(restContract, "path");
+const publishedMcpOperations = bind(mcpContract, "name");
 
-const publishedRestOperations = bind(restContract, "path", publishedOperations);
-const publishedMcpOperations = bind(mcpContract, "name", publishedOperations);
-
-module.exports = { restOperations, mcpOperations, publishedRestOperations, publishedMcpOperations };
+module.exports = { publishedRestOperations, publishedMcpOperations };

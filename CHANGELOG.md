@@ -1,3 +1,7 @@
+## v0.7.0
+
+- Add macro tracking support
+
 ## v0.6.5
 
 - Fix bug where opening metrics triggered chart download instead of display

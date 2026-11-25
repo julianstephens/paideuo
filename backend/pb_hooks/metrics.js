@@ -337,6 +337,8 @@ const report = (event, { owner = event.auth.id, includeFoodNutrition = true } = 
   if ((view === "block" || view === "program") && !programId) {
     throw new BadRequestError("Choose a scheduled program.");
   }
+  if (includeFoodNutrition)
+    require(__hooks + "/nutrition-rate-limit.cjs").reserve(event.app, owner);
 
   let result;
   event.app.runInTransaction((tx) => {

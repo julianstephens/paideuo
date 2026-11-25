@@ -29,62 +29,55 @@ const label = (value) => {
   return value.trim();
 };
 
-const handle = (event) => {
-  const owner = event.auth.id;
-  const load = (db) => db.findRecordById("paideuo_users", owner);
-  const categoriesFor = (user) => JSON.parse(user.getString(field) || "null") ?? defaults;
-  if (event.request.method === "GET") {
-    const user = load(event.app);
-    return event.json(200, read(event.app, user, categoriesFor(user)));
-  }
+const load = (db, owner) => db.findRecordById("paideuo_users", owner);
+const categoriesFor = (user) => JSON.parse(user.getString(field) || "null") ?? defaults;
 
-  const { action, name, newName } = event.requestInfo().body;
-  if (!["add", "rename", "remove"].includes(action))
-    throw new BadRequestError("Unknown category action.");
-  const current = action === "add" ? null : label(name);
-  const next = action === "remove" ? null : label(newName);
-  let result;
-  event.app.runInTransaction((tx) => {
-    const user = load(tx);
-    const categories = [...categoriesFor(user)];
-    const index = categories.indexOf(current);
-    if (action !== "add" && index === -1) throw new NotFoundError("Category not found.");
-    if (
-      next &&
-      categories.some(
-        (item, position) => position !== index && item.toLowerCase() === next.toLowerCase(),
-      )
-    ) {
-      throw new ApiError(409, "A category with that name already exists.");
-    }
-    if (action === "add") {
-      if (categories.length >= 50)
-        throw new BadRequestError("The food bank supports up to 50 categories.");
-      categories.push(next);
-    } else if (action === "remove") {
-      categories.splice(index, 1);
-    } else {
-      categories[index] = next;
-      if (current !== next) {
-        const foods = tx.findRecordsByFilter(
-          collection,
-          "owner = {:owner} && data.category = {:category}",
-          "",
-          0,
-          0,
-          { owner, category: current },
-        );
-        for (const food of foods) {
-          food.set("data", { ...JSON.parse(food.getString("data")), category: next });
-          tx.save(food);
-        }
-      }
-    }
-    user.set(field, categories);
-    tx.save(user);
-    result = read(tx, user, categories);
-  });
-  return event.json(200, result);
+const list = (db, owner) => {
+  const user = load(db, owner);
+  return read(db, user, categoriesFor(user));
 };
 
-module.exports = { handle };
+const change = (db, owner, action, { name, newName }) => {
+  const current = action === "add" ? null : label(name);
+  const next = action === "remove" ? null : label(newName);
+  const user = load(db, owner);
+  const categories = [...categoriesFor(user)];
+  const index = categories.indexOf(current);
+  if (action !== "add" && index === -1) throw new NotFoundError("Category not found.");
+  if (
+    next &&
+    categories.some(
+      (item, position) => position !== index && item.toLowerCase() === next.toLowerCase(),
+    )
+  ) {
+    throw new ApiError(409, "A category with that name already exists.");
+  }
+  if (action === "add") {
+    if (categories.length >= 50)
+      throw new BadRequestError("The food bank supports up to 50 categories.");
+    categories.push(next);
+  } else if (action === "remove") {
+    categories.splice(index, 1);
+  } else {
+    categories[index] = next;
+    if (current !== next) {
+      const foods = db.findRecordsByFilter(
+        collection,
+        "owner = {:owner} && data.category = {:category}",
+        "",
+        0,
+        0,
+        { owner, category: current },
+      );
+      for (const food of foods) {
+        food.set("data", { ...JSON.parse(food.getString("data")), category: next });
+        db.save(food);
+      }
+    }
+  }
+  user.set(field, categories);
+  db.save(user);
+  return read(db, user, categories);
+};
+
+module.exports = { list, change };

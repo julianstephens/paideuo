@@ -10,6 +10,8 @@ import {
   useFoodCategories,
 } from "../nutrition/foodCategories";
 import { foodQueryKey } from "../nutrition/foods";
+import { nutritionOperation } from "../nutrition/operation";
+import type { CategoryChange } from "../nutrition/foodCategories";
 
 export const FoodCategorySettings = ({ ownerId }: { ownerId: string }) => {
   const query = useFoodCategories(ownerId);
@@ -30,10 +32,12 @@ export const FoodCategorySettings = ({ ownerId }: { ownerId: string }) => {
     setEditing(category);
     setName(category ?? "");
   };
+  const changeCategory = (change: CategoryChange) =>
+    save.mutate(nutritionOperation(change, save.isError ? save.variables : undefined));
   const submit = (event: SubmitEvent<HTMLFormElement>) => {
     event.preventDefault();
     if (!name.trim() || save.isPending) return;
-    save.mutate(
+    changeCategory(
       editing === null
         ? { action: "add", newName: name }
         : { action: "rename", name: editing, newName: name },
@@ -80,7 +84,7 @@ export const FoodCategorySettings = ({ ownerId }: { ownerId: string }) => {
                   variant="ghost"
                   disabled={save.isPending}
                   aria-label={"Remove " + category}
-                  onClick={() => save.mutate({ action: "remove", name: category })}
+                  onClick={() => changeCategory({ action: "remove", name: category })}
                 >
                   Remove
                 </Button>

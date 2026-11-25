@@ -15,6 +15,8 @@ const {
 } = require("./nutrition-domain.cjs");
 const dates = require("./calendar-dates.js");
 const credentials = require("./service-credentials.cjs");
+const categories = require("./food-categories.cjs");
+const { reserve } = require("./nutrition-rate-limit.cjs");
 
 const collection = (kind) => "paideuo_nutrition_" + kind;
 const find = (db, name, filter, params, sort = "", limit = 0) =>
@@ -285,6 +287,7 @@ const externalIdInUse = (db, kind, owner, externalId) =>
   });
 
 const create = (db, principal, kind, input) => {
+  if (!input.externalId) throw new BadRequestError("Provide an external ID for the new resource.");
   const owner = principal.ownerId;
   const name = collection(kind);
   const parent = parentSpecs[kind];
@@ -320,7 +323,26 @@ const create = (db, principal, kind, input) => {
   return resultOf(record);
 };
 
+const upsert = (db, principal, kind, input) => {
+  const parent = parentSpecs[kind];
+  const owner = principal.ownerId;
+  const parentId = input[parent.key];
+  owned(db, parent.name, owner, parentId);
+  let filter = "owner = {:owner} && " + parent.field + " = {:parentId}";
+  const params = { owner, parentId };
+  const { selector, ...layer } = input.data;
+  if (kind === "targets") {
+    filter += " && selector = {:selector}";
+    params.selector = selectorKey(selector);
+  }
+  const record = first(db, collection(kind), filter, params);
+  if (!record) return create(db, principal, kind, input);
+  return mutate(db, principal, kind, "update", { id: record.id, data: layer });
+};
+
 const mutate = (db, principal, kind, action, input) => {
+  if (kind === "categories") return categories.change(db, principal.ownerId, action, input);
+  if (action === "upsert") return upsert(db, principal, kind, input);
   if (action === "commit") return commitPlanned(db, principal, input);
   if (action === "batch_create") {
     return {
@@ -378,6 +400,16 @@ const list = (db, kind, owner, input) => {
     params.parent = input[parent.key];
     owned(db, parent.name, owner, params.parent);
     filters.push(parent.field + " = {:parent}");
+  }
+  if (input.startDate || input.endDate) {
+    if (input.date || !input.startDate || !input.endDate)
+      throw new BadRequestError("Provide either one date or both date range bounds.");
+    const start = civilDate(input.startDate).getTime();
+    const end = civilDate(input.endDate).getTime();
+    if (end < start || end - start >= maxTargetDays * dayMilliseconds)
+      throw new BadRequestError("Provide an ordered range of up to " + maxTargetDays + " days.");
+    Object.assign(params, { startDate: input.startDate, endDate: input.endDate });
+    filters.push("date >= {:startDate} && date <= {:endDate}");
   }
   if (input.date) {
     civilDate(input.date);
@@ -655,6 +687,7 @@ const recipeForEntry = (db, owner, { entryKind, entryId }) => {
 };
 
 const read = (db, owner, kind, action, input) => {
+  if (kind === "categories") return categories.list(db, owner);
   if (action === "week") return plannedWeek(db, owner, input);
   if (action === "preview") return previewPlanned(db, owner, input);
   if (action === "get") return resultOf(entryRecord(db, kind, owner, input.id));
@@ -677,6 +710,10 @@ const execute = (app, principal, operation, input) => {
   if (!matches(contract.inputSchema, input)) {
     throw new BadRequestError("Input does not match the nutrition operation schema.");
   }
+  const estimate = contract.scope === "nutrition:estimate";
+  if (estimate) return require("./openai.cjs").predictMacros(app, principal.ownerId, input);
+  reserve(app, principal.ownerId);
+
   const [kind, action] = operation.split(".");
   if (contract.scope === "nutrition:read") return read(app, principal.ownerId, kind, action, input);
 
@@ -704,6 +741,8 @@ const execute = (app, principal, operation, input) => {
       new Record(tx.findCollectionByNameOrId(collection("operations")), {
         owner,
         operation_id: input.operationId,
+        operation,
+        actor: principal.credentialRef,
         fingerprint,
         result,
       }),

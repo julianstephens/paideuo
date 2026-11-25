@@ -4,7 +4,7 @@ const imports = require(__hooks + "/imports.js");
 const programEdits = require(__hooks + "/mcp-program-edits.cjs");
 
 const { publishedMcpOperations } = require(__hooks + "/nutrition-adapters.cjs");
-const publishedToolScopes = require(__hooks + "/nutrition-contracts.cjs").publishedToolScopes;
+const { metricsOutput, publishedToolScopes } = require(__hooks + "/nutrition-contracts.cjs");
 
 const tools = [
   ...Array.from(publishedMcpOperations.values(), ({ contract }) => contract),
@@ -106,6 +106,7 @@ const tools = [
   },
   {
     name: "fetch_metrics",
+    outputSchema: metricsOutput,
     annotations: { readOnlyHint: true, openWorldHint: false },
     description:
       "Fetch metrics for an owned program or custom date window. Nutrition totals require nutrition:read for service credentials and OAuth grants.",

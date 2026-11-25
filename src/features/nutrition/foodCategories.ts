@@ -7,16 +7,24 @@ export type CategoryChange =
   | { action: "rename"; name: string; newName: string }
   | { action: "remove"; name: string };
 
-const endpoint = "/api/paideuo/v1/nutrition/food-categories";
+const endpoint = "/api/paideuo/v1/nutrition/categories/";
 export const foodCategoriesKey = (ownerId: string) =>
   ["nutrition", "food-categories", ownerId] as const;
 
 export const useFoodCategories = (ownerId: string) =>
   useQuery({
     queryKey: foodCategoriesKey(ownerId),
-    queryFn: ({ signal }) => apiRequest<FoodCategories>(endpoint, "GET", undefined, signal),
+    queryFn: ({ signal }) => apiRequest<FoodCategories>(endpoint + "list", "POST", {}, signal),
     retry: false,
   });
 
-export const changeFoodCategory = (change: CategoryChange) =>
-  apiRequest<FoodCategories>(endpoint, "PUT", change);
+export const changeFoodCategory = ({
+  change,
+  operationId,
+}: {
+  change: CategoryChange;
+  operationId: string;
+}) => {
+  const { action, ...fields } = change;
+  return apiRequest<FoodCategories>(endpoint + action, "POST", { ...fields, operationId });
+};

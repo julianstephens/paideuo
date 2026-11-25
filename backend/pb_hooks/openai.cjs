@@ -1,5 +1,7 @@
 /* oxlint-disable import/no-commonjs */
 
+const { reserve } = require("./nutrition-rate-limit.cjs");
+
 const collection = "paideuo_openai_settings";
 const defaultModel = "gpt-5.4-mini";
 const macroKeys = ["calories", "protein", "carbohydrate", "fat"];
@@ -56,7 +58,7 @@ const settings = (event) => {
   return event.json(200, result);
 };
 
-const foodInput = (body) => {
+const foodInput = (body = {}) => {
   const food = {};
   for (const [field, label, max] of [
     ["title", "title", 200],
@@ -107,12 +109,11 @@ const readMacros = (response) => {
   }
 };
 
-const predictMacros = (event) => {
-  event.response.header().set("Cache-Control", "no-store");
-  const food = foodInput(event.requestInfo().body);
+const predictMacros = (app, owner, input) => {
+  const food = foodInput(input);
   const key = encryptionKey();
   if (!key) throw new BadRequestError("OpenAI is unavailable on this server.");
-  const row = forOwner(event.app, event.auth.id);
+  const row = forOwner(app, owner);
   if (!row) throw new BadRequestError("Add an OpenAI API key in Settings to predict macros.");
 
   let apiKey;
@@ -122,6 +123,7 @@ const predictMacros = (event) => {
     throw new BadRequestError("Replace the saved OpenAI API key in Settings.");
   }
 
+  reserve(app, owner, true);
   let response;
   try {
     response = $http.send({
@@ -170,7 +172,7 @@ const predictMacros = (event) => {
   if (statusCode !== 200)
     throw new BadRequestError("OpenAI could not complete the prediction. Try again.");
 
-  return event.json(200, { macros: readMacros(response.json) });
+  return { macros: readMacros(response.json) };
 };
 
-module.exports = { settings, predictMacros };
+module.exports = { settings, predictMacros, foodInput };

@@ -1,12 +1,10 @@
-import { Button, Box, Flex, Grid, Heading, NativeSelect, Stack, Text } from "@chakra-ui/react";
+import { Button, Box, Flex, Grid, Heading, Stack, Text } from "@chakra-ui/react";
 import { useQuery } from "@tanstack/react-query";
-import { useState } from "react";
-import { Disclosure, FormField, Notice, Panel } from "../../components/ui";
+import { Disclosure, Notice, Panel } from "../../components/ui";
 import { apiRequest, errorMessage } from "../../lib/api/request";
 import { formatDate, parseDate } from "../calendar/dates";
 import { programKeys } from "../programs/programs";
 import type { PlannedIntensity } from "../programs/programs";
-import { sessionTypes } from "../templates/templates";
 import type { SessionType } from "../templates/templates";
 import { averageRpe, hours, loadPoints } from "./format";
 import { MetricPlot } from "./MetricPlot";
@@ -47,8 +45,15 @@ export const useTrainingLoad = (ownerId: string, programId?: string) =>
     retry: false,
   });
 
-export const TrainingLoad = ({ ownerId, programId }: { ownerId: string; programId: string }) => {
-  const [filter, setFilter] = useState<LoadFilter>("all");
+export const TrainingLoad = ({
+  ownerId,
+  programId,
+  filter,
+}: {
+  ownerId: string;
+  programId: string;
+  filter: LoadFilter;
+}) => {
   const query = useTrainingLoad(ownerId, programId);
   const weeks = query.data?.weeks ?? [];
 
@@ -73,24 +78,6 @@ export const TrainingLoad = ({ ownerId, programId }: { ownerId: string; programI
       )}
       {query.data && (
         <>
-          <FormField as="div" maxW="sm">
-            <label htmlFor="load-session-type">Session type</label>
-            <NativeSelect.Root>
-              <NativeSelect.Field
-                id="load-session-type"
-                value={filter}
-                onChange={(event) => setFilter(event.target.value as LoadFilter)}
-              >
-                <option value="all">All session types</option>
-                {sessionTypes.map((type) => (
-                  <option key={type} value={type}>
-                    {type.charAt(0).toUpperCase() + type.slice(1)}
-                  </option>
-                ))}
-              </NativeSelect.Field>
-              <NativeSelect.Indicator />
-            </NativeSelect.Root>
-          </FormField>
           {weeks.length === 0 && <Notice>No weeks available.</Notice>}
           {weeks.length > 0 && (
             <MetricPlot

@@ -45,14 +45,20 @@ export const McpConsentPage = () => {
         </Text>
         {scopes.includes("nutrition:read") && (
           <Text>
-            ChatGPT can search your food bank and read serving sizes, macro estimates, and attached
-            recipes.
+            ChatGPT can read your food bank, recipes, nutrition targets, meal plans, food logs, and
+            nutrition totals.
           </Text>
         )}
         {scopes.includes("nutrition:write") && (
           <Text>
-            ChatGPT can create, edit, duplicate, archive, and restore foods in your food bank and
-            manage their recipe attachments.
+            ChatGPT can manage food bank entries, categories, recipes, targets, meal plans, and food
+            logs.
+          </Text>
+        )}
+        {scopes.includes("nutrition:estimate") && (
+          <Text>
+            ChatGPT can request serving macro estimates using your saved OpenAI key, which may incur
+            charges.
           </Text>
         )}
         {error && <Notice role="alert">{error}</Notice>}

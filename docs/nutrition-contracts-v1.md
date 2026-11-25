@@ -1,30 +1,39 @@
 # Nutrition contracts v1
 
-The contracts and shared PocketBase services are implemented in NUT-01. Food-bank, recipe, nutrition plan, target, planned-food, consumed-food, and day-summary operations are available through HTTP and MCP. The contract catalog in `backend/pb_hooks/nutrition-contracts.cjs` defines each operation's request and response JSON Schema. Both adapters in `backend/pb_hooks/nutrition-adapters.cjs` call the same service.
+The contracts and shared PocketBase services are implemented in NUT-01. Food-bank, category, recipe, nutrition plan, target, planned-food, consumed-food, and day-summary operations are available through HTTP and MCP. The contract catalog in `backend/pb_hooks/nutrition-contracts.cjs` defines each operation's request and response JSON Schema. Both adapters in `backend/pb_hooks/nutrition-adapters.cjs` call the same service.
 
 ## Operations
 
-| Resource   | Operations                                               |
-| ---------- | -------------------------------------------------------- |
-| `foods`    | get, list, create, update, duplicate, set_archive        |
-| `recipes`  | get, list, create, update, delete, for_entry             |
-| `plans`    | get, list, create, update, delete                        |
-| `targets`  | get, list, create, update, delete, resolve, resolve_bulk |
-| `planned`  | get, list, create, update, delete, week, preview, commit |
-| `consumed` | get, list, create, update, delete, batch_create          |
-| `days`     | summary, summary_range                                   |
+Deploy the new PocketBase migration before enabling these hooks. Installations managed through the collection export can import the updated export with deletion of missing collections and fields disabled. It includes the rate-limit and service-credential collections.
+
+| Resource     | Operations                                                        |
+| ------------ | ----------------------------------------------------------------- |
+| `foods`      | get, list, create, update, duplicate, set_archive, predict-macros |
+| `categories` | list, add, rename, remove                                         |
+| `recipes`    | get, list, create, update, delete, for_entry                      |
+| `plans`      | get, list, create, update, upsert, delete                         |
+| `targets`    | get, list, create, update, upsert, delete, resolve, resolve_bulk  |
+| `planned`    | get, list, create, update, delete, week, preview, commit          |
+| `consumed`   | get, list, create, update, delete, batch_create                   |
+| `days`       | summary, summary_range                                            |
 
 For example, `planned.create` maps to `POST /api/paideuo/v1/nutrition/planned/create` and the MCP tool `nutrition_planned_create`. HTTP accepts the operation input as a JSON body and returns the output directly. MCP accepts the same fields as tool arguments and returns the output as structured content. HTTP reads also use a JSON body so filters and cursors share the same schema with MCP. Lists use an opaque `next` ID as the next request's `after` cursor. Page sizes default to 50 and allow up to 100. Entity responses contain `id`, `externalId`, and `data`.
 
-Creates require an `externalId` unique per owner and collection. Every write requires an `operationId` unique across the owner's nutrition operations. Identical requests replay the original response, even after a later edit or deletion. A reused operation ID with different input, an existing external ID for a new operation, or an occupied singleton or override slot produces a conflict. Deleting a recipe, plan, or override frees its singleton or selector slot. Deleting a plan also removes its overrides and leaves food entries intact. Food entries retain their external IDs after soft deletion.
+Creates require an `externalId` unique per owner and collection. Catalog writes require an `operationId` unique across the owner's nutrition operations. New receipts record the operation and authenticated actor. The legacy category endpoint accepts an optional `operationId`. Supply it for retry-safe writes. Identical requests replay the original response, even after a later edit or deletion. A reused operation ID with different input, an existing external ID for a new operation, or an occupied singleton or override slot produces a conflict. Deleting a recipe, plan, or override frees its singleton or selector slot. Deleting a plan also removes its overrides and leaves food entries intact. Food entries retain their external IDs after soft deletion.
 
-The shared service reports invalid input as 400, missing authentication as 401, missing scope as 403, unavailable records as 404, and conflicts as 409. Map these statuses into MCP tool errors using the existing MCP convention. The owner comes from the authenticated principal. Human requests use the verified Paideuo user. Service credentials and OAuth principals require an explicit `nutrition:read` or `nutrition:write` grant for the corresponding operation. The collections are locked to the shared service at the record API level. Lookups, parent checks, and writes all use the principal's owner ID.
+The shared service reports invalid input as 400, missing authentication as 401, missing scope as 403, unavailable records as 404, conflicts as 409, and exhausted rate budgets as 429. Map these statuses into MCP tool errors using the existing MCP convention. The owner comes from the authenticated principal. Human requests use the verified Paideuo user. Service credentials and OAuth principals require an explicit `nutrition:read` or `nutrition:write` grant for the corresponding operation. The collections are locked to the shared service at the record API level. Lookups, parent checks, and writes all use the principal's owner ID.
+
+HTTP and MCP share a budget of 120 nutrition requests per owner per one-minute window, including retries, previews, and granular Metrics reads. Macro predictions additionally have a budget of 10 provider calls per owner per window. Plan and consumed lists accept either `date` or the inclusive pair `startDate` and `endDate` (up to 62 civil dates), with filters applied before pagination.
 
 ## Food bank
 
 Use `POST /api/paideuo/v1/nutrition/foods/{operation}` with a Paideuo session or `POST /api/paideuo/v1/service/nutrition/foods/{operation}` with a service bearer token. The matching MCP tools are `nutrition_foods_{operation}`.
 
 List filters apply before pagination. `search` matches title or description, `category` matches the exact trimmed category, and `status` accepts `active`, `archived`, or `all`. The explicit status takes precedence over `includeArchived`. Get accepts archived food IDs. For duplication, send the source `id`, new `externalId`, `title`, and `operationId`. It creates an active independent item and leaves recipe attachments with the source. Send `id`, `operationId`, and `archived` to `set_archive` to archive or restore.
+
+Manage category preferences through `categories.list`, `categories.add`, `categories.rename`, and `categories.remove`. List takes an empty input. Writes take `operationId` and the relevant `name` or `newName`. Rename updates current food assignments. Removal preserves existing assignments and keeps their former labels visible in `previousCategories`.
+
+Use `POST /api/paideuo/v1/service/nutrition/foods/predict-macros` or `nutrition_foods_predict_macros` to request an estimate. Service and OAuth clients need the dedicated `nutrition:estimate` grant. Pass `title`, `category`, `servingSize`, `servingUnit`, `servingDescription`, and optionally `description`. The owner must configure an OpenAI key in Settings. A provider call may incur a charge, so request estimates explicitly and avoid automatic retries. Save reviewed values with a separate food write.
 
 With ChatGPT OAuth, request `paideuo:mcp` plus `nutrition:read` for list and get or `nutrition:write` for mutations. Request both for the full workflow. Existing connections need new consent to gain either nutrition scope. Refresh can drop nutrition scopes and retains only the resulting grant.
 
@@ -41,6 +50,8 @@ Dates are Gregorian civil dates in `YYYY-MM-DD` format. Program-relative entries
 Resolve a target with `programId` and `date`. A scheduled program applies its own targets, including when other programs overlap. Within its scheduled date range, precedence is program default, block, week, weekday within that week, then exact date. Weekday uses ISO numbering (Monday is 1). Block and week selectors follow those records on reschedule. Exact-date selectors remain attached to their civil dates and apply only while inside the schedule. Unscheduled programs and out-of-window dates resolve without an active plan.
 
 `targets.resolve_bulk` takes `programId`, `startDate`, and `endDate`. It returns `{ days: [{ date, target }] }` in ascending order, including inactive dates. The inclusive range accepts up to 62 civil days. Each `target` is identical to the single-date response. The same operation is available to owner-scoped service credentials and as `nutrition_targets_resolve_bulk` in MCP.
+
+Use `plans.upsert` with `programId` and `targets.upsert` with `planId` and `data.selector`. Include `operationId` on every write and `externalId` if the slot may be empty. Existing slots retain their identifiers. The submitted layer replaces activation and macros, allowing omitted values to inherit.
 
 Activation starts off and follows the last matching layer with an explicit `active` flag. Set it to `false` for an off period and `true` to re-enable at a more specific layer. Each macro resolves independently. Omit a field to inherit, use `null` to intentionally clear, and supply a number to set it. Plan and target updates replace the editable layer so clients can restore inheritance by omitting a previously set field. Effective targets include each value and its source record and selector kind, including the source of explicit clears. Off periods return `macros: null` and carry no target or compliance expectation.
 
@@ -89,3 +100,114 @@ Authenticated users can read the report at `GET /api/paideuo/v1/metrics` or the 
 The weekly, block, program, and custom reports include `foodNutrition` on totals and periods, and `nutritionDays` with the daily entry totals, effective targets, and daily metrics. Food totals are owner-wide. A program selection resolves targets for that program, including in custom windows. Windows without a program selection have no program target. Dates follow the existing metrics filters and each food entry's stored civil date.
 
 `loggedDays` counts days with one or more consumed entries. Each macro reports known totals and averages over contributing days, plus the count of days with unknown entry values for planned and consumed food. Attainment is the consumed sum divided by the target sum on matching dates with a known target and known values for all logged entries for that macro. Plan difference is consumed minus planned over active-plan dates where both have entries and known values for that macro. Both report their contributing day counts. A zero target denominator produces a null ratio. Manual check-in calories and protein remain in `nutritionMeasurements`.
+
+## Planning and logging from a client
+
+The following JavaScript works with Node.js and a service token granted `nutrition:read`, `nutrition:write`, and `metrics:read`. Set `BASE_URL`, `SERVICE_TOKEN`, `PROGRAM_ID`, `WEEK_ID`, and `WEEK_START` in the environment. Use an owned program with a Monday-aligned schedule, its week ID, and the Monday civil date of that week. This example adds entries to the destination week and updates its targets. Persist the exact write arguments, including IDs, before sending if a client must recover from an interrupted run.
+
+```js
+import { randomUUID } from "node:crypto";
+
+const { BASE_URL, SERVICE_TOKEN, PROGRAM_ID, WEEK_ID, WEEK_START } = process.env;
+const day = (offset) =>
+  new Date(Date.parse(WEEK_START) + offset * 86_400_000).toISOString().slice(0, 10);
+const service = async (path, input) => {
+  const response = await fetch(new URL("/api/paideuo/v1/service/" + path, BASE_URL), {
+    method: input === undefined ? "GET" : "POST",
+    headers: {
+      Authorization: "Bearer " + SERVICE_TOKEN,
+      "Content-Type": "application/json",
+    },
+    body: input === undefined ? undefined : JSON.stringify(input),
+  });
+  const result = await response.json();
+  if (!response.ok) throw new Error(result.message);
+  return result;
+};
+const http = (action, input) => service("nutrition/" + action.replace(".", "/"), input);
+const mcp = async (action, input) => {
+  const name = "nutrition_" + action.replace(/[.-]/g, "_");
+  const message = await service("mcp", {
+    jsonrpc: "2.0",
+    id: randomUUID(),
+    method: "tools/call",
+    params: { name, arguments: input },
+  });
+  if (message.error || message.result.isError) {
+    throw new Error(message.error?.message ?? message.result.structuredContent.message);
+  }
+  return message.result.structuredContent;
+};
+
+// Use http for versioned requests or mcp for the corresponding scoped tools.
+const call = http;
+const writeIds = () => ({ operationId: randomUUID(), externalId: randomUUID() });
+const dish = await call("foods.create", {
+  ...writeIds(),
+  data: {
+    title: "Rice and bean bowl",
+    serving: { description: "One bowl", size: 1, unit: "bowl" },
+    macros: { calories: 520, protein: 22, carbohydrate: 78, fat: 14 },
+  },
+});
+await call("recipes.create", {
+  ...writeIds(),
+  foodId: dish.id,
+  data: {
+    ingredients: [{ name: "Cooked rice" }, { name: "Black beans" }],
+    instructions: "Warm the rice and beans, then portion into bowls.",
+  },
+});
+const plan = await call("plans.upsert", {
+  ...writeIds(),
+  programId: PROGRAM_ID,
+  data: { active: true, macros: { calories: 2400, protein: 125 } },
+});
+await call("targets.upsert", {
+  ...writeIds(),
+  planId: plan.id,
+  data: {
+    selector: { kind: "week", weekId: WEEK_ID },
+    macros: { calories: 2500, protein: 135 },
+  },
+});
+
+const batch = {
+  kind: "schedule",
+  entries: Array.from({ length: 7 }, (_, offset) => ({
+    externalId: randomUUID(),
+    data: {
+      date: day(offset),
+      programId: PROGRAM_ID,
+      source: { kind: "bank", foodId: dish.id },
+      quantity: 1,
+      meal: "Lunch",
+    },
+  })),
+};
+const preview = await call("planned.preview", batch);
+// Present preview.additions and preview.destinations for review before committing.
+const scheduled = await call("planned.commit", {
+  operationId: randomUUID(),
+  previewToken: preview.previewToken,
+  batch,
+});
+await call("consumed.create", {
+  ...writeIds(),
+  data: {
+    plannedId: scheduled.items[0].id,
+    source: { kind: "planned" },
+    quantity: 0.5,
+    overrides: { protein: 13 },
+  },
+});
+console.log(
+  await call("days.summary_range", {
+    programId: PROGRAM_ID,
+    startDate: day(0),
+    endDate: day(6),
+  }),
+);
+```
+
+For weekly Metrics, send `GET /api/paideuo/v1/service/metrics?view=weekly&program=<programId>&start=<weekStart>` or call MCP `fetch_metrics` with `{ view: "weekly", program, start }`. Both include logging coverage and the planned-versus-actual comparison when the credential has nutrition read access.

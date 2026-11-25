@@ -232,10 +232,11 @@ const withPocketBase = async (
   const migrations =
     pendingMigration || useCollectionsExport ? path.join(tempRoot, "pb_migrations") : migrationsDir;
   if (useCollectionsExport) fs.mkdirSync(migrations);
-  if (pendingMigration) {
+  const pendingMigrations = [pendingMigration].flat().filter(Boolean);
+  if (pendingMigrations.length) {
     fs.cpSync(migrationsDir, migrations, {
       recursive: true,
-      filter: (source) => path.basename(source) !== pendingMigration,
+      filter: (source) => !pendingMigrations.includes(path.basename(source)),
     });
   }
   fs.writeFileSync(
@@ -316,10 +317,8 @@ onRecordValidate((event) => {
       await waitForHealth(baseUrl, 20000, server);
     };
     const upgrade = async () => {
-      fs.copyFileSync(
-        path.join(migrationsDir, pendingMigration),
-        path.join(migrations, pendingMigration),
-      );
+      for (const migration of pendingMigrations)
+        fs.copyFileSync(path.join(migrationsDir, migration), path.join(migrations, migration));
       await restart();
     };
     await run({ admin, baseUrl, restart, upgrade });
@@ -3047,6 +3046,7 @@ test("ChatGPT OAuth discovers MCP, authorizes a Paideuo user, and rotates creden
         "paideuo:mcp",
         "nutrition:read",
         "nutrition:write",
+        "nutrition:estimate",
       ]);
       assert.deepEqual(
         catalog.result.tools.find(({ name }) => name === "nutrition_foods_list")._meta
@@ -3076,6 +3076,38 @@ test("ChatGPT OAuth discovers MCP, authorizes a Paideuo user, and rotates creden
         assert.equal(response.status, 200);
         return response.json();
       };
+      const estimateTool = catalog.result.tools.find(
+        ({ name }) => name === "nutrition_foods_predict_macros",
+      );
+      assert.deepEqual(estimateTool._meta.securitySchemes[0].scopes, [
+        "paideuo:mcp",
+        "nutrition:estimate",
+      ]);
+      const estimateCall = async (auth) =>
+        (
+          await (
+            await rpc(
+              "tools/call",
+              {
+                name: "nutrition_foods_predict_macros",
+                arguments: {
+                  title: "Tofu",
+                  category: "Meals",
+                  servingDescription: "One portion",
+                  servingUnit: "g",
+                  servingSize: 100,
+                },
+              },
+              auth,
+            )
+          ).json()
+        ).result.structuredContent;
+      assert.equal((await estimateCall(authorization)).status, 403);
+      const estimator = await connectNutrition("paideuo:mcp nutrition:estimate");
+      const estimateDenied = await estimateCall("Bearer " + estimator.access_token);
+      assert.equal(estimateDenied.status, 400);
+      assert.match(estimateDenied.message, /OpenAI/);
+
       const reader = await connectNutrition("paideuo:mcp nutrition:read");
       assert.equal(reader.scope, "paideuo:mcp nutrition:read");
       const readAuth = "Bearer " + reader.access_token;
@@ -3219,7 +3251,7 @@ test("ChatGPT OAuth discovers MCP, authorizes a Paideuo user, and rotates creden
       assert.doesNotMatch(JSON.stringify(foreign.result.structuredContent), /OAuth draft/);
       assert.equal((await list(client.authStore.token)).status, 200);
       const legacyMcp = await rpc("tools/list", {}, authorization, "/api/paideuo/v1/service/mcp");
-      assert.equal(legacyMcp.status, 404); // The export omits the legacy service credential store.
+      assert.equal(legacyMcp.status, 401); // OAuth grants are accepted by the OAuth MCP endpoint.
 
       await restart();
       const refresh = { grant_type: "refresh_token", refresh_token: tokens.refresh_token };
@@ -3380,34 +3412,6 @@ const mockGoogle = (request) => {
 
 const nutritionMigration = "1760000032_nutrition.js";
 
-// Register fixture routes for nutrition operations still awaiting production dispatch.
-const nutritionFixture = (hooksDir) => {
-  fs.writeFileSync(
-    path.join(hooksDir, "nutrition-fixture.pb.js"),
-    `
-const nutrition = require(__hooks + "/nutrition-adapters.cjs");
-for (const path of nutrition.restOperations.keys()) {
-  if (nutrition.publishedRestOperations.has(path)) continue;
-  routerAdd("POST", path, (event) => {
-    const credentials = require(__hooks + "/service-credentials.cjs");
-    const principal = credentials.importPrincipalFromEvent(event);
-    const { restOperations } = require(__hooks + "/nutrition-adapters.cjs");
-    return event.json(200, restOperations.get(event.request.url.path).invoke(
-      event.app, principal, event.requestInfo().body,
-    ));
-  }, $apis.requireAuth("paideuo_users"));
-}
-routerAdd("POST", "/nutrition-mcp-fixture", (event) => {
-  const credentials = require(__hooks + "/service-credentials.cjs");
-  const principal = credentials.servicePrincipalFromEvent(event);
-  const { mcpOperations } = require(__hooks + "/nutrition-adapters.cjs");
-  const { name, arguments: input } = event.requestInfo().body;
-  return event.json(200, mcpOperations.get(name).invoke(event.app, principal, input));
-});
-`,
-  );
-};
-
 const nutritionRequest = (client, operation, body) =>
   domainRequest(client, "nutrition/" + operation.replace(".", "/"), body);
 
@@ -3438,7 +3442,7 @@ test("nutrition migration preserves existing check-ins and leaves existing progr
       assert.equal(result.target.macros, null);
       assert.equal(result.consumed.macros.calories.subtotal, null);
     },
-    { pendingMigration: nutritionMigration, prepareHooks: nutritionFixture },
+    { pendingMigration: [nutritionMigration, "1760000036_nutrition_parity.js"] },
   );
 });
 
@@ -3458,11 +3462,25 @@ test("nutrition contracts share owner rules, immutable snapshots and retry recei
         ).plaintextToken;
       const readOnly = await issue(["nutrition:read"]);
       const write = await issue(["nutrition:write"]);
-      const mcp = (operation, input, token) =>
-        serviceImportRequest(baseUrl, "/nutrition-mcp-fixture", token, {
-          name: "nutrition_" + operation.replace(".", "_"),
-          arguments: input,
-        });
+      const mcp = async (operation, input, token) => {
+        const { result } = await serviceImportRequest(
+          baseUrl,
+          "/api/paideuo/v1/service/mcp",
+          token,
+          {
+            jsonrpc: "2.0",
+            id: 1,
+            method: "tools/call",
+            params: { name: "nutrition_" + operation.replace(".", "_"), arguments: input },
+          },
+        );
+        if (result.isError)
+          throw Object.assign(
+            new Error(result.structuredContent.message),
+            result.structuredContent,
+          );
+        return result.structuredContent;
+      };
 
       const bankInput = {
         externalId: "rice",
@@ -3563,7 +3581,7 @@ test("nutrition contracts share owner rules, immutable snapshots and retry recei
       assert.equal(after.consumed.macros.calories.subtotal, null);
       assert.deepEqual(after.consumed.macros.protein, { subtotal: 0, knownCount: 1 });
     },
-    { prepareHooks: nutritionFixture },
+    { useCollectionsExport: true },
   );
 });
 
@@ -3760,7 +3778,7 @@ test("nutrition targets follow training weeks and keep exact-date overrides on c
       assert.equal((await resolve("2026-11-03")).active, false);
       assert.deepEqual(await rest("consumed.get", { id: consumed.id }), consumed);
     },
-    { prepareHooks: nutritionFixture },
+    { useCollectionsExport: true },
   );
 });
 
@@ -4044,7 +4062,7 @@ test("recipes use shared production contracts and preserve food entry provenance
       const savedPlanned = await admin.collection("paideuo_nutrition_planned").getOne(planned.id);
       assert.deepEqual(savedPlanned.data.snapshot, planned.data.snapshot);
     },
-    { prepareHooks: nutritionFixture },
+    { useCollectionsExport: true },
   );
 });
 
@@ -4156,6 +4174,56 @@ test("OpenAI macro estimates use encrypted owner credentials and validate provid
       );
       assert.deepEqual(await predict(client, foodWithoutDescription), estimate);
       assert.deepEqual(await predict(client, { ...food, description: "   " }), estimate);
+      await other.send(endpoint, { method: "PUT", body: { model, apiKey: "owner-key" } });
+      const issue = async (scopes) =>
+        (
+          await domainRequest(other, "service-credentials/issue", {
+            label: "Macro estimation",
+            scopes,
+          })
+        ).plaintextToken;
+      const estimateToken = await issue(["nutrition:estimate"]);
+      const writeToken = await issue(["nutrition:write"]);
+      const serviceEstimate = (token) =>
+        serviceImportRequest(
+          baseUrl,
+          "/api/paideuo/v1/service/nutrition/foods/predict-macros",
+          token,
+          food,
+        );
+      const mcpEstimate = async (token) =>
+        (
+          await serviceImportRequest(baseUrl, "/api/paideuo/v1/service/mcp", token, {
+            jsonrpc: "2.0",
+            id: 1,
+            method: "tools/call",
+            params: { name: "nutrition_foods_predict_macros", arguments: food },
+          })
+        ).result;
+      await assert.rejects(serviceEstimate(writeToken), { status: 403 });
+      assert.equal((await mcpEstimate(writeToken)).structuredContent.status, 403);
+      assert.deepEqual(await serviceEstimate(estimateToken), estimate);
+      assert.deepEqual((await mcpEstimate(estimateToken)).structuredContent, estimate);
+      await assert.rejects(
+        serviceImportRequest(
+          baseUrl,
+          "/api/paideuo/v1/service/nutrition/foods/list",
+          estimateToken,
+          {},
+        ),
+        { status: 403 },
+      );
+      assert.deepEqual(await nutritionRequest(other, "foods.list", {}), { items: [], next: null });
+      const otherId = other.authStore.record.id;
+      const counters = admin.collection("paideuo_nutrition_rate_limits");
+      const counter = await counters.getFirstListItem(
+        admin.filter("owner = {:owner}", { owner: otherId }),
+      );
+      await counters.update(counter.id, { estimates: 10 });
+      await assert.rejects(serviceEstimate(estimateToken), { status: 429 });
+      assert.equal((await mcpEstimate(estimateToken)).structuredContent.status, 429);
+      assert.deepEqual(await nutritionRequest(other, "foods.list", {}), { items: [], next: null });
+
       for (const description of [123, "x".repeat(4001)]) {
         await assert.rejects(predict(client, { ...food, description }), { status: 400 });
       }
@@ -4749,6 +4817,8 @@ test("nutrition metrics share daily totals, comparisons, and coverage across ada
       owner.send(`${path}?${query(args)}`);
     const weeklyArgs = { view: "weekly", program: programId, start: date };
     const weekly = await metrics(weeklyArgs);
+    const { metricsOutput, matches } = require("./nutrition-contracts.cjs");
+    assert.ok(matches(metricsOutput, weekly));
     assert.deepEqual(weekly, await metrics(weeklyArgs, client, "/api/paideuo/metrics"));
     const { foodNutrition, nutritionMeasurements, nutrition } = weekly.total;
     assert.deepEqual(nutritionMeasurements.calories, { value: 900, count: 1 });
@@ -4836,4 +4906,355 @@ test("nutrition metrics share daily totals, comparisons, and coverage across ada
     assert.deepEqual(legacy.total.nutritionMeasurements, nutritionMeasurements);
     assert.deepEqual(await mcp(weeklyArgs, metricsOnly), legacy);
   });
+});
+
+test("nutrition workflow inventory stays in parity across the three production surfaces", async () => {
+  const { operations, mcpContract, matches } = require("./nutrition-contracts.cjs");
+  const inventory = {
+    foods: ["create", "get", "list", "update", "duplicate", "set_archive", "predict-macros"],
+    recipes: ["create", "get", "list", "update", "for_entry", "delete"],
+    categories: ["list", "add", "rename", "remove"],
+    plans: ["upsert", "create", "get", "list", "update", "delete"],
+    targets: ["upsert", "create", "get", "list", "update", "resolve", "resolve_bulk", "delete"],
+    planned: ["create", "get", "list", "update", "week", "preview", "commit", "delete"],
+    consumed: ["create", "get", "list", "update", "batch_create", "delete"],
+    days: ["summary", "summary_range"],
+  };
+  const expected = Object.entries(inventory).flatMap(([kind, actions]) =>
+    actions.map((action) => kind + "." + action),
+  );
+  assert.deepEqual(Object.keys(operations).sort(), expected.toSorted());
+
+  await withPocketBase(async ({ admin, baseUrl }) => {
+    for (const firstAdapter of ["browser", "service", "mcp"]) {
+      const { client, userId } = await createAuthedUser(admin, baseUrl, "parity-" + firstAdapter);
+      const credential = await domainRequest(client, "service-credentials/issue", {
+        label: "Nutrition parity",
+        scopes: ["nutrition:read", "nutrition:write", "nutrition:estimate"],
+      });
+      const token = credential.plaintextToken;
+      const mcp = (method, params) =>
+        serviceImportRequest(baseUrl, "/api/paideuo/v1/service/mcp", token, {
+          jsonrpc: "2.0",
+          id: 1,
+          method,
+          params,
+        });
+      const catalog = new Map(
+        (await mcp("tools/list")).result.tools.map((tool) => [tool.name, tool]),
+      );
+      for (const operation of expected) {
+        const contract = mcpContract(operation);
+        assert.deepEqual(catalog.get(contract.name), contract, operation);
+        assert.ok(contract.description, operation);
+      }
+
+      const seen = new Set();
+      const call = async (adapter, operation, input) => {
+        let output;
+        if (adapter === "browser") output = await nutritionRequest(client, operation, input);
+        if (adapter === "service")
+          output = await serviceImportRequest(
+            baseUrl,
+            "/api/paideuo/v1/service/nutrition/" + operation.replace(".", "/"),
+            token,
+            input,
+          );
+        if (adapter === "mcp") {
+          const { result } = await mcp("tools/call", {
+            name: mcpContract(operation).name,
+            arguments: input,
+          });
+          assert.equal(result.isError, false, JSON.stringify(result));
+          output = result.structuredContent;
+        }
+        assert.ok(matches(operations[operation].outputSchema, output), operation);
+        return output;
+      };
+      const run = async (operation, input, comparable = (value) => value) => {
+        seen.add(operation);
+        const result = await call(firstAdapter, operation, input);
+        const adapters = ["browser", "service", "mcp"];
+        const replayAdapter = adapters[(adapters.indexOf(firstAdapter) + 1) % adapters.length];
+        assert.deepEqual(
+          comparable(await call(replayAdapter, operation, input)),
+          comparable(result),
+          operation,
+        );
+        return result;
+      };
+      const create = (kind, key, data, parent) =>
+        run(kind + ".create", { operationId: key, externalId: key, data, ...parent });
+      const edit = (kind, key, { id }, data) =>
+        run(kind + ".update", { operationId: key, id, data });
+      const remove = (kind, { id }) => run(kind + ".delete", { operationId: "delete-" + kind, id });
+      const get = (kind, { id }) => run(kind + ".get", { id });
+
+      const { id: programId } = await client.send("/api/paideuo/programs", {
+        method: "POST",
+        body: { name: "Nutrition parity program" },
+      });
+      const block = await admin.collection("paideuo_blocks").create({
+        program: programId,
+        position: 1,
+        duration_weeks: 1,
+        name: "Base",
+      });
+      const week = await admin.collection("paideuo_program_weeks").create({
+        block: block.id,
+        position: 1,
+        week_type: "normal",
+      });
+      const date = "2026-11-01";
+      const monday = "2026-10-26";
+      await admin.collection("paideuo_program_schedules").create({
+        program: programId,
+        start_date: monday,
+        timezone: "America/New_York",
+        source_revision: "fixture",
+        status: "active",
+      });
+      const plan = await run("plans.upsert", {
+        programId,
+        operationId: "upsert-plan",
+        externalId: "default-plan",
+        data: { active: true, macros: { calories: 160 } },
+      });
+      assert.equal(
+        (
+          await run("plans.upsert", {
+            programId,
+            operationId: "upsert-existing-plan",
+            data: { active: true, macros: { calories: 180 } },
+          })
+        ).id,
+        plan.id,
+      );
+      await get("plans", plan);
+      await run("plans.list", { programId });
+      await edit("plans", "plan-edit", plan, { active: true, macros: { calories: 150 } });
+      const selector = { kind: "week", weekId: week.id };
+      const planId = plan.id;
+      const target = await run("targets.upsert", {
+        planId,
+        operationId: "upsert-target",
+        externalId: "week-target",
+        data: { selector, macros: { calories: 200, protein: 10 } },
+      });
+      const replacedTarget = await run("targets.upsert", {
+        planId,
+        operationId: "upsert-existing-target",
+        data: { selector, macros: { calories: 220 } },
+      });
+      assert.equal(replacedTarget.id, target.id);
+      assert.equal(replacedTarget.externalId, target.externalId);
+      assert.equal(Object.hasOwn(replacedTarget.data.macros, "protein"), false);
+      await get("targets", target);
+      await run("targets.list", { planId, limit: 1 });
+      await edit("targets", "target-edit", target, { macros: { calories: 200 } });
+      const exact = await create(
+        "targets",
+        "exact-target",
+        {
+          selector: { kind: "date", date },
+          macros: { fat: 10 },
+        },
+        { planId },
+      );
+      const resolved = await run("targets.resolve", { date, programId });
+      assert.equal(resolved.macros.calories.value, 200);
+      await run("targets.resolve_bulk", { startDate: monday, endDate: date, programId });
+
+      await run("categories.list", {});
+      await run("categories.add", { operationId: "category", newName: "Dishes" });
+      const foodDraft = {
+        title: "Rice bowl",
+        category: "Dishes",
+        serving: { description: "One bowl", size: 1, unit: "bowl" },
+        macros: { calories: 160, protein: 8, carbohydrate: 30, fat: 1 },
+      };
+      const food = await create("foods", "food", foodDraft);
+      await run("categories.rename", {
+        operationId: "category-rename",
+        name: "Dishes",
+        newName: "Bowls",
+      });
+      assert.equal((await get("foods", food)).data.category, "Bowls");
+      await edit("foods", "food-update", food, { ...foodDraft, category: "Bowls" });
+      const copy = await run("foods.duplicate", {
+        id: food.id,
+        operationId: "food-duplicate",
+        externalId: "copy",
+        title: "Rice bowl copy",
+      });
+      await run("foods.set_archive", { id: copy.id, operationId: "food-archive", archived: true });
+      await run("foods.set_archive", { id: copy.id, operationId: "food-restore", archived: false });
+      const page = await run("foods.list", { limit: 1 });
+      assert.ok(page.next);
+      const next = await run("foods.list", { limit: 1, after: page.next });
+      assert.notEqual(page.items[0].id, next.items[0].id);
+      const recipe = await create(
+        "recipes",
+        "recipe",
+        { ingredients: [{ name: "Rice" }] },
+        { foodId: food.id },
+      );
+      await get("recipes", recipe);
+      await run("recipes.list", { foodId: food.id });
+      await edit("recipes", "recipe-update", recipe, { ingredients: [{ name: "Cooked rice" }] });
+
+      const source = { kind: "bank", foodId: food.id };
+      const entry = { date, programId, quantity: 1, source };
+      const planned = await create("planned", "planned", { ...entry, date: monday });
+      await get("planned", planned);
+      await edit("planned", "planned-move", planned, { date });
+      const scheduled = await run("planned.list", { startDate: date, endDate: date, limit: 1 });
+      assert.equal(scheduled.items[0].id, planned.id);
+      await run("planned.week", { startDate: monday, programId });
+      const batch = {
+        kind: "schedule",
+        entries: [{ externalId: "preview-item", data: { ...entry, date: monday } }],
+      };
+      const preview = await run("planned.preview", batch, ({ additions, destinations }) => ({
+        additions,
+        destinations,
+      }));
+      await run("planned.commit", {
+        operationId: "planned-commit",
+        previewToken: preview.previewToken,
+        batch,
+      });
+
+      const eaten = await create("consumed", "eaten", {
+        plannedId: planned.id,
+        source: { kind: "planned" },
+        quantity: 0.5,
+        overrides: { protein: 6 },
+        consumedAt: "2026-11-02T04:30:00Z",
+      });
+      assert.equal(eaten.data.date, date);
+      await get("consumed", eaten);
+      await run("consumed.list", { startDate: date, endDate: date, plannedId: planned.id });
+      await edit("consumed", "consumed-edit", eaten, { overrides: { protein: 7 } });
+      await run("consumed.batch_create", {
+        operationId: "consumed-batch",
+        entries: [{ externalId: "monday-log", data: { ...entry, date: monday } }],
+      });
+      assert.equal(
+        (await run("recipes.for_entry", { entryKind: "consumed", entryId: eaten.id })).recipe.id,
+        recipe.id,
+      );
+      const summary = await run("days.summary", { date, programId });
+      assert.equal(summary.planned.macros.calories.subtotal, 160);
+      assert.equal(summary.consumed.macros.calories.subtotal, 80);
+      assert.equal(summary.consumed.macros.protein.subtotal, 7);
+      await run("days.summary_range", { startDate: monday, endDate: date, programId });
+      await remove("consumed", eaten);
+      await remove("planned", planned);
+      await remove("recipes", recipe);
+      await remove("targets", exact);
+      await remove("plans", plan);
+      await create("plans", "new-plan", { active: false }, { programId });
+      const categories = await run("categories.remove", {
+        operationId: "category-remove",
+        name: "Bowls",
+      });
+      assert.ok(categories.previousCategories.includes("Bowls"));
+      assert.ok(!categories.categories.includes("Bowls"));
+      assert.deepEqual(
+        [...seen].sort(),
+        expected.filter((op) => op !== "foods.predict-macros").toSorted(),
+      );
+
+      const receipt = await admin
+        .collection("paideuo_nutrition_operations")
+        .getFirstListItem(
+          admin.filter("owner = {:owner} && operation_id = 'delete-consumed'", { owner: userId }),
+        );
+      assert.equal(receipt.operation, "consumed.delete");
+      assert.equal(
+        receipt.actor,
+        firstAdapter === "browser" ? "user:" + userId : "service:" + credential.credential.id,
+      );
+      await client.send(`/api/paideuo/v1/service-credentials/${credential.credential.id}/revoke`, {
+        method: "POST",
+      });
+      await assert.rejects(call("service", "foods.list", {}), { status: 401 });
+      await assert.rejects(mcp("tools/list"), { status: 401 });
+    }
+  });
+});
+
+test("nutrition rate budgets are shared by adapters and isolated by owner", async () => {
+  const frozenBucket = 30_000_000;
+  await withPocketBase(
+    async ({ admin, baseUrl }) => {
+      const { client, userId } = await createAuthedUser(admin, baseUrl, "nutrition-quota");
+      const { client: other } = await createAuthedUser(admin, baseUrl, "nutrition-quota-other");
+      const { plaintextToken } = await domainRequest(client, "service-credentials/issue", {
+        label: "Nutrition quota test",
+        scopes: ["nutrition:read"],
+      });
+      const counters = admin.collection("paideuo_nutrition_rate_limits");
+      const previous = await counters.create({
+        owner: userId,
+        bucket: frozenBucket - 1,
+        requests: 120,
+        estimates: 10,
+      });
+      const current = await counters.create({
+        owner: userId,
+        bucket: frozenBucket,
+        requests: 119,
+        estimates: 10,
+      });
+      const list = (owner) => nutritionRequest(owner, "foods.list", {});
+      const { result } = await serviceImportRequest(
+        baseUrl,
+        "/api/paideuo/v1/service/mcp",
+        plaintextToken,
+        {
+          jsonrpc: "2.0",
+          id: 1,
+          method: "tools/call",
+          params: { name: "nutrition_foods_list", arguments: {} },
+        },
+      );
+      assert.equal(result.isError, false);
+      await assert.rejects(list(client), { status: 429 });
+      await assert.rejects(
+        serviceImportRequest(
+          baseUrl,
+          "/api/paideuo/v1/service/nutrition/foods/list",
+          plaintextToken,
+          {},
+        ),
+        { status: 429 },
+      );
+      assert.deepEqual(await list(other), { items: [], next: null });
+      assert.equal((await counters.getOne(current.id)).requests, 120);
+      await admin.send("/api/test/prune-nutrition-rate", { method: "POST" });
+      await assert.rejects(counters.getOne(previous.id), { status: 404 });
+      assert.equal((await counters.getOne(current.id)).bucket, frozenBucket);
+    },
+    {
+      prepareHooks: (hooksDir) => {
+        const limiter = path.join(hooksDir, "nutrition-rate-limit.cjs");
+        fs.writeFileSync(
+          limiter,
+          fs
+            .readFileSync(limiter, "utf8")
+            .replace("Math.floor(Date.now() / minute)", String(frozenBucket)),
+        );
+        fs.writeFileSync(
+          path.join(hooksDir, "test-prune-nutrition.pb.js"),
+          `
+routerAdd("POST", "/api/test/prune-nutrition-rate", (event) => {
+  require(__hooks + "/nutrition-rate-limit.cjs").prune(event.app);
+  return event.noContent(204);
+}, $apis.requireSuperuserAuth());`,
+        );
+      },
+    },
+  );
 });

@@ -6,7 +6,7 @@ const oauthPath = "/api/paideuo/v1/mcp-oauth";
 const metadataPath = "/.well-known/oauth-protected-resource" + mcpPath;
 const collectionName = "paideuo_mcp_oauth_grants";
 const scope = "paideuo:mcp";
-const supportedScopes = [scope, "nutrition:read", "nutrition:write"];
+const supportedScopes = [scope, "nutrition:read", "nutrition:write", "nutrition:estimate"];
 const parseScopes = (value) => {
   if (value === undefined) return [scope];
   if (typeof value !== "string" || value.length > 200) return null;

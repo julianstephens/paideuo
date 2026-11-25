@@ -1,19 +1,8 @@
-import {
-  Badge,
-  Button,
-  Box,
-  Flex,
-  Grid,
-  Heading,
-  Link,
-  NativeSelect,
-  Stack,
-  Text,
-} from "@chakra-ui/react";
+import { Badge, Button, Box, Flex, Grid, Heading, Link, Stack, Text } from "@chakra-ui/react";
 import { useState } from "react";
 import { Link as RouterLink } from "react-router";
 import { comparisonDelta } from "../../components/ComparisonChange";
-import { Disclosure, FormField, Notice, Panel } from "../../components/ui";
+import { Disclosure, Notice, Panel } from "../../components/ui";
 import { formatDate, parseDate } from "../calendar/dates";
 import type { DurationUnit, Preferences } from "../recovery/recovery";
 import { FoodNutritionMetrics } from "./FoodNutritionMetrics";
@@ -363,15 +352,14 @@ export const MetricsCharts = ({
   selected: Metric | null;
   reviewUrl?: (weekId: string) => string;
 }) => {
-  const [comparison, setComparison] = useState<Metric>("duration");
   const [showTotalsOverride, setShowTotals] = useState<boolean>();
   const { durationUnit, hiddenSummary, hiddenCharts } = preferences;
   const shown = metricKeys.filter((metric) => !hiddenCharts.includes(metric));
-  const chart = selected ?? shown.find((metric) => metric === comparison) ?? shown[0];
+  const chart = selected ?? shown.find((metric) => metric === "duration") ?? shown[0];
   const summaries = metricKeys.filter((metric) => {
-    const visible = weekly
-      ? !hiddenSummary.includes(metric)
-      : shown.includes(metric) && (!selected || metric === selected);
+    const visible =
+      (!selected || metric === selected) &&
+      (weekly ? !hiddenSummary.includes(metric) : shown.includes(metric));
     return (
       visible &&
       (!isNutritionMeasurement(metric) ||
@@ -458,43 +446,9 @@ export const MetricsCharts = ({
       )}
       {chart ? (
         <Panel as="section">
-          <Flex
-            align={{ base: "start", sm: "end" }}
-            direction={{ base: "column", sm: "row" }}
-            justify="space-between"
-            gap="3"
-          >
-            <Heading as="h2" size="md">
-              {weekly && isCheckInMetric(chart) ? "Daily breakdown" : "Period comparison"}
-            </Heading>
-            {!selected && shown.length > 1 && (
-              <FormField as="div" w="full" maxW="sm">
-                <label htmlFor="metrics-comparison">Compare metric</label>
-                <NativeSelect.Root>
-                  <NativeSelect.Field
-                    id="metrics-comparison"
-                    value={chart}
-                    onChange={({ target }) => {
-                      const metric = metricKeys.find((key) => key === target.value);
-                      if (metric) setComparison(metric);
-                    }}
-                  >
-                    {shown.map((metric) => (
-                      <option key={metric} value={metric}>
-                        {metricLabels[metric]}
-                      </option>
-                    ))}
-                  </NativeSelect.Field>
-                  <NativeSelect.Indicator />
-                </NativeSelect.Root>
-              </FormField>
-            )}
-          </Flex>
-          {(selected || shown.length === 1) && (
-            <Heading as="h3" size="sm">
-              {metricLabels[chart]}
-            </Heading>
-          )}
+          <Heading as="h2" size="md">
+            {weekly && isCheckInMetric(chart) ? "Daily breakdown" : "Period comparison"}
+          </Heading>
           {plotData.length > 1 && (
             <Flex gap="1" wrap="wrap" role="group" aria-label="Chart values">
               <Button
