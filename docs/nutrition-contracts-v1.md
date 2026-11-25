@@ -1,6 +1,6 @@
 # Nutrition contracts v1
 
-The contracts and shared PocketBase services are implemented in NUT-01. Food-bank, recipe, nutrition plan, target, and planned-food operations are live through HTTP and MCP. Consumed-food and day-summary operations are shared contracts for follow-up features. The contract catalog in `backend/pb_hooks/nutrition-contracts.cjs` defines each operation's request and response JSON Schema. Both adapters in `backend/pb_hooks/nutrition-adapters.cjs` call the same service.
+The contracts and shared PocketBase services are implemented in NUT-01. Food-bank, recipe, nutrition plan, target, planned-food, consumed-food, and day-summary operations are available through HTTP and MCP. The contract catalog in `backend/pb_hooks/nutrition-contracts.cjs` defines each operation's request and response JSON Schema. Both adapters in `backend/pb_hooks/nutrition-adapters.cjs` call the same service.
 
 ## Operations
 
@@ -11,8 +11,8 @@ The contracts and shared PocketBase services are implemented in NUT-01. Food-ban
 | `plans`    | get, list, create, update, delete                        |
 | `targets`  | get, list, create, update, delete, resolve, resolve_bulk |
 | `planned`  | get, list, create, update, delete, week, preview, commit |
-| `consumed` | get, list, create, update, delete                        |
-| `days`     | summary                                                  |
+| `consumed` | get, list, create, update, delete, batch_create          |
+| `days`     | summary, summary_range                                   |
 
 For example, `planned.create` maps to `POST /api/paideuo/v1/nutrition/planned/create` and the MCP tool `nutrition_planned_create`. HTTP accepts the operation input as a JSON body and returns the output directly. MCP accepts the same fields as tool arguments and returns the output as structured content. HTTP reads also use a JSON body so filters and cursors share the same schema with MCP. Lists use an opaque `next` ID as the next request's `after` cursor. Page sizes default to 50 and allow up to 100. Entity responses contain `id`, `externalId`, and `data`.
 
@@ -65,3 +65,19 @@ Send one of these batch inputs to `planned.preview`:
 - `{ kind: "clone", startDate, endDate, destinationDate }` copies an inclusive range of up to 62 civil days, preserving gaps and skipping canceled and deleted entries. Each copied entry retains its source program and timezone.
 
 A batch adds between 1 and 100 entries. Preview returns `{ previewToken, additions, destinations }`, including existing rows on dates that will receive additions. Review the additions and send `{ operationId, previewToken, batch }` to `planned.commit` with the exact batch input. Commit appends after existing rows and returns `{ items: [{ id, externalId }, ...] }`. A preview is owner-bound and expires after 15 minutes. If the proposed additions or destination rows change before commit, preview again after the conflict. An identical retry of a successful operation returns its receipt even after expiry. Preview requires `nutrition:read` and commit requires `nutrition:write`.
+
+## Consumed-food logging
+
+In Nutrition, use **Log food** for a bank food or a one-off and **Log eaten** on a planned row to record a portion. The daily log and macro comparison use actual entries independently of the schedule. A day with no logs has a zero entry count and null consumed subtotals. On populated days the total reports a known subtotal and coverage for each macro.
+
+`consumed.create` takes `{ operationId, externalId, data }`. Data requires a serving quantity and a source. Send `{ kind: "bank", foodId }` or `{ kind: "inline", food }` for independent foods or substitutions. To use the snapshot of a planned food, send `{ kind: "planned" }` and `plannedId`. Include `plannedId` with a bank or inline substitution to preserve the planned link. Each portion uses its own external ID and operation ID. The link provides a default date and timezone when applicable.
+
+Supply an explicit civil date, an offset-bearing `consumedAt` timestamp, or both when they agree in the entry timezone. A timestamp can establish the date when omitted. Edits preserve the snapshot, source and planned link. Send `consumedAt: null` on update to clear the timestamp before or alongside a date correction. Each numeric macro override is an estimate for the entire eaten entry, independent of serving quantity. Use null to mark a macro unknown or omit it from the overrides object to use its captured estimate.
+
+`consumed.list` supports optional `date` and `plannedId` filters together with the standard cursor. It can find existing portions linked to an owned, soft-deleted plan entry. Use `consumed.delete` to undo an eaten entry. The deleted log retains its external ID and is removed from reads and totals.
+
+`consumed.batch_create` takes `{ operationId, entries: [{ externalId, data }, ...] }` with 1–100 new portions. The batch validates each entry as an individual create, writes all entries in one transaction, and returns `{ items: [{ id, externalId }, ...] }` in input order. An identical retry replays the saved receipt. A conflicting ID or invalid entry aborts the whole batch.
+
+`days.summary` takes `{ date, programId? }` and returns the selected civil date, the program's effective target when selected, and independent owner-wide planned and consumed totals. Consumed reads and summaries require `nutrition:read`. Single and batch writes require `nutrition:write`. The matching tools use names such as `nutrition_consumed_batch_create` and `nutrition_days_summary`.
+
+`days.summary_range` takes `{ startDate, endDate, programId? }` and returns `{ days }` with a daily summary for every date in an inclusive range of up to 62 civil days. The training calendar uses this operation to display planned and eaten totals in week and month views.

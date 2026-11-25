@@ -2,9 +2,9 @@ import { apiRequest } from "../../lib/api/request";
 import type { FoodFields } from "./foods";
 import type { EffectiveTarget, TargetLayer } from "./targets";
 
-type Snapshot = Pick<FoodFields, "title" | "serving" | "macros">;
-type Source = { kind: "bank"; foodId: string } | { kind: "inline"; food: Snapshot };
-type EntryFields = {
+export type FoodSnapshot = Pick<FoodFields, "title" | "serving" | "macros">;
+export type FoodSource = { kind: "bank"; foodId: string } | { kind: "inline"; food: FoodSnapshot };
+export type EntryFields = {
   date: string;
   quantity: number;
   meal?: string;
@@ -14,24 +14,25 @@ type EntryFields = {
 };
 
 export type PlannedInput = EntryFields & {
-  source: Source;
+  source: FoodSource;
   programId?: string;
   timezone?: string;
 };
 type PlannedData = Omit<PlannedInput, "source"> & {
-  source: Exclude<Source, { kind: "inline" }> | { kind: "inline" };
-  snapshot: Snapshot;
+  source: Exclude<FoodSource, { kind: "inline" }> | { kind: "inline" };
+  snapshot: FoodSnapshot;
   canceled?: boolean;
 };
 export type PlannedEntry = { id: string; externalId: string; data: PlannedData };
 export type DraftEntry = { externalId: string; data: PlannedInput };
+export type NutritionTotals = {
+  entryCount: number;
+  macros: Record<keyof FoodFields["macros"], { subtotal: number | null; knownCount: number }>;
+};
 export type PlannedDay = {
   date: string;
   entries: PlannedEntry[];
-  planned: {
-    entryCount: number;
-    macros: Record<keyof FoodFields["macros"], { subtotal: number | null; knownCount: number }>;
-  };
+  planned: NutritionTotals;
   target: EffectiveTarget;
   remaining: Required<NonNullable<TargetLayer["macros"]>>;
 };

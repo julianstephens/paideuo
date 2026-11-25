@@ -322,6 +322,14 @@ const create = (db, principal, kind, input) => {
 
 const mutate = (db, principal, kind, action, input) => {
   if (action === "commit") return commitPlanned(db, principal, input);
+  if (action === "batch_create") {
+    return {
+      items: input.entries.map((entry) => {
+        const { id, externalId } = create(db, principal, kind, entry);
+        return { id, externalId };
+      }),
+    };
+  }
   if (action === "create") return create(db, principal, kind, input);
   const record = entryRecord(db, kind, principal.ownerId, input.id, action === "delete");
   if (action === "delete" && !isEntry(kind)) {
@@ -360,6 +368,11 @@ const mutate = (db, principal, kind, action, input) => {
 const list = (db, kind, owner, input) => {
   const filters = ["owner = {:owner}"];
   const params = { owner };
+  if (input.plannedId) {
+    entryRecord(db, "planned", owner, input.plannedId, true);
+    params.plannedId = input.plannedId;
+    filters.push("data.plannedId = {:plannedId}");
+  }
   const parent = parentSpecs[kind];
   if (parent && input[parent.key]) {
     params.parent = input[parent.key];
@@ -395,10 +408,46 @@ const list = (db, kind, owner, input) => {
   return { items, next: rows.length > limit ? items[limit - 1].id : null };
 };
 
-const dailyEntries = (db, kind, owner, date) =>
-  find(db, collection(kind), "owner = {:owner} && date = {:date}", { owner, date })
-    .map(dataOf)
-    .filter((data) => !data.deleted && !data.canceled);
+const entriesByDate = (db, kind, owner, start, end) => {
+  const grouped = new Map();
+  const rows = find(
+    db,
+    collection(kind),
+    "owner = {:owner} && date >= {:start} && date <= {:end}",
+    { owner, start, end },
+  );
+  for (const record of rows) {
+    const data = dataOf(record);
+    if (data.deleted || data.canceled) continue;
+    const date = record.getString("date");
+    if (!grouped.has(date)) grouped.set(date, []);
+    grouped.get(date).push(data);
+  }
+  return grouped;
+};
+
+const summarizeRange = (db, owner, { startDate, endDate, programId }) => {
+  const start = civilDate(startDate).getTime();
+  const end = civilDate(endDate).getTime();
+  if (end < start || end - start >= maxTargetDays * dayMilliseconds) {
+    throw new BadRequestError("Provide an ordered range of up to " + maxTargetDays + " days.");
+  }
+  const context = targetContext(db, owner, programId);
+  const planned = entriesByDate(db, "planned", owner, startDate, endDate);
+  const consumed = entriesByDate(db, "consumed", owner, startDate, endDate);
+  const days = [];
+  for (let time = start; time <= end; time += dayMilliseconds) {
+    const day = new Date(time);
+    const date = dates.format(day);
+    days.push({
+      date,
+      target: effective(context, day),
+      planned: summarize(planned.get(date) ?? []),
+      consumed: summarize(consumed.get(date) ?? []),
+    });
+  }
+  return { days };
+};
 
 const shiftDay = (date, offset) => {
   const shifted = dates.format(new Date(civilDate(date).getTime() + offset * dayMilliseconds));
@@ -605,15 +654,12 @@ const read = (db, owner, kind, action, input) => {
   if (action === "list") return list(db, kind, owner, input);
   if (action === "for_entry") return recipeForEntry(db, owner, input);
   if (action === "resolve_bulk") return resolveBulk(db, owner, input);
-  const date = civilDate(input.date);
-  const target = effective(targetContext(db, owner, input.programId), date);
-  if (action === "resolve") return target;
-  return {
-    date: input.date,
-    target,
-    planned: summarize(dailyEntries(db, "planned", owner, input.date)),
-    consumed: summarize(dailyEntries(db, "consumed", owner, input.date)),
-  };
+  if (action === "summary_range") return summarizeRange(db, owner, input);
+  if (action === "summary") {
+    return summarizeRange(db, owner, { ...input, startDate: input.date, endDate: input.date })
+      .days[0];
+  }
+  return effective(targetContext(db, owner, input.programId), civilDate(input.date));
 };
 
 const execute = (app, principal, operation, input) => {

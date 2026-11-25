@@ -4431,3 +4431,185 @@ onRecordValidate((event) => {
     },
   );
 });
+
+test("consumed nutrition logs and batches share production HTTP and MCP contracts", async () => {
+  const { contractFor, matches } = require("./nutrition-contracts.cjs");
+  await withPocketBase(async ({ admin, baseUrl }) => {
+    const { client } = await createAuthedUser(admin, baseUrl, "consumed-production");
+    const { client: other } = await createAuthedUser(admin, baseUrl, "consumed-other");
+    const http = async (operation, input) => {
+      const result = await nutritionRequest(client, operation, input);
+      assert.ok(matches(contractFor(operation).outputSchema, result), operation);
+      return result;
+    };
+    const issue = async (scope) =>
+      (await domainRequest(client, "service-credentials/issue", { label: scope, scopes: [scope] }))
+        .plaintextToken;
+    const reader = await issue("nutrition:read");
+    const writer = await issue("nutrition:write");
+    const service = (operation, body, token) =>
+      serviceImportRequest(
+        baseUrl,
+        "/api/paideuo/v1/service/nutrition/" + operation.replace(".", "/"),
+        token,
+        body,
+      );
+    const mcp = async (operation, args, token) => {
+      const response = await serviceImportRequest(baseUrl, "/api/paideuo/v1/service/mcp", token, {
+        jsonrpc: "2.0",
+        id: 1,
+        method: "tools/call",
+        params: { name: "nutrition_" + operation.replace(".", "_"), arguments: args },
+      });
+      return response.result;
+    };
+    const date = "2026-11-01";
+    const timezone = "America/New_York";
+    const food = {
+      title: "Rice",
+      serving: { size: 1, unit: "bowl", description: "one bowl" },
+      macros: { protein: 5, calories: 100 },
+    };
+    const bank = await http("foods.create", {
+      operationId: "bank",
+      externalId: "bank",
+      data: food,
+    });
+    const planned = await http("planned.create", {
+      operationId: "plan",
+      externalId: "plan",
+      data: { date, timezone, quantity: 2, source: { kind: "bank", foodId: bank.id } },
+    });
+    await http("foods.update", {
+      operationId: "bank-edit",
+      id: bank.id,
+      data: { ...food, macros: { calories: 200 } },
+    });
+    const initial = await http("days.summary", { date });
+    assert.equal(initial.target.active, false);
+    assert.equal(initial.planned.macros.calories.subtotal, 200);
+    assert.deepEqual(initial.consumed.macros.calories, { subtotal: null, knownCount: 0 });
+    const first = {
+      operationId: "first",
+      externalId: "first",
+      data: {
+        quantity: 1.5,
+        source: { kind: "planned" },
+        plannedId: planned.id,
+        consumedAt: "2026-11-02T04:30:00Z",
+        overrides: { protein: 12 },
+      },
+    };
+    await assert.rejects(service("consumed.create", first, reader), { status: 403 });
+    await assert.rejects(nutritionRequest(other, "consumed.create", first), { status: 404 });
+    const saved = await service("consumed.create", first, writer);
+    assert.equal(saved.data.date, date);
+    assert.equal(saved.data.snapshot.macros.calories, 100);
+    assert.deepEqual((await mcp("consumed.create", first, writer)).structuredContent, saved);
+    assert.deepEqual(await http("consumed.create", first), saved);
+    await assert.rejects(
+      http("consumed.create", { ...first, data: { ...first.data, quantity: 2 } }),
+      { status: 409 },
+    );
+
+    const substitute = {
+      kind: "inline",
+      food: { ...food, title: "Yogurt", macros: { protein: 0 } },
+    };
+    const batch = {
+      operationId: "batch",
+      entries: [
+        {
+          externalId: "second",
+          data: { date, quantity: 0.5, source: { kind: "planned" }, plannedId: planned.id },
+        },
+        {
+          externalId: "substitute",
+          data: { date: "2026-11-02", quantity: 1, source: substitute, plannedId: planned.id },
+        },
+        { externalId: "standalone", data: { date, timezone, quantity: 1, source: substitute } },
+      ],
+    };
+    const denied = await mcp("consumed.batch_create", batch, reader);
+    assert.equal(denied.isError, true);
+    assert.equal(denied.structuredContent.status, 403);
+    const result = await mcp("consumed.batch_create", batch, writer);
+    assert.equal(result.isError, false, JSON.stringify(result));
+    const receipt = await http("consumed.batch_create", batch);
+    assert.deepEqual(result.structuredContent, receipt);
+    assert.deepEqual(
+      receipt.items.map((item) => item.externalId),
+      ["second", "substitute", "standalone"],
+    );
+    const linked = await http("consumed.list", { plannedId: planned.id });
+    assert.equal(linked.items.length, 3);
+    assert.equal((await http("consumed.list", { plannedId: planned.id, date })).items.length, 2);
+    assert.equal(
+      (await http("consumed.get", { id: receipt.items[1].id })).data.snapshot.title,
+      "Yogurt",
+    );
+    await assert.rejects(nutritionRequest(other, "consumed.list", { plannedId: planned.id }), {
+      status: 404,
+    });
+    const totals = await http("days.summary", { date });
+    assert.deepEqual((await mcp("days.summary", { date }, reader)).structuredContent, totals);
+    const range = { startDate: date, endDate: "2026-11-03" };
+    const calendar = await http("days.summary_range", range);
+    assert.deepEqual((await mcp("days.summary_range", range, reader)).structuredContent, calendar);
+    assert.deepEqual(calendar.days[0], totals);
+    assert.equal(calendar.days[1].consumed.macros.protein.subtotal, 0);
+    assert.equal(calendar.days[1].planned.entryCount, 0);
+    assert.equal(calendar.days[2].consumed.macros.protein.subtotal, null);
+    await assert.rejects(http("days.summary_range", { ...range, endDate: "2027-01-03" }), {
+      status: 400,
+    });
+    assert.deepEqual(totals.planned, initial.planned);
+    assert.deepEqual(totals.consumed.macros.calories, { subtotal: 200, knownCount: 2 });
+    assert.deepEqual(totals.consumed.macros.protein, { subtotal: 14.5, knownCount: 3 });
+
+    const edit = { operationId: "edit", id: saved.id, data: { date: "2026-11-03", quantity: 1 } };
+    await assert.rejects(http("consumed.update", edit), { status: 400 });
+    await http("planned.update", {
+      operationId: "cancel-plan",
+      id: planned.id,
+      data: { canceled: true },
+    });
+    await assert.rejects(
+      http("consumed.create", { ...first, operationId: "canceled", externalId: "canceled" }),
+      { status: 400 },
+    );
+    await http("planned.delete", { operationId: "delete-plan", id: planned.id });
+    await assert.rejects(
+      http("consumed.create", { ...first, operationId: "deleted", externalId: "deleted" }),
+      { status: 404 },
+    );
+    const edited = await http("consumed.update", {
+      ...edit,
+      data: { ...edit.data, consumedAt: null },
+    });
+    assert.equal(edited.data.date, "2026-11-03");
+    assert.equal(edited.data.plannedId, planned.id);
+    assert.deepEqual(edited.data.snapshot, saved.data.snapshot);
+    assert.equal((await http("consumed.list", { plannedId: planned.id })).items.length, 3);
+    await http("consumed.delete", { operationId: "undo", id: saved.id });
+    assert.equal((await http("consumed.list", { plannedId: planned.id })).items.length, 2);
+    assert.deepEqual(await http("consumed.create", first), saved);
+
+    const rollbackEntry = { ...batch.entries[2], externalId: "rollback-first" };
+    await assert.rejects(
+      http("consumed.batch_create", {
+        operationId: "failed-batch",
+        entries: [rollbackEntry, { ...rollbackEntry, externalId: "standalone" }],
+      }),
+      { status: 409 },
+    );
+    assert.equal((await http("consumed.list", { date })).items.length, 2);
+    assert.ok(await http("consumed.create", { ...rollbackEntry, operationId: "after-rollback" }));
+    const fold = await http("consumed.create", {
+      operationId: "fold",
+      externalId: "fold",
+      data: { ...rollbackEntry.data, consumedAt: "2026-11-01T01:30:00-05:00" },
+    });
+    assert.equal(fold.data.date, date);
+  });
+});

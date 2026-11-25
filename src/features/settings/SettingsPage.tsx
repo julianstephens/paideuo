@@ -18,6 +18,7 @@ import { FormField, Notice, PageHeader, Panel } from "../../components/ui";
 import { errorMessage } from "../../lib/api/request";
 import { FoodCategorySettings } from "./FoodCategorySettings";
 import { CheckInFieldSettings } from "./CheckInFieldSettings";
+import { CalendarNutritionSettings } from "./CalendarNutritionSettings";
 import { GoogleHealthSettings } from "./GoogleHealthSettings";
 import { OpenAISettings } from "./OpenAISettings";
 import { type ServiceCredentialScope, serviceCredentialsApi } from "./serviceCredentials";
@@ -111,6 +112,7 @@ const AccountSettings = ({ ownerId }: { ownerId: string }) => {
     <Stack gap="6">
       <PageHeader title="Settings" />
       <CheckInFieldSettings ownerId={ownerId} />
+      <CalendarNutritionSettings ownerId={ownerId} />
       <FoodCategorySettings ownerId={ownerId} />
       <OpenAISettings ownerId={ownerId} />
       <GoogleHealthSettings ownerId={ownerId} />

@@ -164,8 +164,14 @@ the earlier cycle and recent days, with varied sleep, soreness, readiness,
 nutrition, and occasional gaps. Both cycles include sample macro targets.
 The active cycle also has block, week, weekday, and date overrides, plus an
 inactive deload week.
+Sample breakfasts and dinners cover the entire earlier cycle. They also cover
+the active cycle from its start through the current week, with at least two weeks
+of plans inside the schedule. Historical meals vary planned and eaten portions
+across days, with some days below plan, near plan, or above plan. Eaten logs
+also include a dinner substitution. The current day includes a breakfast log, and future dates have plans only.
 Reruns fill missing sample targets while preserving existing target values and
-leaving independently created nutrition plans alone.
+leaving independently created nutrition plans alone. Meal and log IDs stay stable
+on reruns so the script preserves edits and avoids duplicate entries.
 
 The active schedule defaults to the current week's Monday in the local
 timezone. Set `SEED_START_DATE` to a Monday in `YYYY-MM-DD` format or

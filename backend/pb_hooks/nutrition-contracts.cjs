@@ -227,6 +227,7 @@ for (const [entityName, create, edit, parent, deletable] of [
         }
       : {};
   if (entityName === "planned" || entityName === "consumed") filters.date = date;
+  if (entityName === "consumed") filters.plannedId = id;
   define(entityName + ".get", "read", identity, result);
   define(
     entityName + ".list",
@@ -378,7 +379,36 @@ define(
     "items",
   ]),
 );
+const maxConsumedBatch = 100;
+define(
+  "consumed.batch_create",
+  "write",
+  object(
+    {
+      operationId: externalId,
+      entries: array(
+        object({ externalId, data: consumed }, ["externalId", "data"]),
+        maxConsumedBatch,
+        1,
+      ),
+    },
+    ["operationId", "entries"],
+  ),
+  object({ items: array(object({ id, externalId }, ["id", "externalId"]), maxConsumedBatch) }, [
+    "items",
+  ]),
+);
 const publishedDescriptions = {
+  "consumed.get": "Get an owned consumed-food entry.",
+  "consumed.list": "List owned consumed-food entries by civil date or linked planned entry.",
+  "consumed.create":
+    "Log a bank food, one-off, or portion linked to planned food. Macro overrides are totals for the entire entry.",
+  "consumed.update": "Correct an eaten entry. Macro overrides are totals for the entire entry.",
+  "consumed.delete": "Remove an eaten entry from the daily log.",
+  "consumed.batch_create":
+    "Atomically log up to 100 eaten entries, including planned portions and substitutions.",
+  "days.summary": "Compare daily planned and eaten totals with optional program targets.",
+  "days.summary_range": "Compare planned and eaten totals across up to 62 civil dates.",
   "planned.get": "Get an owned planned-food entry.",
   "planned.list": "List owned planned-food entries, optionally by civil date.",
   "planned.create": "Schedule a bank food or one-off food.",
@@ -432,19 +462,18 @@ define(
     ["days"],
   ),
 );
+const daySummary = object({ date, target: targets, planned: totals, consumed: totals }, [
+  "date",
+  "target",
+  "planned",
+  "consumed",
+]);
+define("days.summary", "read", object({ date, programId: id }, ["date"]), daySummary);
 define(
-  "days.summary",
+  "days.summary_range",
   "read",
-  object({ date, programId: id }, ["date"]),
-  object(
-    {
-      date,
-      target: targets,
-      planned: totals,
-      consumed: totals,
-    },
-    ["date", "target", "planned", "consumed"],
-  ),
+  object({ startDate: date, endDate: date, programId: id }, ["startDate", "endDate"]),
+  object({ days: array(daySummary, maxTargetDays) }, ["days"]),
 );
 
 const matches = (schema, value) => {

@@ -9,54 +9,70 @@ import {
   Textarea,
 } from "@chakra-ui/react";
 import { useQuery } from "@tanstack/react-query";
-import { useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import type { FormEvent } from "react";
 import { FormField, Notice, Panel } from "../../components/ui";
 import { errorMessage } from "../../lib/api/request";
 import { foodQueryKey, foodsApi, macroFields } from "./foods";
 import type { Food, FoodFields } from "./foods";
-import type { Change, DraftEntry, PlannedEntry, PlannedInput } from "./planned";
+import type { Change, DraftEntry, FoodSource, PlannedEntry, PlannedInput } from "./planned";
+
+import type { ConsumedChange, ConsumedDraft, ConsumedEntry } from "./consumed";
 
 const mealLabels = ["Breakfast", "Lunch", "Dinner", "Snack"];
 
-export const PlannedEntryForm = ({
-  entry,
-  date,
-  order,
-  ownerId,
-  programId,
-  timezone,
-  canQueue,
-  pending,
-  onClose,
-  onSave,
-  onQueue,
-}: {
-  entry?: PlannedEntry;
+type FormContext = {
   date: string;
-  order: number;
   ownerId: string;
   programId?: string;
   timezone?: string;
   canQueue: boolean;
   pending: boolean;
   onClose: () => void;
+};
+
+type PlannedForm = {
+  kind: "planned";
+  entry?: PlannedEntry;
+  order: number;
   onSave: (change: Change) => void;
   onQueue: (draft: DraftEntry, title: string) => void;
-}) => {
-  const [source, setSource] = useState<"bank" | "inline">("bank");
+};
+
+type ConsumedForm = {
+  kind: "consumed";
+  entry?: ConsumedEntry;
+  linkedPlan?: PlannedEntry;
+  onSave: (change: ConsumedChange) => void;
+  onQueue: (draft: ConsumedDraft, title: string) => void;
+};
+
+const localTimestamp = (date: Date) =>
+  new Date(date.getTime() - date.getTimezoneOffset() * 60000).toISOString().slice(0, 19);
+
+export const FoodEntryForm = (props: FormContext & (PlannedForm | ConsumedForm)) => {
+  const { entry, date, ownerId, programId, timezone, pending, canQueue, onClose } = props;
+  const linked = props.kind === "consumed" ? props.linkedPlan : undefined;
+  const [source, setSource] = useState<FoodSource["kind"] | "planned">(linked ? "planned" : "bank");
+  const [timeError, setTimeError] = useState<string>();
+  const savedTime = props.kind === "consumed" ? props.entry?.data.consumedAt : undefined;
+  const initialTime = savedTime ? localTimestamp(new Date(savedTime)) : "";
   const [search, setSearch] = useState("");
   const [after, setAfter] = useState<string[]>([]);
   const [selected, setSelected] = useState<Food>();
-  const canSave = !!entry || source === "inline" || !!selected;
+  const canSave = !!entry || source !== "bank" || !!selected;
   const externalId = useRef<string>(undefined);
+  const panel = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    panel.current?.focus();
+  }, []);
   const foods = useQuery({
     queryKey: [...foodQueryKey(ownerId), "planner", search, after.at(-1)],
     queryFn: ({ signal }) =>
       foodsApi.list({ search, category: "", status: "active" }, after.at(-1), signal),
     enabled: !entry && source === "bank",
   });
-  const initialMeal = entry?.data.meal ?? "";
+  const initialMeal = entry?.data.meal ?? linked?.data.meal ?? "";
   const [meal, setMeal] = useState(
     initialMeal && !mealLabels.includes(initialMeal) ? "custom" : initialMeal,
   );
@@ -78,52 +94,98 @@ export const PlannedEntryForm = ({
     const data = {
       date: field("date"),
       quantity: Number(field("quantity")),
-      order: Number(field("order")),
       notes: field("notes"),
       overrides,
     };
-    if (entry) {
-      onSave({ action: "update", id: entry.id, data: { ...data, meal: label || null } });
+    let consumedAt: string | undefined;
+    const time = field("consumedAt");
+    if (time) {
+      const normalized = time.length === 16 ? time + ":00" : time;
+      const instant = new Date(normalized);
+      if (!Number.isFinite(instant.getTime()) || localTimestamp(instant) !== normalized) {
+        setTimeError(
+          "Choose a valid local date and time. The clock may skip some times when daylight saving begins.",
+        );
+        return;
+      }
+      consumedAt = normalized === initialTime ? savedTime : instant.toISOString();
+    }
+    setTimeError(undefined);
+    if (props.kind === "consumed" && props.entry) {
+      props.onSave({
+        action: "update",
+        id: props.entry.id,
+        data: { ...data, meal: label || null, consumedAt: consumedAt ?? null },
+      });
+      return;
+    }
+    const order = Number(field("order"));
+    if (props.kind === "planned" && props.entry) {
+      props.onSave({
+        action: "update",
+        id: props.entry.id,
+        data: { ...data, order, meal: label || null },
+      });
       return;
     }
     if (source === "bank" && !selected) return;
-    const draft: DraftEntry = {
-      externalId: (externalId.current ??= crypto.randomUUID()),
-      data: {
-        ...data,
-        ...(label ? { meal: label } : {}),
-        ...(programId ? { programId } : {}),
-        ...(timezone ? { timezone } : {}),
-        source:
-          selected && source === "bank"
-            ? { kind: "bank", foodId: selected.id }
-            : {
-                kind: "inline",
-                food: {
-                  title: field("title"),
-                  serving: {
-                    description: field("description"),
-                    size: Number(field("size")),
-                    unit: field("unit"),
-                  },
-                  macros,
-                },
+    const chosenSource: FoodSource =
+      selected && source === "bank"
+        ? { kind: "bank", foodId: selected.id }
+        : {
+            kind: "inline",
+            food: {
+              title: field("title"),
+              serving: {
+                description: field("description"),
+                size: Number(field("size")),
+                unit: field("unit"),
               },
-      },
+              macros,
+            },
+          };
+    const createData = {
+      ...data,
+      ...(label ? { meal: label } : {}),
+      ...(linked ? {} : { programId, timezone }),
     };
-    const submitter = (event.nativeEvent as SubmitEvent).submitter;
+    const id = (externalId.current ??= crypto.randomUUID());
+    const queue = (event.nativeEvent as SubmitEvent).submitter?.getAttribute("value") === "queue";
     const title =
-      draft.data.source.kind === "inline"
-        ? draft.data.source.food.title
-        : (selected?.data.title ?? "");
-    if (submitter?.getAttribute("value") === "queue") onQueue(draft, title);
-    else onSave({ action: "create", ...draft });
+      source === "planned"
+        ? (linked?.data.snapshot.title ?? "")
+        : chosenSource.kind === "inline"
+          ? chosenSource.food.title
+          : (selected?.data.title ?? "");
+    if (props.kind === "consumed") {
+      const draft: ConsumedDraft = {
+        externalId: id,
+        data: {
+          ...createData,
+          source: source === "planned" ? { kind: "planned" } : chosenSource,
+          ...(linked ? { plannedId: linked.id } : {}),
+          ...(consumedAt ? { consumedAt } : {}),
+        },
+      };
+      if (queue) props.onQueue(draft, title);
+      else props.onSave({ action: "create", ...draft });
+      return;
+    }
+    const draft = { externalId: id, data: { ...createData, order, source: chosenSource } };
+    if (queue) props.onQueue(draft, title);
+    else props.onSave({ action: "create", ...draft });
   };
 
   return (
-    <Panel>
+    <Panel ref={panel} tabIndex={-1}>
       <Heading size="md">
-        {entry ? "Edit " + entry.data.snapshot.title : "Add planned food"}
+        {entry
+          ? "Edit " + entry.data.snapshot.title
+          : props.kind === "planned"
+            ? "Add planned food"
+            : linked
+              ? "Log " + linked.data.snapshot.title
+              : "Log food"}
       </Heading>
       <form onSubmit={submit}>
         <Stack gap="4">
@@ -133,8 +195,12 @@ export const PlannedEntryForm = ({
               <NativeSelect.Root>
                 <NativeSelect.Field
                   value={source}
-                  onChange={(event) => setSource(event.target.value === "bank" ? "bank" : "inline")}
+                  onChange={(event) => {
+                    const value = event.target.value;
+                    setSource(value === "bank" || value === "planned" ? value : "inline");
+                  }}
                 >
+                  {linked && <option value="planned">Planned food</option>}
                   <option value="bank">Food bank</option>
                   <option value="inline">One-off food</option>
                 </NativeSelect.Field>
@@ -248,7 +314,7 @@ export const PlannedEntryForm = ({
               <Input
                 type="date"
                 name="date"
-                defaultValue={entry?.data.date ?? date}
+                defaultValue={entry?.data.date ?? linked?.data.date ?? date}
                 min="0001-01-01"
                 max="9999-12-31"
                 required
@@ -263,21 +329,34 @@ export const PlannedEntryForm = ({
                 min={0}
                 max={1000}
                 step={0.001}
-                defaultValue={entry?.data.quantity ?? 1}
+                defaultValue={entry?.data.quantity ?? linked?.data.quantity ?? 1}
               />
             </FormField>
-            <FormField>
-              Order
-              <Input
-                name="order"
-                required
-                type="number"
-                min={0}
-                max={1000000}
-                defaultValue={entry ? (entry.data.order ?? 0) : order}
-              />
-            </FormField>
+            {props.kind === "planned" ? (
+              <FormField>
+                Order
+                <Input
+                  name="order"
+                  required
+                  type="number"
+                  min={0}
+                  max={1000000}
+                  defaultValue={props.entry ? (props.entry.data.order ?? 0) : props.order}
+                />
+              </FormField>
+            ) : (
+              <FormField>
+                Time ({Intl.DateTimeFormat().resolvedOptions().timeZone}, optional)
+                <Input
+                  type="datetime-local"
+                  name="consumedAt"
+                  step={1}
+                  defaultValue={initialTime}
+                />
+              </FormField>
+            )}
           </SimpleGrid>
+          {timeError && <Notice role="alert">{timeError}</Notice>}
           <FormField>
             Meal
             <NativeSelect.Root>
@@ -298,7 +377,7 @@ export const PlannedEntryForm = ({
             </FormField>
           )}
           <Heading as="h3" size="sm">
-            Macro overrides for this entry
+            Macro overrides for the entire entry
           </Heading>
           <SimpleGrid columns={{ base: 2, md: 4 }} gap="3">
             {macroFields.map(({ key, label, unit }) => (

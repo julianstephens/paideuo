@@ -1,13 +1,4 @@
-import {
-  Button,
-  Flex,
-  Heading,
-  Input,
-  NativeSelect,
-  SimpleGrid,
-  Stack,
-  Text,
-} from "@chakra-ui/react";
+import { Button, Flex, Heading, Input, NativeSelect, Stack, Text } from "@chakra-ui/react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useRef, useState } from "react";
 import type { FormEvent } from "react";
@@ -26,10 +17,12 @@ import {
   parseDate,
 } from "../calendar/dates";
 import { programKeys, programsApi } from "../programs/programs";
-import { macroFields } from "./foods";
+import { consumedKey } from "./consumed";
+import { ConsumedDay, LinkedPortions } from "./ConsumedDay";
+import type { LogEditor } from "./ConsumedDay";
 import { plannedApi } from "./planned";
-import type { Change, DraftEntry, PlannedBatch, PlannedDay, PlannedEntry } from "./planned";
-import { PlannedEntryForm } from "./PlannedEntryForm";
+import type { Change, DraftEntry, PlannedBatch, PlannedEntry } from "./planned";
+import { FoodEntryForm } from "./FoodEntryForm";
 
 type CopySource =
   | { kind: "copy"; entry: PlannedEntry }
@@ -56,6 +49,8 @@ const Planner = ({ ownerId }: { ownerId: string }) => {
   const key = ["nutrition", "planner", ownerId];
   const client = useQueryClient();
   const [editor, setEditor] = useState<"add" | PlannedEntry>();
+  const [logEditor, setLogEditor] = useState<LogEditor>();
+  const [logBusy, setLogBusy] = useState(false);
   const [copy, setCopy] = useState<CopySource>();
   const [queue, setQueue] = useState<{ draft: DraftEntry; title: string }[]>([]);
   const [deletion, setDeletion] = useState<PendingDelete>();
@@ -83,7 +78,10 @@ const Planner = ({ ownerId }: { ownerId: string }) => {
       }
       setEditor(undefined);
       setCopy(undefined);
-      await client.invalidateQueries({ queryKey: key });
+      await Promise.all([
+        client.invalidateQueries({ queryKey: key }),
+        client.invalidateQueries({ queryKey: [...consumedKey(ownerId), "summary"] }),
+      ]);
     },
   });
   const save = (change: Change) => {
@@ -97,6 +95,7 @@ const Planner = ({ ownerId }: { ownerId: string }) => {
   };
   const navigate = (next: Date, program = programId ?? "") => {
     setEditor(undefined);
+    setLogEditor(undefined);
     setCopy(undefined);
     mutation.reset();
     preview.reset();
@@ -129,8 +128,9 @@ const Planner = ({ ownerId }: { ownerId: string }) => {
   const timezone = selectedProgram?.scheduled
     ? undefined
     : Intl.DateTimeFormat().resolvedOptions().timeZone;
-  const busy = mutation.isPending || preview.isPending;
-  const locked = busy || !!editor || !!copy || !!preview.data;
+  const busy = mutation.isPending || preview.isPending || logBusy;
+  const plannedLocked = busy || !!editor || !!copy || !!preview.data;
+  const locked = plannedLocked || !!logEditor;
 
   return (
     <Stack gap="4">
@@ -261,7 +261,6 @@ const Planner = ({ ownerId }: { ownerId: string }) => {
               </Button>
             </Flex>
           </Flex>
-          {(day.planned.entryCount > 0 || day.target.active) && <DailyMacros day={day} />}
           {!day.entries.length && <Text color="fg.muted">No food scheduled.</Text>}
           {day.entries.map((entry) => (
             <Flex
@@ -285,8 +284,17 @@ const Planner = ({ ownerId }: { ownerId: string }) => {
                     .join(" · ")}
                 </Text>
                 {entry.data.notes && <Text fontSize="sm">{entry.data.notes}</Text>}
+                <LinkedPortions ownerId={ownerId} plannedId={entry.id} />
               </Stack>
               <Flex gap="1" wrap="wrap">
+                <Button
+                  size="sm"
+                  variant="outline"
+                  disabled={locked || entry.data.canceled}
+                  onClick={() => setLogEditor({ kind: "new", plan: entry })}
+                >
+                  Log eaten
+                </Button>
                 {entry.data.source.kind === "bank" && (
                   <Button asChild size="sm" variant="ghost">
                     <Link to={"/nutrition/recipes/planned/" + entry.id}>Recipe</Link>
@@ -325,7 +333,8 @@ const Planner = ({ ownerId }: { ownerId: string }) => {
         </Panel>
       )}
       {editor && day && (
-        <PlannedEntryForm
+        <FoodEntryForm
+          kind="planned"
           key={editor === "add" ? dayKey : editor.id}
           entry={editor === "add" ? undefined : editor}
           date={dayKey}
@@ -490,6 +499,17 @@ const Planner = ({ ownerId }: { ownerId: string }) => {
           </Flex>
         </Panel>
       )}
+      <ConsumedDay
+        ownerId={ownerId}
+        date={dayKey}
+        remaining={day?.remaining}
+        programId={programId}
+        timezone={timezone}
+        locked={plannedLocked || (!!programId && !selectedProgram)}
+        editor={logEditor}
+        onEditor={setLogEditor}
+        onBusy={setLogBusy}
+      />
       {deletion && (
         <ConfirmationDialog
           title="Delete planned food"
@@ -504,30 +524,3 @@ const Planner = ({ ownerId }: { ownerId: string }) => {
     </Stack>
   );
 };
-
-const DailyMacros = ({ day }: { day: PlannedDay }) => (
-  <SimpleGrid columns={{ base: 2, md: 4 }} gap="3" aria-label="Daily planned macros">
-    {macroFields.map(({ key, label, unit }) => {
-      const { subtotal, knownCount } = day.planned.macros[key];
-      const target = day.target.macros?.[key].value;
-      const remaining = day.remaining[key];
-      return (
-        <Stack key={key} gap="0" fontSize="sm">
-          <Text fontWeight="semibold">
-            {label} ({unit})
-          </Text>
-          <Text>
-            Planned {day.planned.entryCount ? (subtotal ?? "Unknown") : 0}
-            {subtotal !== null && knownCount !== day.planned.entryCount && " (partial)"}
-          </Text>
-          {target != null && (
-            <>
-              <Text>Target {target}</Text>
-              <Text>Remaining {remaining ?? "Unknown"}</Text>
-            </>
-          )}
-        </Stack>
-      );
-    })}
-  </SimpleGrid>
-);

@@ -613,9 +613,11 @@ const seedProgram = async (pb, fields, planBlocks, startDate, timezone) => {
   return pb.send(programPath);
 };
 
+const nutritionPost = (pb, operation, body) =>
+  pb.send(`/api/paideuo/v1/nutrition/${operation}`, { method: "POST", body });
+
 const seedMacroTargets = async (pb, program, macros, { includeOverrides = false } = {}) => {
-  const post = (operation, body) =>
-    pb.send(`/api/paideuo/v1/nutrition/${operation}`, { method: "POST", body });
+  const post = (operation, body) => nutritionPost(pb, operation, body);
   const programId = program.id;
   const prefix = `seed-project-cycle:${programId}`;
   const externalId = prefix + ":macros";
@@ -679,6 +681,130 @@ const seedMacroTargets = async (pb, program, macros, { includeOverrides = false 
   }
 };
 
+const sampleMeals = [
+  {
+    meal: "Breakfast",
+    food: {
+      title: "Berry overnight oats",
+      serving: { description: "one bowl", size: 1, unit: "bowl" },
+      macros: { calories: 480, protein: 25, carbohydrate: 64, fat: 14 },
+    },
+  },
+  {
+    meal: "Dinner",
+    food: {
+      title: "Chicken and rice bowl",
+      serving: { description: "one bowl", size: 1, unit: "bowl" },
+      macros: { calories: 640, protein: 42, carbohydrate: 73, fat: 20 },
+    },
+  },
+];
+
+const sampleSubstitute = {
+  title: "Lentil and roasted vegetable bowl",
+  serving: { description: "one bowl", size: 1, unit: "bowl" },
+  macros: { calories: 560, protein: 26, carbohydrate: 78, fat: 16 },
+};
+
+const daysBetween = (start, end) => {
+  const days = [];
+  for (let date = start; date <= end; date = shiftDate(date, 1)) days.push(date);
+  return days;
+};
+
+// Cycle independently of weekdays so consecutive weeks show different comparisons.
+const historicalMealPortions = [
+  { planned: [0.9, 1.15], eaten: [0.92, 1.18] },
+  { planned: [1.1, 0.95], eaten: [1.2, 1.05] },
+  { planned: [1, 1.15], eaten: [0.8, 0.95] },
+  { planned: [0.85, 1.05], eaten: [1.14, 1.22] },
+  { planned: [1.2, 0.9], eaten: [1.07, 0.84] },
+  { planned: [0.9, 1.2], eaten: [0.9, 1.2], substituteDinner: true },
+  { planned: [1.15, 1], eaten: [1.37, 0.79] },
+  { planned: [1.05, 1.1], eaten: [1.01, 1.17] },
+  { planned: [1, 0.95], eaten: [1.23, 1.22] },
+];
+
+const createSeedMeal = async (pb, operation, id, data, previousData) => {
+  const identity = { operationId: id, externalId: id };
+  try {
+    return await nutritionPost(pb, operation, { ...identity, data });
+  } catch (error) {
+    if (
+      !(error instanceof ClientResponseError) ||
+      error.status !== 409 ||
+      !previousData ||
+      isDeepStrictEqual(data, previousData)
+    ) {
+      throw error;
+    }
+    // Replay older receipts without overwriting edited entries or restoring deleted ones.
+    return nutritionPost(pb, operation, { ...identity, data: previousData });
+  }
+};
+
+const eatenMeal = (data, quantity, substitute) => ({
+  ...data,
+  quantity,
+  source: substitute ? { kind: "inline", food: sampleSubstitute } : { kind: "planned" },
+  ...(substitute ? { notes: "Swapped the planned dinner for a lentil bowl." } : {}),
+});
+
+const seedMeals = async (pb, program, dates, today, { varyPortions = false } = {}) => {
+  for (const date of dates) {
+    const day = dateValue(date);
+    const weekday = day.getUTCDay();
+    const profile = varyPortions
+      ? historicalMealPortions[Math.abs(day.getTime() / 86_400_000) % historicalMealPortions.length]
+      : undefined;
+    for (const [order, { meal, food }] of sampleMeals.entries()) {
+      const key = `seed-project-cycle:${program.id}:${date}:${meal.toLowerCase()}`;
+      const originalPlan = {
+        programId: program.id,
+        date,
+        meal,
+        order,
+        quantity: 1,
+        source: { kind: "inline", food },
+      };
+      const planned = await createSeedMeal(
+        pb,
+        "planned/create",
+        key + ":plan",
+        { ...originalPlan, quantity: profile?.planned[order] ?? originalPlan.quantity },
+        originalPlan,
+      );
+      if (date > today || (date === today && meal === "Dinner")) continue;
+
+      // A create receipt can refer to an entry the user later changed or removed.
+      let current;
+      try {
+        current = await nutritionPost(pb, "planned/get", { id: planned.id });
+      } catch (error) {
+        if (error instanceof ClientResponseError && error.status === 404) continue;
+        throw error;
+      }
+      if (current.data.canceled || current.data.date !== date) continue;
+
+      const entry = { plannedId: planned.id, date, meal };
+      const originalLog = eatenMeal(
+        entry,
+        meal === "Breakfast" && weekday === 1 ? 0.75 : 1,
+        meal === "Dinner" && weekday === 3,
+      );
+      await createSeedMeal(
+        pb,
+        "consumed/create",
+        key + ":eaten",
+        profile
+          ? eatenMeal(entry, profile.eaten[order], meal === "Dinner" && profile.substituteDinner)
+          : originalLog,
+        originalLog,
+      );
+    }
+  }
+};
+
 const seed = async () => {
   const { TEST_EMAIL, TEST_PASSWORD, POCKETBASE_URL = "http://127.0.0.1:8090" } = process.env;
   if (!TEST_EMAIL || !TEST_PASSWORD) {
@@ -729,6 +855,23 @@ const seed = async () => {
 
   const previousStart = history.schedule.startDate;
   const previousEnd = shiftDate(previousStart, durationDays - 1);
+  const activeStart = active.schedule.startDate;
+  const activeEnd = shiftDate(
+    activeStart,
+    blocks.reduce((total, block) => total + 7 * block.weeks.length, 0) - 1,
+  );
+  const firstTwoWeeksEnd = shiftDate(activeStart, 13);
+  const currentWeekEnd = shiftDate(thisWeek, 6);
+  const sampleEnd = currentWeekEnd > firstTwoWeeksEnd ? currentWeekEnd : firstTwoWeeksEnd;
+  await seedMeals(
+    pb,
+    active,
+    daysBetween(activeStart, sampleEnd < activeEnd ? sampleEnd : activeEnd),
+    today,
+  );
+  await seedMeals(pb, history, daysBetween(previousStart, previousEnd), historyToday, {
+    varyPortions: true,
+  });
   const recentStart = shiftDate(today, -27);
   const checkInRanges =
     recentStart > shiftDate(previousEnd, 1)
@@ -746,11 +889,12 @@ const seed = async () => {
     ]);
   }
   console.log(`Added ${createdCheckIns} daily check-ins through ${today}.`);
+  console.log("Sample meal plans and food logs are available in Nutrition and Calendar.");
   console.log(
     `Active program: /programs/${active.id} · Calendar: /?date=${active.schedule.startDate}&program=${active.id}`,
   );
   console.log(
-    `Previous cycle: /programs/${history.id} · Calendar: /?date=${history.schedule.startDate}&program=${history.id}`,
+    `Previous cycle: /programs/${history.id} · Calendar: /?date=${previousStart}&program=${history.id}`,
   );
 };
 

@@ -110,11 +110,17 @@ const path = "/api/paideuo/check-ins";
 const entryPath = (date: string) => `${path}/${encodeURIComponent(date)}`;
 const preferencesPath = "/api/paideuo/check-in-preferences";
 export type DurationUnit = "hours" | "minutes";
+export type CalendarMacroTolerance = { withinPercent: number; warningPercent: number };
+export const defaultCalendarMacroTolerance: CalendarMacroTolerance = {
+  withinPercent: 7.5,
+  warningPercent: 15,
+};
 export type Preferences = {
   disabled: CheckInField[];
   hiddenCharts: string[];
   hiddenSummary: string[];
   durationUnit: DurationUnit;
+  calendarMacroTolerance: CalendarMacroTolerance;
 };
 type VisibilityUpdate = {
   group: "disabled" | "hiddenCharts" | "hiddenSummary";
@@ -122,7 +128,8 @@ type VisibilityUpdate = {
 } & ({ key: string } | { keys: readonly string[] });
 export type PreferenceUpdate =
   | VisibilityUpdate
-  | { group: "durationUnit"; durationUnit: DurationUnit };
+  | { group: "durationUnit"; durationUnit: DurationUnit }
+  | { group: "calendarMacroTolerance"; calendarMacroTolerance: CalendarMacroTolerance };
 
 export const checkInKey = (ownerId: string) => ["check-ins", ownerId] as const;
 export const checkInPreferencesKey = (ownerId: string) =>
