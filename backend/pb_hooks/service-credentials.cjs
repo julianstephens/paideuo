@@ -6,6 +6,8 @@ const serviceScopes = [
   "workouts:write",
   "metrics:read",
   "metrics:write",
+  "nutrition:read",
+  "nutrition:write",
   "recordings:write",
 ];
 
