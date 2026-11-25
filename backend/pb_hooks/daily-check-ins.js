@@ -180,6 +180,10 @@ const readPreferences = (user) => {
     hiddenCharts: settings?.hiddenCharts ?? [],
     hiddenSummary: settings?.hiddenSummary ?? [],
     durationUnit: settings?.durationUnit ?? "hours",
+    calendarMacroTolerance: settings?.calendarMacroTolerance ?? {
+      withinPercent: 7.5,
+      warningPercent: 15,
+    },
   };
 };
 
@@ -188,7 +192,14 @@ const preferences = (event) => {
   if (event.request.method === "GET") {
     return event.json(200, readPreferences(event.app.findRecordById("paideuo_users", owner)));
   }
-  const { group = "disabled", key, keys = [key], enabled, durationUnit } = event.requestInfo().body;
+  const {
+    group = "disabled",
+    key,
+    keys = [key],
+    enabled,
+    durationUnit,
+    calendarMacroTolerance,
+  } = event.requestInfo().body;
   const allowedKeys =
     group === "disabled"
       ? Object.keys(fields)
@@ -196,6 +207,18 @@ const preferences = (event) => {
   if (group === "durationUnit") {
     if (durationUnit !== "hours" && durationUnit !== "minutes") {
       throw new BadRequestError("Choose hours or minutes.");
+    }
+  } else if (group === "calendarMacroTolerance") {
+    const { withinPercent, warningPercent } = calendarMacroTolerance ?? {};
+    if (
+      !Number.isFinite(withinPercent) ||
+      !Number.isFinite(warningPercent) ||
+      withinPercent < 0 ||
+      warningPercent <= withinPercent
+    ) {
+      throw new BadRequestError(
+        "Enter nonnegative percentages with a warning limit above the within-range limit.",
+      );
     }
   } else if (
     !["disabled", "hiddenCharts", "hiddenSummary"].includes(group) ||
@@ -214,6 +237,9 @@ const preferences = (event) => {
     result = readPreferences(user);
     if (group === "durationUnit") {
       result.durationUnit = durationUnit;
+    } else if (group === "calendarMacroTolerance") {
+      const { withinPercent, warningPercent } = calendarMacroTolerance;
+      result.calendarMacroTolerance = { withinPercent, warningPercent };
     } else {
       const hidden = new Set(result[group]);
       for (const item of keys) {
@@ -223,6 +249,12 @@ const preferences = (event) => {
       result[group] = [...hidden];
     }
     const { disabled, ...display } = result;
+    if (
+      group !== "calendarMacroTolerance" &&
+      !readJson(user, displayField)?.calendarMacroTolerance
+    ) {
+      delete display.calendarMacroTolerance;
+    }
     user.set(preferenceField, disabled);
     user.set(displayField, display);
     tx.save(user);

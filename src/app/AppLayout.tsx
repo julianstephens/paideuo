@@ -11,6 +11,7 @@ const navigation = [
   { to: "/annual-plan", label: "Annual Plan", icon: "plan" },
   { to: "/programs", label: "Programs", icon: "programs" },
   { to: "/metrics", label: "Metrics", icon: "metrics" },
+  { to: "/nutrition", label: "Nutrition", icon: "nutrition" },
   { to: "/library", label: "Library", icon: "library" },
   { to: "/imports", label: "Imports", icon: "imports" },
 ] as const;
@@ -19,7 +20,7 @@ const workspaces = {
   train: { label: "Train", to: "/" },
   plan: { label: "Plan", to: "/programs" },
 } as const;
-const planRoutes = ["/annual-plan", "/programs", "/library", "/imports"];
+const planRoutes = ["/annual-plan", "/programs", "/nutrition", "/library", "/imports"];
 const workspaceKey = "paideuo-workspace";
 
 const sidebarKey = "paideuo-sidebar-collapsed";

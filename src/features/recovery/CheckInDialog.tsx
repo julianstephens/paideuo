@@ -8,7 +8,6 @@ import {
   Input,
   Link,
   NativeSelect,
-  Popover,
   Portal,
   SegmentGroup,
   Stack,
@@ -18,6 +17,8 @@ import {
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Link as RouterLink } from "react-router";
 import { useId, useRef, useState } from "react";
+import { ConfirmationDialog } from "../../components/ConfirmationDialog";
+import { FieldHelp } from "../../components/FieldHelp";
 import { Disclosure, FormField, Notice } from "../../components/ui";
 import { errorMessage } from "../../lib/api/request";
 import { fullDate } from "../calendar/dates";
@@ -57,93 +58,6 @@ const fieldHelp: Record<CheckInField, string> = {
     "Capture context for your nutrition ratings, such as meal timing, hydration, or what worked during training.",
 };
 
-const FieldHelp = ({ label, field, id }: { label: string; field: CheckInField; id: string }) => {
-  const trigger = useRef<HTMLButtonElement>(null);
-  const [preview, setPreview] = useState(false);
-  const [pinned, setPinned] = useState(false);
-  const dismiss = () => {
-    setPreview(false);
-    setPinned(false);
-  };
-
-  return (
-    <>
-      <Text id={id} as="span" srOnly>
-        {fieldHelp[field]}
-      </Text>
-      <Popover.Root
-        open={preview || pinned}
-        onOpenChange={({ open }) => {
-          if (!open) dismiss();
-        }}
-        autoFocus={false}
-        persistentElements={[() => trigger.current]}
-        positioning={{ strategy: "fixed", placement: "bottom-start" }}
-      >
-        <Popover.Anchor asChild>
-          <Button
-            ref={trigger}
-            type="button"
-            size="xs"
-            variant="ghost"
-            px="0"
-            minW={{ base: "11", md: "7" }}
-            color="teal.fg"
-            data-check-in-help
-            aria-label={`About ${label}`}
-            aria-describedby={id}
-            aria-expanded={preview || pinned}
-            aria-controls={`${id}-popover`}
-            onPointerEnter={(event) => {
-              if (event.pointerType === "mouse") setPreview(true);
-            }}
-            onPointerLeave={() => setPreview(false)}
-            onFocus={(event) => {
-              if (event.currentTarget.matches(":focus-visible")) setPreview(true);
-            }}
-            onBlur={() => setPreview(false)}
-            onClick={() => {
-              if (pinned) dismiss();
-              else setPinned(true);
-            }}
-            onKeyDown={(event) => {
-              if (event.key === "Escape" && (preview || pinned)) {
-                event.stopPropagation();
-                dismiss();
-              }
-            }}
-          >
-            <Text
-              as="span"
-              aria-hidden="true"
-              borderWidth="1px"
-              borderRadius="full"
-              boxSize="4"
-              lineHeight="shorter"
-              fontFamily="serif"
-              fontSize="xs"
-            >
-              i
-            </Text>
-          </Button>
-        </Popover.Anchor>
-        <Popover.Positioner>
-          <Popover.Content
-            id={`${id}-popover`}
-            w="16rem"
-            maxW="calc(100vw - 2rem)"
-            aria-label={label}
-          >
-            <Popover.Body p="3" fontSize="sm">
-              {fieldHelp[field]}
-            </Popover.Body>
-          </Popover.Content>
-        </Popover.Positioner>
-      </Popover.Root>
-    </>
-  );
-};
-
 const CheckInForm = ({
   date,
   entry,
@@ -160,6 +74,8 @@ const CheckInForm = ({
   const preferences = useCheckInPreferences(ownerId);
   const [draft, setDraft] = useState<Partial<Record<CheckInField, string>>>({});
   const [saved, setSaved] = useState("");
+  const [confirmClear, setConfirmClear] = useState(false);
+  const clearTrigger = useRef<HTMLButtonElement>(null);
   const mutation = useMutation({
     mutationFn: ({ fields }: { fields: Parameters<typeof checkInApi.save>[1]; clear?: boolean }) =>
       checkInApi.save(date, fields),
@@ -240,7 +156,9 @@ const CheckInForm = ({
                 const { key, label } = field;
                 const fieldId = `${fieldIdPrefix}-${key}`;
                 const descriptionId = `${fieldId}-help`;
-                const help = <FieldHelp label={label} field={key} id={descriptionId} />;
+                const help = (
+                  <FieldHelp label={label} description={fieldHelp[key]} id={descriptionId} />
+                );
                 const value = draft[key] ?? String(entry?.[key] ?? "");
                 const onValueChange = (next: string) => {
                   setSaved("");
@@ -396,20 +314,28 @@ const CheckInForm = ({
           alignSelf="start"
           colorPalette="red"
           disabled={busy}
-          onClick={() => {
-            if (
-              window.confirm(`Clear the visible fields in this ${section.title.toLowerCase()}?`)
-            ) {
-              setSaved("");
-              mutation.mutate({
-                fields: Object.fromEntries(recorded.map(({ key }) => [key, null])),
-                clear: true,
-              });
-            }
-          }}
+          ref={clearTrigger}
+          onClick={() => setConfirmClear(true)}
         >
           Clear visible fields
         </Button>
+      )}
+      {confirmClear && recorded.length > 0 && (
+        <ConfirmationDialog
+          title="Clear visible fields?"
+          description={`This clears the recorded values in the visible fields for this ${section.title.toLowerCase()}.`}
+          confirmLabel="Clear visible fields"
+          destructive
+          returnFocus={() => clearTrigger.current}
+          onDismiss={() => setConfirmClear(false)}
+          onConfirm={() => {
+            setSaved("");
+            mutation.mutate({
+              fields: Object.fromEntries(recorded.map(({ key }) => [key, null])),
+              clear: true,
+            });
+          }}
+        />
       )}
     </Stack>
   );
@@ -450,7 +376,7 @@ export const CheckInDialog = ({
         if (!open) close();
       }}
       onEscapeKeyDown={(event) => {
-        if (document.activeElement?.matches('[data-check-in-help][aria-expanded="true"]')) {
+        if (document.activeElement?.matches('[data-field-help][aria-expanded="true"]')) {
           event.preventDefault();
         }
       }}

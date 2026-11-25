@@ -7,6 +7,7 @@ import { pocketbase } from "../../lib/api/pocketbase";
 
 export const McpConsentPage = () => {
   const { search } = useLocation();
+  const scopes = new URLSearchParams(search).get("scope")?.split(/\s+/) ?? [];
   const [pending, setPending] = useState<"allow" | "deny" | null>(null);
   const [error, setError] = useState("");
 
@@ -42,6 +43,24 @@ export const McpConsentPage = () => {
           ChatGPT can read your training programs and metrics, create program drafts, import
           training data, log workouts, and submit check-ins.
         </Text>
+        {scopes.includes("nutrition:read") && (
+          <Text>
+            ChatGPT can read your food bank, recipes, nutrition targets, meal plans, food logs, and
+            nutrition totals.
+          </Text>
+        )}
+        {scopes.includes("nutrition:write") && (
+          <Text>
+            ChatGPT can manage food bank entries, categories, recipes, targets, meal plans, and food
+            logs.
+          </Text>
+        )}
+        {scopes.includes("nutrition:estimate") && (
+          <Text>
+            ChatGPT can request serving macro estimates using your saved OpenAI key, which may incur
+            charges.
+          </Text>
+        )}
         {error && <Notice role="alert">{error}</Notice>}
         <HStack gap="3">
           <Button

@@ -19,16 +19,26 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { ClientResponseError } from "pocketbase";
 import { useEffect, useRef, useState } from "react";
 import { Link as RouterLink, useSearchParams } from "react-router";
-import { AppIcon } from "../../app/AppIcon";
+import { ConfirmationDialog } from "../../components/ConfirmationDialog";
 import { Disclosure, FormField, Notice, PageHeader, Panel } from "../../components/ui";
 import { errorMessage } from "../../lib/api/request";
 import { CalendarCompliance } from "../compliance/CalendarCompliance";
 import { formatPlannedDuration, formatPlannedRpe } from "../prescriptions/format";
 import { metricsKey } from "../compliance/metrics";
 import { useSession } from "../auth/session";
-import { programKeys } from "../programs/programs";
+import { programKeys, programsApi } from "../programs/programs";
+import { consumedApi, consumedKey } from "../nutrition/consumed";
+import { CalendarAction } from "./CalendarAction";
+import { CalendarNutrition, CalendarNutritionDialog } from "./CalendarNutrition";
+import { useCheckInPreferences } from "../recovery/checkInPreferences";
 import { CheckInDialog } from "../recovery/CheckInDialog";
-import { checkInApi, checkInKey, checkInSections, hasCheckInResponse } from "../recovery/recovery";
+import {
+  checkInApi,
+  checkInKey,
+  checkInSections,
+  defaultCalendarMacroTolerance,
+  hasCheckInResponse,
+} from "../recovery/recovery";
 import type { CheckInSection } from "../recovery/recovery";
 import { reviewKey } from "../reviews/reviews";
 import { PrescriptionSnapshot } from "./PrescriptionSnapshot";
@@ -105,33 +115,52 @@ const Calendar = ({ ownerId }: { ownerId: string }) => {
   const checkInSection = checkIn?.section ?? checkInSections[0];
   const [workoutDate, setWorkoutDate] = useState<string>();
   const workoutTrigger = useRef<HTMLButtonElement>(null);
-  const addWorkoutButton = (date: string) => (
-    <Button
-      type="button"
-      variant="ghost"
-      size="xs"
-      alignSelf="start"
-      maxW="100%"
-      aria-label={`Add workout for ${fullDate(date)}`}
+  const addWorkoutButton = (date: string, compact?: boolean) => (
+    <CalendarAction
+      icon="plus"
+      label={`Add workout for ${fullDate(date)}`}
+      compact={compact}
       onClick={(event) => {
         workoutTrigger.current = event.currentTarget;
         setWorkoutDate(date);
       }}
-    >
-      <AppIcon name="plus" size={15} />
-      Add workout
-    </Button>
+    />
   );
   const checkInTrigger = useRef<HTMLButtonElement>(null);
-  const desktop = useBreakpointValue({ base: false, md: true });
-  const requestedView = params.get("view");
-  const view: View = requestedView === "month" ? "month" : "week";
+  const nutritionTriggerId = useRef<string>(null);
+  const calendarTodayButton = useRef<HTMLButtonElement>(null);
+  const [nutritionDetails, setNutritionDetails] = useState<{ date: string; open: boolean }>();
+  const openNutrition = (date: string, trigger: HTMLButtonElement) => {
+    nutritionTriggerId.current = trigger.id;
+    setNutritionDetails({ date, open: true });
+  };
+  const canUseMonthView = useBreakpointValue({ base: false, lg: true });
+  const view: View = canUseMonthView && params.get("view") === "month" ? "month" : "week";
   const today = localToday();
   const date = parseDate(params.get("date")) ?? today;
   const { first, last } = calendarRange(date, view);
   const start = dateKey(first);
   const end = dateKey(last);
   const queryClient = useQueryClient();
+  const targetProgramId = params.get("program") ?? "";
+  const targetProgram = useQuery({
+    queryKey: programKeys.detail(ownerId, targetProgramId),
+    queryFn: ({ signal }) => programsApi.get(targetProgramId, signal),
+    enabled: !!targetProgramId,
+    retry: false,
+  });
+  const nutritionProgram = targetProgram.data?.id;
+  const nutrition = useQuery({
+    queryKey: [...consumedKey(ownerId), "summary", "calendar", start, end, nutritionProgram],
+    queryFn: ({ signal }) => consumedApi.summaryRange(start, end, nutritionProgram, signal),
+    retry: false,
+  });
+  const nutritionByDate = new Map(nutrition.data?.days.map((day) => [day.date, day]));
+  const clearTargetProgram = () => {
+    const next = new URLSearchParams(params);
+    next.delete("program");
+    setParams(next);
+  };
   const queryKey = [...calendarKey(ownerId), start, end] as const;
   const query = useQuery({
     queryKey,
@@ -145,20 +174,16 @@ const Calendar = ({ ownerId }: { ownerId: string }) => {
     retry: false,
   });
   const checkInsByDate = new Map(checkIns.data?.map((entry) => [entry.date, entry]));
-  const checkInButtons = (date: string) =>
+  const checkInButtons = (date: string, compact?: boolean) =>
     checkInSections.map((section) => {
       const complete = hasCheckInResponse(checkInsByDate.get(date), section);
-      const nutrition = section.id === "nutrition";
       return (
-        <Button
+        <CalendarAction
           key={section.id}
-          type="button"
-          variant={complete ? "subtle" : "ghost"}
-          colorPalette={complete ? "green" : undefined}
-          size="xs"
-          alignSelf="start"
-          maxW="100%"
-          aria-label={
+          icon={section.id === "nutrition" ? "nutrition" : "checkIn"}
+          compact={compact}
+          complete={complete}
+          label={
             complete
               ? `${section.title} complete for ${fullDate(date)}. Edit entry`
               : `${section.title} for ${fullDate(date)}`
@@ -167,16 +192,7 @@ const Calendar = ({ ownerId }: { ownerId: string }) => {
             checkInTrigger.current = event.currentTarget;
             setCheckIn({ date, section });
           }}
-        >
-          <AppIcon name={complete ? "check" : nutrition ? "nutrition" : "checkIn"} size={15} />
-          {nutrition
-            ? complete
-              ? "Nutrition logged"
-              : "Log nutrition"
-            : complete
-              ? "Check-in complete"
-              : section.title}
-        </Button>
+        />
       );
     });
   const days = Array.from(
@@ -189,6 +205,11 @@ const Calendar = ({ ownerId }: { ownerId: string }) => {
     byDay.get(session.scheduledDate)?.push(session);
   }
   const todayKey = dateKey(today);
+  const preferences = useCheckInPreferences(ownerId);
+  const nutritionDisplay = {
+    today: todayKey,
+    tolerance: preferences.data?.calendarMacroTolerance ?? defaultCalendarMacroTolerance,
+  };
   const todaySessions = byDay.get(todayKey) ?? [];
   const leadSession = todaySessions.find(({ status }) => status === "planned") ?? todaySessions[0];
   const unresolved = (query.data?.sessions ?? []).filter(
@@ -199,7 +220,9 @@ const Calendar = ({ ownerId }: { ownerId: string }) => {
   const navigate = (nextDate: Date, nextView: View) => {
     setCheckIn(undefined);
     setWorkoutDate(undefined);
-    setParams({ date: dateKey(nextDate), view: nextView });
+    const next = new URLSearchParams({ date: dateKey(nextDate), view: nextView });
+    if (targetProgramId) next.set("program", targetProgramId);
+    setParams(next);
   };
   const move = (direction: number) =>
     navigate(view === "month" ? monthStart(date, direction) : addDays(date, direction * 7), view);
@@ -208,12 +231,30 @@ const Calendar = ({ ownerId }: { ownerId: string }) => {
       ? formatDate(date, { month: "long", year: "numeric" })
       : `${formatDate(first, { ...dayOptions, ...(first.getUTCFullYear() !== last.getUTCFullYear() ? { year: "numeric" } : {}) })} – ${formatDate(last, { ...dayOptions, year: "numeric" })}`;
   const isMonth = view === "month";
-  const compactMonth = isMonth && !desktop;
-  const desktopMonth = isMonth && desktop;
+  const nutritionDetailDay = nutritionDetails && nutritionByDate.get(nutritionDetails.date);
 
   return (
     <Stack gap={{ base: "4", md: "5" }}>
       <PageHeader title="Calendar" />
+      {targetProgramId && (
+        <Flex align="center" gap="2" wrap="wrap">
+          {targetProgram.data && (
+            <Link asChild variant="underline">
+              <RouterLink to={`/programs/${targetProgramId}`}>
+                {targetProgram.data.name} nutrition targets
+              </RouterLink>
+            </Link>
+          )}
+          <Button variant="ghost" size="sm" onClick={clearTargetProgram}>
+            Hide nutrition targets
+          </Button>
+        </Flex>
+      )}
+      {nutrition.isError && (
+        <Notice role="alert">
+          {errorMessage(nutrition.error, "Unable to load calendar nutrition.")}
+        </Notice>
+      )}
       {query.isSuccess && start <= todayKey && todayKey <= end && (
         <Panel as="section" gap="3">
           <Flex justify="space-between" align="baseline" gap="2" wrap="wrap">
@@ -276,6 +317,12 @@ const Calendar = ({ ownerId }: { ownerId: string }) => {
               />
             </Disclosure>
           )}
+          <CalendarNutrition
+            id="calendar-nutrition-today"
+            day={nutritionByDate.get(todayKey)}
+            onOpen={openNutrition}
+            {...nutritionDisplay}
+          />
           <Flex gap="2" wrap="wrap">
             {checkInButtons(todayKey)}
             {!leadSession && addWorkoutButton(todayKey)}
@@ -316,31 +363,38 @@ const Calendar = ({ ownerId }: { ownerId: string }) => {
             <Button size="sm" variant="outline" onClick={() => move(-1)}>
               Previous
             </Button>
-            <Button size="sm" variant="outline" onClick={() => navigate(today, view)}>
+            <Button
+              ref={calendarTodayButton}
+              size="sm"
+              variant="outline"
+              onClick={() => navigate(today, view)}
+            >
               Today
             </Button>
             <Button size="sm" variant="outline" onClick={() => move(1)}>
               Next
             </Button>
           </Flex>
-          <Flex gap="2" aria-label="Calendar view" role="group">
-            <Button
-              size="sm"
-              aria-pressed={view === "month"}
-              variant={view === "month" ? "solid" : "outline"}
-              onClick={() => navigate(date, "month")}
-            >
-              Month
-            </Button>
-            <Button
-              size="sm"
-              aria-pressed={view === "week"}
-              variant={view === "week" ? "solid" : "outline"}
-              onClick={() => navigate(date, "week")}
-            >
-              Week
-            </Button>
-          </Flex>
+          {canUseMonthView && (
+            <Flex gap="2" aria-label="Calendar view" role="group">
+              <Button
+                size="sm"
+                aria-pressed={view === "month"}
+                variant={view === "month" ? "solid" : "outline"}
+                onClick={() => navigate(date, "month")}
+              >
+                Month
+              </Button>
+              <Button
+                size="sm"
+                aria-pressed={view === "week"}
+                variant={view === "week" ? "solid" : "outline"}
+                onClick={() => navigate(date, "week")}
+              >
+                Week
+              </Button>
+            </Flex>
+          )}
         </Flex>
       </Panel>
       {query.isPending && <Notice role="status">Loading scheduled sessions…</Notice>}
@@ -394,18 +448,17 @@ const Calendar = ({ ownerId }: { ownerId: string }) => {
                   "2xl": "repeat(3, minmax(0, 1fr))",
                 }
           }
-          gap={desktopMonth ? "1px" : isMonth ? "1" : "3"}
-          bg={desktopMonth ? "border" : undefined}
-          borderWidth={desktopMonth ? "1px" : undefined}
-          borderRadius={desktopMonth ? "md" : undefined}
+          gap={isMonth ? "1px" : "3"}
+          bg={isMonth ? "border" : undefined}
+          borderWidth={isMonth ? "1px" : undefined}
+          borderRadius={isMonth ? "md" : undefined}
         >
           {isMonth &&
             weekdays.map((name) => (
               <Text
                 key={name}
-                bg={desktopMonth ? "bg.inset" : undefined}
-                textAlign={desktopMonth ? "start" : "center"}
-                px={desktopMonth ? "2" : "1"}
+                bg="bg.inset"
+                px="2"
                 py="1.5"
                 fontSize="xs"
                 fontWeight="semibold"
@@ -420,53 +473,6 @@ const Calendar = ({ ownerId }: { ownerId: string }) => {
             const current = key === dateKey(today);
             const outside = isMonth && day.getUTCMonth() !== date.getUTCMonth();
             const extraSessions = sessions.length - monthSessionLimit;
-            if (compactMonth) {
-              return (
-                <Button
-                  key={key}
-                  variant={key === dateKey(date) ? "surface" : "outline"}
-                  h="auto"
-                  minH="20"
-                  px="0.5"
-                  py="1"
-                  minW="0"
-                  flexDirection="column"
-                  justifyContent="start"
-                  gap="0.5"
-                  aria-current={current ? "date" : undefined}
-                  aria-pressed={key === dateKey(date)}
-                  aria-label={`${fullDate(key)}, ${sessions.length ? sessions.map(({ prescription }) => workoutTypes[prescription.sessionType].label).join(", ") : "no sessions"}`}
-                  opacity={outside ? 0.65 : 1}
-                  onClick={() => navigate(day, view)}
-                >
-                  <Text as="span" lineHeight="short">
-                    {day.getUTCDate()}
-                  </Text>
-                  {sessions.slice(0, monthSessionLimit).map(({ id, prescription, status }) => {
-                    const type = workoutTypes[prescription.sessionType];
-                    return (
-                      <Badge
-                        as="span"
-                        key={id}
-                        colorPalette={sessionPalette(prescription.sessionType, status)}
-                        variant="subtle"
-                        justifyContent="center"
-                        fontSize="xs"
-                        px="0"
-                        w="full"
-                      >
-                        {type.short}
-                      </Badge>
-                    );
-                  })}
-                  {extraSessions > 0 && (
-                    <Text as="span" fontSize="xs" lineHeight="1">
-                      +{extraSessions}
-                    </Text>
-                  )}
-                </Button>
-              );
-            }
             return (
               <Stack
                 as="section"
@@ -474,17 +480,18 @@ const Calendar = ({ ownerId }: { ownerId: string }) => {
                 key={key}
                 minW="0"
                 gap="0"
-                borderWidth={desktopMonth ? undefined : "1px"}
+                borderWidth={isMonth ? undefined : "1px"}
                 borderColor={current ? "teal.border" : "border"}
-                borderRadius={desktopMonth ? undefined : "xl"}
+                borderRadius={isMonth ? undefined : "xl"}
                 overflow="clip"
-                minH={desktopMonth ? "20" : undefined}
+                minH={isMonth ? "20" : undefined}
                 bg={outside ? "bg.inset" : "bg.panel"}
+                css={isMonth ? { container: "calendar-day / inline-size" } : undefined}
               >
                 <Flex
                   align="center"
-                  px={desktopMonth ? "2" : "4"}
-                  py={desktopMonth ? "1" : "2.5"}
+                  px={isMonth ? "2" : "4"}
+                  py={isMonth ? "1" : "2.5"}
                   bg={current ? "teal.subtle" : "bg.inset"}
                   color={current ? "teal.fg" : outside ? "fg.muted" : "fg"}
                   borderBottomWidth="1px"
@@ -492,7 +499,7 @@ const Calendar = ({ ownerId }: { ownerId: string }) => {
                 >
                   <chakra.time
                     dateTime={key}
-                    fontSize={desktopMonth ? "sm" : "md"}
+                    fontSize={isMonth ? "sm" : "md"}
                     fontWeight="bold"
                     aria-current={current ? "date" : undefined}
                   >
@@ -506,18 +513,18 @@ const Calendar = ({ ownerId }: { ownerId: string }) => {
                     </Badge>
                   )}
                 </Flex>
-                <Stack gap="2" p={desktopMonth ? "1.5" : "3"} flex="1">
-                  {!desktopMonth && query.isSuccess && sessions.length === 0 && (
+                <Stack gap="2" px={isMonth ? "0.5" : "3"} py={isMonth ? "1.5" : "3"} flex="1">
+                  {!isMonth && query.isSuccess && sessions.length === 0 && (
                     <Text color="fg.muted" fontSize="sm" px="1">
                       No sessions scheduled
                     </Text>
                   )}
                   <SessionButtons
-                    sessions={desktopMonth ? sessions.slice(0, monthSessionLimit) : sessions}
+                    sessions={isMonth ? sessions.slice(0, monthSessionLimit) : sessions}
                     select={selectSession}
-                    compact={desktopMonth}
+                    compact={isMonth}
                   />
-                  {desktopMonth && extraSessions > 0 && (
+                  {isMonth && extraSessions > 0 && (
                     <Button
                       variant="ghost"
                       size="xs"
@@ -531,28 +538,44 @@ const Calendar = ({ ownerId }: { ownerId: string }) => {
                       +{extraSessions} more
                     </Button>
                   )}
-                  <Flex gap="1" wrap="wrap" mt="auto">
-                    {checkInButtons(key)}
-                    {addWorkoutButton(key)}
-                  </Flex>
+                  <Stack gap={isMonth ? "1" : "2"} mt="auto">
+                    <CalendarNutrition
+                      id={`calendar-nutrition-${key}`}
+                      day={nutritionByDate.get(key)}
+                      onOpen={openNutrition}
+                      {...nutritionDisplay}
+                      compact={isMonth}
+                    />
+                    <Flex gap={isMonth ? "0" : "1"} wrap="wrap">
+                      {checkInButtons(key, isMonth)}
+                      {addWorkoutButton(key, isMonth)}
+                    </Flex>
+                  </Stack>
                 </Stack>
               </Stack>
             );
           })}
         </Grid>
       </Grid>
-      {compactMonth && (
-        <Panel as="section">
-          <Heading as="h3" size="sm">
-            {fullDate(dateKey(date))}
-          </Heading>
-          {query.isSuccess && !byDay.has(dateKey(date)) && <Text>No sessions scheduled.</Text>}
-          <SessionButtons sessions={byDay.get(dateKey(date)) ?? []} select={selectSession} />
-          <Flex gap="2" wrap="wrap">
-            {checkInButtons(dateKey(date))}
-            {addWorkoutButton(dateKey(date))}
-          </Flex>
-        </Panel>
+      {nutritionDetails && nutritionDetailDay && (
+        <CalendarNutritionDialog
+          key={nutritionDetailDay.date}
+          day={nutritionDetailDay}
+          {...nutritionDisplay}
+          ownerId={ownerId}
+          programId={nutritionProgram}
+          timezone={
+            targetProgram.data?.scheduled
+              ? undefined
+              : Intl.DateTimeFormat().resolvedOptions().timeZone
+          }
+          open={nutritionDetails.open}
+          close={() => setNutritionDetails({ ...nutritionDetails, open: false })}
+          trigger={() =>
+            (nutritionTriggerId.current && document.getElementById(nutritionTriggerId.current)) ||
+            calendarTodayButton.current
+          }
+        />
       )}
       {workoutDate && (
         <WorkoutDialog
@@ -708,6 +731,8 @@ const SessionDetail = ({
   const { prescription } = session;
   const [moveDate, setMoveDate] = useState<string>();
   const [editing, setEditing] = useState<CalendarSession>();
+  const [confirmDelete, setConfirmDelete] = useState(false);
+  const actionsTrigger = useRef<HTMLButtonElement>(null);
   const past = session.scheduledDate < todayInTimezone(session.timezone);
   const [completionRevision, setCompletionRevision] = useState<string | undefined>(() =>
     startLogging && session.status !== "rest" ? session.revision : undefined,
@@ -770,16 +795,6 @@ const SessionDetail = ({
       }
     },
   });
-  const confirmDelete = () => {
-    const details = session.completion ? " This also deletes its completion details." : "";
-    if (
-      window.confirm(
-        `Delete “${prescription.title}” on ${fullDate(session.scheduledDate)}?${details}`,
-      )
-    ) {
-      remove.mutate();
-    }
-  };
   const busy = move.isPending || execute.isPending || reloadSession.isPending || remove.isPending;
 
   const screen =
@@ -1072,7 +1087,7 @@ const SessionDetail = ({
                 )}
                 <Menu.Root positioning={{ placement: "top-end", strategy: "fixed" }}>
                   <Menu.Trigger asChild>
-                    <Button variant="ghost" disabled={busy}>
+                    <Button ref={actionsTrigger} variant="ghost" disabled={busy}>
                       More actions
                     </Button>
                   </Menu.Trigger>
@@ -1113,13 +1128,28 @@ const SessionDetail = ({
                           </RouterLink>
                         </Menu.Item>
                       )}
-                      <Menu.Item value="delete" color="fg.error" onSelect={confirmDelete}>
+                      <Menu.Item
+                        value="delete"
+                        color="fg.error"
+                        onSelect={() => setConfirmDelete(true)}
+                      >
                         Delete workout
                       </Menu.Item>
                     </Menu.Content>
                   </Menu.Positioner>
                 </Menu.Root>
               </Dialog.Footer>
+            )}
+            {confirmDelete && (
+              <ConfirmationDialog
+                title="Delete workout?"
+                description={`Delete “${prescription.title}” on ${fullDate(session.scheduledDate)}?${session.completion ? " This also deletes its completion details." : ""}`}
+                confirmLabel="Delete workout"
+                destructive
+                returnFocus={() => actionsTrigger.current}
+                onDismiss={() => setConfirmDelete(false)}
+                onConfirm={() => remove.mutate()}
+              />
             )}
           </Dialog.Content>
         </Dialog.Positioner>

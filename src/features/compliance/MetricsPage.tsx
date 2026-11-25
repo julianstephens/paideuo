@@ -1,17 +1,19 @@
-import { Button, Flex, Input, NativeSelect, Stack, Tabs } from "@chakra-ui/react";
+import { Button, Input, Stack, Tabs, Text } from "@chakra-ui/react";
 import { useQuery } from "@tanstack/react-query";
 import { useSearchParams } from "react-router";
-import { FormField, Notice, PageHeader, Panel } from "../../components/ui";
+import { FormField, Notice, PageHeader } from "../../components/ui";
 import { apiRequest, errorMessage } from "../../lib/api/request";
 import { useSession } from "../auth/session";
-import { addDays, dateKey, localToday, monday, parseDate } from "../calendar/dates";
+import { addDays, dateKey, formatDate, localToday, monday, parseDate } from "../calendar/dates";
 import { programKeys, programsApi } from "../programs/programs";
 import { RecoveryResults } from "../recovery/RecoveryResults";
 import { weeklyReviewUrl } from "../reviews/reviews";
 import { BlockComparison } from "./BlockComparison";
 import { MetricPreferences } from "./MetricPreferences";
 import { useCheckInPreferences } from "../recovery/checkInPreferences";
+import { FilterFields, FilterSelect, MetricsFilters } from "./MetricsFilters";
 import { MetricsCharts } from "./MetricsCharts";
+import { sessionTypes } from "../templates/templates";
 import { TrainingLoad } from "./TrainingLoad";
 import { metricKeys, metricLabels, metricsKey } from "./metrics";
 import type { MetricsReport } from "./metrics";
@@ -52,7 +54,7 @@ const Metrics = ({ ownerId }: { ownerId: string }) => {
   });
   const preferences = useCheckInPreferences(ownerId);
   const scheduled = programs.data?.filter(({ scheduled }) => scheduled) ?? [];
-  const program = scheduled.find(({ id }) => id === params.get("program")) ?? scheduled[0];
+  const requestedProgram = params.get("program");
   const tab = params.get("tab") ?? "";
   const requested = params.get("view") ?? tab;
   const view =
@@ -66,19 +68,25 @@ const Metrics = ({ ownerId }: { ownerId: string }) => {
   const dashboard =
     view === "weekly" || view === "block" || view === "program" || view === "custom";
   const requiresProgram = view === "block" || view === "program";
-  const allPrograms = view === "weekly" && params.get("program") === "all";
-  const needsPrograms = view !== "custom" && view !== "settings";
+  const dated = view === "weekly" || view === "custom";
+  const selectedProgram = scheduled.find(({ id }) => id === requestedProgram);
+  const program = selectedProgram ?? (dated ? undefined : scheduled[0]);
+  const programFilter = dated && requestedProgram !== "all" ? requestedProgram : program?.id;
+  const needsPrograms = view !== "settings";
   const currentWeek = monday(localToday());
-  const start = params.get("start") ?? dateKey(currentWeek);
-  const end = params.get("end") ?? dateKey(addDays(currentWeek, 6));
   const requestedWeek = parseDate(params.get("week"));
+  const reportWeek = requestedWeek ? monday(requestedWeek) : currentWeek;
+  const start = params.get("start") ?? dateKey(reportWeek);
+  const end = params.get("end") ?? dateKey(addDays(reportWeek, 6));
   const block = params.get("block") ?? "";
   const first = parseDate(start);
   const last = parseDate(end);
   const dateError =
     view === "custom" &&
     (!first || !last || +last - +first < 0 || +last - +first >= 366 * 86_400_000);
-  const checkInDate = params.get("date");
+  const checkInDate = dateKey(parseDate(params.get("date")) ?? localToday());
+  const loadFilter = sessionTypes.find((type) => type === params.get("sessionType")) ?? "all";
+  const overviewFilters = ["program", "week", "block", "start", "end", "metric"];
   const selected =
     metricKeys.find(
       (key) => key === params.get("metric") && !preferences.data?.hiddenCharts.includes(key),
@@ -95,11 +103,8 @@ const Metrics = ({ ownerId }: { ownerId: string }) => {
     });
 
   const filters = new URLSearchParams({ view });
-  if (program && view !== "custom" && !allPrograms) filters.set("program", program.id);
-  if (view === "weekly") {
-    if (requestedWeek) filters.set("start", dateKey(requestedWeek));
-    else if (!program || allPrograms) filters.set("start", dateKey(currentWeek));
-  }
+  if (programFilter) filters.set("program", programFilter);
+  if (view === "weekly") filters.set("start", dateKey(reportWeek));
   if (view === "custom") {
     filters.set("start", start);
     filters.set("end", end);
@@ -114,40 +119,40 @@ const Metrics = ({ ownerId }: { ownerId: string }) => {
         ? previous
         : undefined,
     queryFn: ({ signal }) =>
-      apiRequest<MetricsReport>(`/api/paideuo/metrics?${filters}`, "GET", undefined, signal),
+      apiRequest<MetricsReport>(`/api/paideuo/v1/metrics?${filters}`, "GET", undefined, signal),
     enabled:
-      dashboard &&
-      (view === "custom" || programs.isSuccess) &&
-      (!requiresProgram || !!program) &&
-      !dateError,
+      dashboard && (dated || programs.isSuccess) && (!requiresProgram || !!program) && !dateError,
     retry: false,
   });
 
-  const programPicker = program && (
-    <FormField as="div" flex="1 1 12rem" minW="0" maxW="sm">
-      <label htmlFor="metrics-program">Program</label>
-      <NativeSelect.Root>
-        <NativeSelect.Field
-          id="metrics-program"
-          value={allPrograms ? "all" : program.id}
-          onChange={({ target }) =>
-            updateParams({
-              program: target.value,
-              block: null,
-              week: allPrograms || target.value === "all" ? params.get("week") : null,
-            })
-          }
-        >
-          {view === "weekly" && <option value="all">All programs</option>}
-          {scheduled.map(({ id, name }) => (
-            <option key={id} value={id}>
-              {name}
-            </option>
-          ))}
-        </NativeSelect.Field>
-        <NativeSelect.Indicator />
-      </NativeSelect.Root>
-    </FormField>
+  const hasFilters = (keys: string[]) => keys.some((key) => params.has(key));
+  const resetFilters = (keys: string[]) =>
+    updateParams(Object.fromEntries(keys.map((key) => [key, null])));
+
+  const programPicker = (
+    <FilterSelect
+      label={view === "recovery" ? "Program for training comparison" : "Program"}
+      value={programFilter || "all"}
+      disabled={!dated && !program}
+      onChange={(value) => updateParams({ program: value === "all" ? null : value, block: null })}
+    >
+      {dated && <option value="all">All programs and one-off sessions</option>}
+      {!dated && !program && (
+        <option value="all">
+          {programs.isPending ? "Loading programs…" : "No scheduled programs"}
+        </option>
+      )}
+      {dated && programFilter && !selectedProgram && (
+        <option value={programFilter}>
+          {programs.isPending ? "Loading program…" : "Selected program"}
+        </option>
+      )}
+      {scheduled.map(({ id, name }) => (
+        <option key={id} value={id}>
+          {name}
+        </option>
+      ))}
+    </FilterSelect>
   );
 
   return (
@@ -155,9 +160,14 @@ const Metrics = ({ ownerId }: { ownerId: string }) => {
       <PageHeader title="Metrics" />
       <Tabs.Root
         value={dashboard ? "overview" : view}
-        onValueChange={({ value }) =>
-          updateParams({ view: value === "overview" ? "weekly" : value, tab: null })
-        }
+        onValueChange={({ value }) => {
+          const previousPeriod = periods.find((period) => period === params.get("period"));
+          updateParams({
+            view: value === "overview" ? (previousPeriod ?? "weekly") : value,
+            period: dashboard ? view : (previousPeriod ?? null),
+            tab: null,
+          });
+        }}
         variant="line"
         lazyMount
         unmountOnExit
@@ -180,108 +190,104 @@ const Metrics = ({ ownerId }: { ownerId: string }) => {
         {dashboard && (
           <Tabs.Content value="overview">
             <Stack gap={{ base: "4", md: "6" }}>
-              <Panel gap="4">
-                <Flex gap="1" wrap="wrap" role="group" aria-label="Report period">
-                  {periods.map((period) => (
-                    <Button
-                      key={period}
-                      size="sm"
-                      variant={view === period ? "solid" : "ghost"}
-                      aria-pressed={view === period}
-                      onClick={() => updateParams({ view: period, tab: null })}
-                    >
-                      {views[period]}
-                    </Button>
-                  ))}
-                </Flex>
-                <Flex gap="3" wrap="wrap" align="end">
-                  {view !== "custom" && programPicker}
+              <MetricsFilters
+                onReset={() => resetFilters(overviewFilters)}
+                resetDisabled={!hasFilters(overviewFilters)}
+              >
+                <FilterFields>
+                  <FilterSelect
+                    label="Period"
+                    value={view}
+                    onChange={(value) => updateParams({ view: value, tab: null })}
+                  >
+                    {periods.map((period) => (
+                      <option key={period} value={period}>
+                        {views[period]}
+                      </option>
+                    ))}
+                  </FilterSelect>
+                  {programPicker}
                   {view === "weekly" && (
                     <FormField as="div" flex="1 1 12rem" minW="0" maxW="sm">
                       <label htmlFor="metrics-week">Date within week</label>
                       <Input
                         id="metrics-week"
                         type="date"
-                        value={
-                          requestedWeek
-                            ? dateKey(requestedWeek)
-                            : (report.data?.window?.start ?? "")
-                        }
+                        min="0001-01-01"
+                        max="9999-12-31"
+                        value={dateKey(requestedWeek ?? currentWeek)}
                         onChange={({ target }) => updateParams({ week: target.value || null })}
                       />
                     </FormField>
                   )}
-                  {view === "block" && !!report.data?.blocks.length && (
-                    <FormField as="div" flex="1 1 12rem" minW="0" maxW="sm">
-                      <label htmlFor="metrics-block">Block</label>
-                      <NativeSelect.Root>
-                        <NativeSelect.Field
-                          id="metrics-block"
-                          value={
-                            (report.isPlaceholderData && block ? block : report.data.blockId) ?? ""
-                          }
-                          onChange={({ target }) => updateParams({ block: target.value })}
-                        >
-                          {report.data.blocks.map(({ id, label }) => (
-                            <option key={id} value={id}>
-                              {label}
-                            </option>
-                          ))}
-                        </NativeSelect.Field>
-                        <NativeSelect.Indicator />
-                      </NativeSelect.Root>
-                    </FormField>
-                  )}
-                  {view === "custom" && (
-                    <>
-                      {(
-                        [
-                          ["start", start],
-                          ["end", end],
-                        ] as const
-                      ).map(([key, value]) => (
-                        <FormField as="div" key={key} flex="1 1 10rem" minW="0">
-                          <label htmlFor={`metrics-${key}`}>
-                            {key === "start" ? "Start date" : "End date"}
-                          </label>
-                          <Input
-                            id={`metrics-${key}`}
-                            type="date"
-                            value={value}
-                            onChange={({ target }) => updateParams({ [key]: target.value })}
-                          />
-                        </FormField>
+                  {view === "block" && (
+                    <FilterSelect
+                      label="Block"
+                      disabled={!report.data?.blocks.length}
+                      value={
+                        (report.isPlaceholderData && block ? block : report.data?.blockId) ?? ""
+                      }
+                      onChange={(value) => updateParams({ block: value })}
+                    >
+                      {!report.data?.blocks.length && (
+                        <option value="">
+                          {report.isLoading ? "Loading blocks…" : "No blocks available"}
+                        </option>
+                      )}
+                      {report.data?.blocks.map(({ id, label }) => (
+                        <option key={id} value={id}>
+                          {label}
+                        </option>
                       ))}
-                      <FormField as="div" flex="1 1 12rem" minW="0">
-                        <label htmlFor="metrics-chart">Filter metrics</label>
-                        <NativeSelect.Root>
-                          <NativeSelect.Field
-                            id="metrics-chart"
-                            value={selected ?? ""}
-                            onChange={({ target }) =>
-                              updateParams({ metric: target.value || null })
-                            }
-                          >
-                            <option value="">All visible metrics</option>
-                            {metricKeys
-                              .filter((key) => !preferences.data?.hiddenCharts.includes(key))
-                              .map((key) => (
-                                <option key={key} value={key}>
-                                  {metricLabels[key]}
-                                </option>
-                              ))}
-                          </NativeSelect.Field>
-                          <NativeSelect.Indicator />
-                        </NativeSelect.Root>
-                      </FormField>
-                    </>
+                    </FilterSelect>
                   )}
-                </Flex>
+                  {view === "custom" &&
+                    (
+                      [
+                        ["start", start],
+                        ["end", end],
+                      ] as const
+                    ).map(([key, value]) => (
+                      <FormField as="div" key={key} flex="1 1 12rem" minW="0" maxW="sm">
+                        <label htmlFor={`metrics-${key}`}>
+                          {key === "start" ? "Start date" : "End date"}
+                        </label>
+                        <Input
+                          id={`metrics-${key}`}
+                          type="date"
+                          min="0001-01-01"
+                          max="9999-12-31"
+                          value={value}
+                          onChange={({ target }) => updateParams({ [key]: target.value })}
+                        />
+                      </FormField>
+                    ))}
+                  <FilterSelect
+                    label="Metric"
+                    value={selected ?? ""}
+                    disabled={!preferences.data}
+                    onChange={(value) => updateParams({ metric: value || null })}
+                  >
+                    <option value="">All visible metrics</option>
+                    {metricKeys
+                      .filter((key) => !preferences.data?.hiddenCharts.includes(key))
+                      .map((key) => (
+                        <option key={key} value={key}>
+                          {metricLabels[key]}
+                        </option>
+                      ))}
+                  </FilterSelect>
+                </FilterFields>
+                {view === "weekly" && (
+                  <Text color="fg.muted" fontSize="sm">
+                    Week of {formatDate(reportWeek, { dateStyle: "medium" })}
+                  </Text>
+                )}
                 {dateError && (
                   <Notice role="alert">Choose valid dates spanning at most 366 days.</Notice>
                 )}
-              </Panel>
-              {((needsPrograms && programs.isPending) ||
+              </MetricsFilters>
+              {((requiresProgram && programs.isPending) ||
                 report.isLoading ||
                 report.isPlaceholderData ||
                 preferences.isPending) && <Notice role="status">Loading metrics…</Notice>}
@@ -316,7 +322,7 @@ const Metrics = ({ ownerId }: { ownerId: string }) => {
                       : undefined
                   }
                   weekly={view === "weekly"}
-                  selected={view === "custom" ? selected : null}
+                  selected={selected}
                 />
               )}
             </Stack>
@@ -335,21 +341,48 @@ const Metrics = ({ ownerId }: { ownerId: string }) => {
           )}
         </Tabs.Content>
         <Tabs.Content value="load">
-          {program ? (
-            <Stack gap="3">
-              <Flex>{programPicker}</Flex>
-              <TrainingLoad key={program.id} ownerId={ownerId} programId={program.id} />
-            </Stack>
-          ) : (
-            programs.isSuccess && <Notice>Schedule a program to explore training load.</Notice>
-          )}
+          <Stack gap="4">
+            <MetricsFilters
+              onReset={() => resetFilters(["program", "block", "sessionType"])}
+              resetDisabled={!hasFilters(["program", "block", "sessionType"])}
+            >
+              <FilterFields>
+                {programPicker}
+                <FilterSelect
+                  label="Session type"
+                  value={loadFilter}
+                  disabled={!program}
+                  onChange={(value) =>
+                    updateParams({ sessionType: value === "all" ? null : value })
+                  }
+                >
+                  <option value="all">All session types</option>
+                  {sessionTypes.map((type) => (
+                    <option key={type} value={type}>
+                      {type.charAt(0).toUpperCase() + type.slice(1)}
+                    </option>
+                  ))}
+                </FilterSelect>
+              </FilterFields>
+            </MetricsFilters>
+            {program && (
+              <TrainingLoad ownerId={ownerId} programId={program.id} filter={loadFilter} />
+            )}
+            {programs.isPending && <Notice role="status">Loading programs…</Notice>}
+            {programs.isSuccess && !program && (
+              <Notice>Schedule a program to explore training load.</Notice>
+            )}
+          </Stack>
         </Tabs.Content>
         <Tabs.Content value="recovery">
           <RecoveryResults
-            key={checkInDate}
             ownerId={ownerId}
             programId={program?.id}
-            initialDate={checkInDate}
+            date={checkInDate}
+            trend={params.get("trend")}
+            updateParams={updateParams}
+            onReset={() => resetFilters(["date", "trend", "program", "block"])}
+            resetDisabled={!hasFilters(["date", "trend", "program", "block"])}
             programPicker={programPicker}
           />
         </Tabs.Content>

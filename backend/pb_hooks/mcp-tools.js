@@ -3,7 +3,11 @@ const credentials = require(__hooks + "/service-credentials.cjs");
 const imports = require(__hooks + "/imports.js");
 const programEdits = require(__hooks + "/mcp-program-edits.cjs");
 
+const { publishedMcpOperations } = require(__hooks + "/nutrition-adapters.cjs");
+const { metricsOutput, publishedToolScopes } = require(__hooks + "/nutrition-contracts.cjs");
+
 const tools = [
+  ...Array.from(publishedMcpOperations.values(), ({ contract }) => contract),
   ...Array.from(programEdits.operations.values(), ({ tool }) => tool),
   {
     name: "list_programs",
@@ -102,13 +106,16 @@ const tools = [
   },
   {
     name: "fetch_metrics",
+    outputSchema: metricsOutput,
     annotations: { readOnlyHint: true, openWorldHint: false },
-    description: "Fetch metrics for an owned program or custom date window.",
+    description:
+      "Fetch metrics for an owned program or custom date window. Nutrition totals require nutrition:read for service credentials and OAuth grants.",
     inputSchema: {
       type: "object",
       properties: {
         view: { enum: ["weekly", "block", "program", "custom"] },
         program: { type: "string" },
+        block: { type: "string" },
         start: { type: "string", format: "date" },
         end: { type: "string", format: "date" },
       },
@@ -538,7 +545,9 @@ const deleteOneOffWorkout = (event, principal, args) => {
   return { id: args.id, deleted: true };
 };
 
-const callTool = (event, principal, name, args = {}) => {
+const callTool = (event, principal, name, args = {}, oauthPrincipal) => {
+  const nutrition = publishedMcpOperations.get(name);
+  if (nutrition) return nutrition.invoke(event.app, oauthPrincipal ?? principal, args);
   const operation = programEdits.operations.get(name);
   if (operation) {
     requireScope(principal, operation.readOnly ? "programs:read" : "programs:write");
@@ -599,7 +608,6 @@ const callTool = (event, principal, name, args = {}) => {
     requireScope(principal, "metrics:read");
     const metricEvent = {
       app: event.app,
-      auth: { id: principal.ownerId },
       request: {
         url: {
           query: () => ({
@@ -607,6 +615,7 @@ const callTool = (event, principal, name, args = {}) => {
               ({
                 view: args.view,
                 program: args.program,
+                block: args.block,
                 start: args.start,
                 end: args.end,
               })[key] ?? null,
@@ -615,7 +624,12 @@ const callTool = (event, principal, name, args = {}) => {
       },
       json: (status, value) => ({ status, value }),
     };
-    const result = require(__hooks + "/metrics.js").report(metricEvent);
+    const result = require(__hooks + "/metrics.js").report(metricEvent, {
+      owner: principal.ownerId,
+      includeFoodNutrition: oauthPrincipal
+        ? oauthPrincipal.scopes.has("nutrition:read")
+        : principal.type === "user" || principal.scopes.has("nutrition:read"),
+    });
     return result.status ? serviceResult(result) : result;
   }
   if (name === "list_workouts") return listWorkouts(event, principal, args);
@@ -626,7 +640,7 @@ const callTool = (event, principal, name, args = {}) => {
   throw rpcError(-32601, `Unknown tool: ${name}`);
 };
 
-const jsonRpc = (event, principal, request, oauthScope) => {
+const jsonRpc = (event, principal, request, oauthScope, oauthPrincipal) => {
   if (!request || request.jsonrpc !== "2.0") {
     throw rpcError(-32600, "Invalid JSON-RPC request.");
   }
@@ -648,7 +662,16 @@ const jsonRpc = (event, principal, request, oauthScope) => {
     return {
       tools: tools.map((tool) => ({
         ...tool,
-        _meta: { securitySchemes: [{ type: "oauth2", scopes: [oauthScope] }] },
+        _meta: {
+          securitySchemes: [
+            {
+              type: "oauth2",
+              scopes: publishedToolScopes.has(tool.name)
+                ? [oauthScope, publishedToolScopes.get(tool.name)]
+                : [oauthScope],
+            },
+          ],
+        },
       })),
     };
   }
@@ -668,7 +691,7 @@ const jsonRpc = (event, principal, request, oauthScope) => {
       };
     };
     try {
-      return toolResult(callTool(event, principal, params.name, args), false);
+      return toolResult(callTool(event, principal, params.name, args, oauthPrincipal), false);
     } catch (error) {
       if (error.rpcCode === -32601) throw error;
       const status = error.status ?? (error.name === "ImportValidationError" ? 400 : 500);
@@ -685,7 +708,7 @@ const jsonRpc = (event, principal, request, oauthScope) => {
   throw rpcError(-32601, `Method not found: ${request.method}`);
 };
 
-const handle = (event, { oauthScope } = {}) => {
+const handle = (event, { oauthScope, oauthPrincipal } = {}) => {
   const body = event.requestInfo().body;
   let principal = null;
   try {
@@ -701,7 +724,7 @@ const handle = (event, { oauthScope } = {}) => {
     if (!principal && body?.method?.startsWith("tools/")) {
       throw rpcError(401, "Unauthorized.");
     }
-    const value = jsonRpc(event, principal, body, oauthScope);
+    const value = jsonRpc(event, principal, body, oauthScope, oauthPrincipal);
     if (body?.method?.startsWith("notifications/")) return event.noContent(202);
     return event.json(200, { jsonrpc: "2.0", id: body?.id ?? null, result: value });
   } catch (error) {

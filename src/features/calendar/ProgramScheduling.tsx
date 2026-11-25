@@ -1,3 +1,4 @@
+import { targetKey } from "../nutrition/targets";
 import { Button, Flex, Heading, Input, Link, Stack, Text, chakra } from "@chakra-ui/react";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { useState } from "react";
@@ -93,6 +94,7 @@ const ScheduleForm = ({
       await Promise.all([
         queryClient.invalidateQueries({ queryKey: programKeys.owner(ownerId) }),
         queryClient.invalidateQueries({ queryKey: calendarKey(ownerId) }),
+        queryClient.invalidateQueries({ queryKey: targetKey(ownerId, programId) }),
         queryClient.invalidateQueries({ queryKey: metricsKey(ownerId) }),
       ]);
       close();

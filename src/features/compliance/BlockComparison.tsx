@@ -1,8 +1,7 @@
-import { Button, Flex, Grid, Heading, NativeSelect, Stack, Text } from "@chakra-ui/react";
+import { Button, Grid, Heading, Stack, Text } from "@chakra-ui/react";
 import { useQuery } from "@tanstack/react-query";
-import { useId, useState } from "react";
 import { NumericChange, comparisonDelta } from "../../components/ComparisonChange";
-import { Disclosure, FormField, Notice, Panel } from "../../components/ui";
+import { Disclosure, Notice, Panel } from "../../components/ui";
 import { apiRequest, errorMessage } from "../../lib/api/request";
 import type { ProgramSummary } from "../programs/programs";
 import type { DurationUnit } from "../recovery/recovery";
@@ -17,7 +16,8 @@ import {
 } from "./metrics";
 import type { ComparedBlock, Metric, MetricsPeriod, MetricsReport } from "./metrics";
 
-type UpdateParams = (changes: Record<string, string | null>) => void;
+import { FilterFields, FilterSelect, MetricsFilters } from "./MetricsFilters";
+import type { UpdateFilters } from "./MetricsFilters";
 
 const PickBlock = ({
   ownerId,
@@ -30,9 +30,8 @@ const PickBlock = ({
   side: "left" | "right";
   params: URLSearchParams;
   programs: ProgramSummary[];
-  updateParams: UpdateParams;
+  updateParams: UpdateFilters;
 }) => {
-  const id = useId();
   const programKey = `${side}Program`;
   const blockKey = `${side}Block`;
   const program = params.get(programKey) ?? "";
@@ -49,54 +48,45 @@ const PickBlock = ({
   const blocks = report.data?.blocks ?? [];
 
   return (
-    <Panel>
-      <Heading size="sm">{side === "left" ? "First block" : "Second block"}</Heading>
-      <FormField as="div">
-        <label htmlFor={`${id}-program`}>Program</label>
-        <NativeSelect.Root>
-          <NativeSelect.Field
-            id={`${id}-program`}
-            value={program}
-            onChange={({ target }) =>
-              updateParams({ [programKey]: target.value || null, [blockKey]: null })
-            }
-          >
-            <option value="">Select a program</option>
-            {program && !validProgram && <option value={program}>Program unavailable</option>}
-            {programs.map(({ id, name, status }) => (
-              <option key={id} value={id}>
-                {name} ({status})
-              </option>
-            ))}
-          </NativeSelect.Field>
-          <NativeSelect.Indicator />
-        </NativeSelect.Root>
-      </FormField>
-      <FormField as="div">
-        <label htmlFor={`${id}-block`}>Block</label>
-        <NativeSelect.Root disabled={!report.isSuccess || !validProgram}>
-          <NativeSelect.Field
-            id={`${id}-block`}
-            value={block}
-            onChange={({ target }) => updateParams({ [blockKey]: target.value || null })}
-          >
-            <option value="">
-              {validProgram && report.isPending ? "Loading blocks…" : "Select a block"}
+    <Stack gap="2" minW="0" borderWidth="1px" borderRadius="md" p="3">
+      <Heading as="h3" size="sm">
+        {side === "left" ? "First block" : "Second block"}
+      </Heading>
+      <FilterFields>
+        <FilterSelect
+          label="Program"
+          value={program}
+          onChange={(value) => updateParams({ [programKey]: value || null, [blockKey]: null })}
+        >
+          <option value="">Select a program</option>
+          {program && !validProgram && <option value={program}>Program unavailable</option>}
+          {programs.map(({ id, name, status }) => (
+            <option key={id} value={id}>
+              {name} ({status})
             </option>
-            {block && !blocks.some(({ id }) => id === block) && (
-              <option value={block}>
-                {report.isPending && validProgram ? "Loading selection…" : "Block unavailable"}
-              </option>
-            )}
-            {blocks.map(({ id, label }) => (
-              <option key={id} value={id}>
-                {label}
-              </option>
-            ))}
-          </NativeSelect.Field>
-          <NativeSelect.Indicator />
-        </NativeSelect.Root>
-      </FormField>
+          ))}
+        </FilterSelect>
+        <FilterSelect
+          label="Block"
+          value={block}
+          disabled={!validProgram || !blocks.length}
+          onChange={(value) => updateParams({ [blockKey]: value || null })}
+        >
+          <option value="">
+            {validProgram && report.isPending ? "Loading blocks…" : "Select a block"}
+          </option>
+          {block && !blocks.some(({ id }) => id === block) && (
+            <option value={block}>
+              {report.isPending && validProgram ? "Loading selection…" : "Block unavailable"}
+            </option>
+          )}
+          {blocks.map(({ id, label }) => (
+            <option key={id} value={id}>
+              {label}
+            </option>
+          ))}
+        </FilterSelect>
+      </FilterFields>
       {report.isError && (
         <Stack align="start">
           <Notice role="alert">{errorMessage(report.error, "Unable to load blocks.")}</Notice>
@@ -106,7 +96,7 @@ const PickBlock = ({
         </Stack>
       )}
       {report.isSuccess && !blocks.length && <Notice>No blocks available.</Notice>}
-    </Panel>
+    </Stack>
   );
 };
 
@@ -152,14 +142,14 @@ const comparisonMetrics = metricKeys.filter((metric) => metric !== "intensity");
 const ComparisonCharts = ({
   blocks,
   positions,
+  metric,
   unit,
 }: {
   blocks: [ComparedBlock, ComparedBlock];
   positions: number[];
+  metric: Metric;
   unit: DurationUnit;
 }) => {
-  const id = useId();
-  const [metric, setMetric] = useState<Metric>("duration");
   const measurements = (period: MetricsPeriod) => {
     if (isCheckInMetric(metric) && !period.window) return [];
     return metricValues(metric, period, unit).flatMap(({ label, value, detailOnly }) =>
@@ -210,31 +200,9 @@ const ComparisonCharts = ({
   return (
     <Stack gap="4">
       <Panel as="section">
-        <Flex justify="space-between" align="end" wrap="wrap" gap="3">
-          <Heading as="h2" size="md">
-            Change between blocks
-          </Heading>
-          <FormField as="div" maxW="sm" flex="1 1 15rem">
-            <label htmlFor={id}>Compare metric</label>
-            <NativeSelect.Root>
-              <NativeSelect.Field
-                id={id}
-                value={metric}
-                onChange={({ target }) => {
-                  const selected = comparisonMetrics.find((key) => key === target.value);
-                  if (selected) setMetric(selected);
-                }}
-              >
-                {comparisonMetrics.map((key) => (
-                  <option key={key} value={key}>
-                    {metricLabels[key]}
-                  </option>
-                ))}
-              </NativeSelect.Field>
-              <NativeSelect.Indicator />
-            </NativeSelect.Root>
-          </FormField>
-        </Flex>
+        <Heading as="h2" size="md">
+          Change between blocks
+        </Heading>
         <Text color="fg.muted" fontSize="sm">
           {blocks[0].label} → {blocks[1].label}
         </Text>
@@ -308,14 +276,17 @@ export const BlockComparison = ({
   ownerId: string;
   params: URLSearchParams;
   programs: ProgramSummary[];
-  updateParams: UpdateParams;
+  updateParams: UpdateFilters;
   unit: DurationUnit;
 }) => {
   const historical = programs.filter(
     ({ scheduled, status }) => scheduled && (status === "completed" || status === "archived"),
   );
   const filters = new URLSearchParams({ view: "compare" });
-  for (const key of ["leftProgram", "leftBlock", "rightProgram", "rightBlock"]) {
+  const blockKeys = ["leftProgram", "leftBlock", "rightProgram", "rightBlock"];
+  const resetKeys = [...blockKeys, "compareMetric"];
+  const metric = comparisonMetrics.find((key) => key === params.get("compareMetric")) ?? "duration";
+  for (const key of blockKeys) {
     const value = params.get(key);
     if (value) filters.set(key, value);
   }
@@ -339,13 +310,40 @@ export const BlockComparison = ({
 
   return (
     <Stack gap="4">
-      {!historical.length && (
-        <Notice>Complete or archive a scheduled program to compare its blocks.</Notice>
-      )}
-      <Grid templateColumns={columns} gap="3">
-        <PickBlock {...{ ownerId, params, updateParams }} programs={historical} side="left" />
-        <PickBlock {...{ ownerId, params, updateParams }} programs={historical} side="right" />
-      </Grid>
+      <MetricsFilters
+        onReset={() => updateParams(Object.fromEntries(resetKeys.map((key) => [key, null])))}
+        resetDisabled={!resetKeys.some((key) => params.has(key))}
+      >
+        {historical.length > 0 ? (
+          <>
+            <Grid templateColumns={columns} gap="3">
+              <PickBlock {...{ ownerId, params, updateParams }} programs={historical} side="left" />
+              <PickBlock
+                {...{ ownerId, params, updateParams }}
+                programs={historical}
+                side="right"
+              />
+            </Grid>
+            <FilterFields>
+              <FilterSelect
+                label="Metric"
+                value={metric}
+                onChange={(value) =>
+                  updateParams({ compareMetric: value === "duration" ? null : value })
+                }
+              >
+                {comparisonMetrics.map((key) => (
+                  <option key={key} value={key}>
+                    {metricLabels[key]}
+                  </option>
+                ))}
+              </FilterSelect>
+            </FilterFields>
+          </>
+        ) : (
+          <Notice>Complete or archive a scheduled program to compare its blocks.</Notice>
+        )}
+      </MetricsFilters>
       {duplicate && <Notice>Choose two distinct blocks.</Notice>}
       {complete && !duplicate && report.isPending && (
         <Notice role="status">Loading comparison…</Notice>
@@ -360,7 +358,12 @@ export const BlockComparison = ({
       )}
       {report.data && (
         <>
-          <ComparisonCharts blocks={report.data} positions={positions} unit={unit} />
+          <ComparisonCharts
+            blocks={report.data}
+            positions={positions}
+            metric={metric}
+            unit={unit}
+          />
           <Disclosure label="Detailed block totals">
             <Grid templateColumns={columns} gap="3">
               {report.data.map((block, index) => (

@@ -6,6 +6,9 @@ export type ServiceCredentialScope =
   | "programs:write"
   | "workouts:write"
   | "metrics:write"
+  | "nutrition:read"
+  | "nutrition:write"
+  | "nutrition:estimate"
   | "recordings:write";
 
 export type ServiceCredential = {
