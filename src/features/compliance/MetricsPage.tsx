@@ -57,7 +57,7 @@ const Metrics = ({ ownerId }: { ownerId: string }) => {
   const requestedProgram = params.get("program");
   const tab = params.get("tab") ?? "";
   const requested = params.get("view") ?? tab;
-  const view =
+  const requestedView =
     requested === "compliance"
       ? "program"
       : requested === "check-in"
@@ -65,8 +65,11 @@ const Metrics = ({ ownerId }: { ownerId: string }) => {
         : Object.hasOwn(views, requested)
           ? (requested as keyof typeof views)
           : "weekly";
-  const dashboard =
-    view === "weekly" || view === "block" || view === "program" || view === "custom";
+  const savedPeriod = periods.find((period) => period === params.get("period"));
+  const dashboard = periods.some((period) => period === requestedView);
+  const recovery = requestedView === "recovery";
+  const rangeView = dashboard || recovery;
+  const view = recovery ? (savedPeriod ?? "weekly") : requestedView;
   const requiresProgram = view === "block" || view === "program";
   const dated = view === "weekly" || view === "custom";
   const selectedProgram = scheduled.find(({ id }) => id === requestedProgram);
@@ -74,7 +77,7 @@ const Metrics = ({ ownerId }: { ownerId: string }) => {
   const programFilter = dated && requestedProgram !== "all" ? requestedProgram : program?.id;
   const needsPrograms = view !== "settings";
   const currentWeek = monday(localToday());
-  const requestedWeek = parseDate(params.get("week"));
+  const requestedWeek = parseDate(params.get("week") ?? params.get("date"));
   const reportWeek = requestedWeek ? monday(requestedWeek) : currentWeek;
   const start = params.get("start") ?? dateKey(reportWeek);
   const end = params.get("end") ?? dateKey(addDays(reportWeek, 6));
@@ -84,9 +87,16 @@ const Metrics = ({ ownerId }: { ownerId: string }) => {
   const dateError =
     view === "custom" &&
     (!first || !last || +last - +first < 0 || +last - +first >= 366 * 86_400_000);
-  const checkInDate = dateKey(parseDate(params.get("date")) ?? localToday());
   const loadFilter = sessionTypes.find((type) => type === params.get("sessionType")) ?? "all";
-  const overviewFilters = ["program", "week", "block", "start", "end", "metric"];
+  const rangeFilters = [
+    "program",
+    "week",
+    "date",
+    "block",
+    "start",
+    "end",
+    ...(dashboard ? ["metric"] : ["trend"]),
+  ];
   const selected =
     metricKeys.find(
       (key) => key === params.get("metric") && !preferences.data?.hiddenCharts.includes(key),
@@ -121,7 +131,7 @@ const Metrics = ({ ownerId }: { ownerId: string }) => {
     queryFn: ({ signal }) =>
       apiRequest<MetricsReport>(`/api/paideuo/v1/metrics?${filters}`, "GET", undefined, signal),
     enabled:
-      dashboard && (dated || programs.isSuccess) && (!requiresProgram || !!program) && !dateError,
+      rangeView && (dated || programs.isSuccess) && (!requiresProgram || !!program) && !dateError,
     retry: false,
   });
 
@@ -131,7 +141,7 @@ const Metrics = ({ ownerId }: { ownerId: string }) => {
 
   const programPicker = (
     <FilterSelect
-      label={view === "recovery" ? "Program for training comparison" : "Program"}
+      label="Program"
       value={programFilter || "all"}
       disabled={!dated && !program}
       onChange={(value) => updateParams({ program: value === "all" ? null : value, block: null })}
@@ -159,12 +169,12 @@ const Metrics = ({ ownerId }: { ownerId: string }) => {
     <Stack gap="4">
       <PageHeader title="Metrics" />
       <Tabs.Root
-        value={dashboard ? "overview" : view}
+        value={dashboard ? "overview" : requestedView}
         onValueChange={({ value }) => {
-          const previousPeriod = periods.find((period) => period === params.get("period"));
+          const previousPeriod = rangeView ? view : savedPeriod;
           updateParams({
             view: value === "overview" ? (previousPeriod ?? "weekly") : value,
-            period: dashboard ? view : (previousPeriod ?? null),
+            period: previousPeriod ?? null,
             tab: null,
           });
         }}
@@ -187,18 +197,20 @@ const Metrics = ({ ownerId }: { ownerId: string }) => {
             </Button>
           </Stack>
         )}
-        {dashboard && (
-          <Tabs.Content value="overview">
+        {rangeView && (
+          <Tabs.Content value={dashboard ? "overview" : "recovery"}>
             <Stack gap={{ base: "4", md: "6" }}>
               <MetricsFilters
-                onReset={() => resetFilters(overviewFilters)}
-                resetDisabled={!hasFilters(overviewFilters)}
+                onReset={() => resetFilters(rangeFilters)}
+                resetDisabled={!hasFilters(rangeFilters)}
               >
                 <FilterFields>
                   <FilterSelect
                     label="Period"
                     value={view}
-                    onChange={(value) => updateParams({ view: value, tab: null })}
+                    onChange={(value) =>
+                      updateParams(dashboard ? { view: value, tab: null } : { period: value })
+                    }
                   >
                     {periods.map((period) => (
                       <option key={period} value={period}>
@@ -216,7 +228,9 @@ const Metrics = ({ ownerId }: { ownerId: string }) => {
                         min="0001-01-01"
                         max="9999-12-31"
                         value={dateKey(requestedWeek ?? currentWeek)}
-                        onChange={({ target }) => updateParams({ week: target.value || null })}
+                        onChange={({ target }) =>
+                          updateParams({ week: target.value || null, date: null })
+                        }
                       />
                     </FormField>
                   )}
@@ -262,25 +276,33 @@ const Metrics = ({ ownerId }: { ownerId: string }) => {
                         />
                       </FormField>
                     ))}
-                  <FilterSelect
-                    label="Metric"
-                    value={selected ?? ""}
-                    disabled={!preferences.data}
-                    onChange={(value) => updateParams({ metric: value || null })}
-                  >
-                    <option value="">All visible metrics</option>
-                    {metricKeys
-                      .filter((key) => !preferences.data?.hiddenCharts.includes(key))
-                      .map((key) => (
-                        <option key={key} value={key}>
-                          {metricLabels[key]}
-                        </option>
-                      ))}
-                  </FilterSelect>
+                  {dashboard && (
+                    <FilterSelect
+                      label="Metric"
+                      value={selected ?? ""}
+                      disabled={!preferences.data}
+                      onChange={(value) => updateParams({ metric: value || null })}
+                    >
+                      <option value="">All visible metrics</option>
+                      {metricKeys
+                        .filter((key) => !preferences.data?.hiddenCharts.includes(key))
+                        .map((key) => (
+                          <option key={key} value={key}>
+                            {metricLabels[key]}
+                          </option>
+                        ))}
+                    </FilterSelect>
+                  )}
                 </FilterFields>
                 {view === "weekly" && (
                   <Text color="fg.muted" fontSize="sm">
                     Week of {formatDate(reportWeek, { dateStyle: "medium" })}
+                  </Text>
+                )}
+                {recovery && programFilter && (
+                  <Text color="fg.muted" fontSize="sm">
+                    Check-ins are personal records for the selected dates. The program filters
+                    training totals and sets which nutrition targets to use.
                   </Text>
                 )}
                 {dateError && (
@@ -290,7 +312,9 @@ const Metrics = ({ ownerId }: { ownerId: string }) => {
               {((requiresProgram && programs.isPending) ||
                 report.isLoading ||
                 report.isPlaceholderData ||
-                preferences.isPending) && <Notice role="status">Loading metrics…</Notice>}
+                (dashboard && preferences.isPending)) && (
+                <Notice role="status">Loading metrics…</Notice>
+              )}
               {requiresProgram && programs.isSuccess && !program && (
                 <Notice>Schedule a program to see this report.</Notice>
               )}
@@ -304,7 +328,7 @@ const Metrics = ({ ownerId }: { ownerId: string }) => {
                   </Button>
                 </Stack>
               )}
-              {preferences.isError && !preferences.data && (
+              {dashboard && preferences.isError && !preferences.data && (
                 <Stack align="start">
                   <Notice role="alert">Unable to load metric preferences.</Notice>
                   <Button size="sm" onClick={() => void preferences.refetch()}>
@@ -312,17 +336,30 @@ const Metrics = ({ ownerId }: { ownerId: string }) => {
                   </Button>
                 </Stack>
               )}
-              {report.data && !report.isPlaceholderData && preferences.data && !dateError && (
-                <MetricsCharts
+              {dashboard &&
+                report.data &&
+                !report.isPlaceholderData &&
+                preferences.data &&
+                !dateError && (
+                  <MetricsCharts
+                    report={report.data}
+                    preferences={preferences.data}
+                    reviewUrl={
+                      view === "block" && program
+                        ? (weekId) => weeklyReviewUrl(program.id, weekId)
+                        : undefined
+                    }
+                    weekly={view === "weekly"}
+                    selected={selected}
+                  />
+                )}
+              {recovery && report.data && !report.isPlaceholderData && !dateError && (
+                <RecoveryResults
+                  ownerId={ownerId}
                   report={report.data}
-                  preferences={preferences.data}
-                  reviewUrl={
-                    view === "block" && program
-                      ? (weekId) => weeklyReviewUrl(program.id, weekId)
-                      : undefined
-                  }
                   weekly={view === "weekly"}
-                  selected={selected}
+                  trend={params.get("trend")}
+                  updateParams={updateParams}
                 />
               )}
             </Stack>
@@ -373,18 +410,6 @@ const Metrics = ({ ownerId }: { ownerId: string }) => {
               <Notice>Schedule a program to explore training load.</Notice>
             )}
           </Stack>
-        </Tabs.Content>
-        <Tabs.Content value="recovery">
-          <RecoveryResults
-            ownerId={ownerId}
-            programId={program?.id}
-            date={checkInDate}
-            trend={params.get("trend")}
-            updateParams={updateParams}
-            onReset={() => resetFilters(["date", "trend", "program", "block"])}
-            resetDisabled={!hasFilters(["date", "trend", "program", "block"])}
-            programPicker={programPicker}
-          />
         </Tabs.Content>
         <Tabs.Content value="settings">
           <MetricPreferences ownerId={ownerId} />

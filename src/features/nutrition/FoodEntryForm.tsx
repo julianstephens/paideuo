@@ -1,11 +1,13 @@
 import {
   Button,
   Flex,
+  Grid,
   Heading,
   Input,
   NativeSelect,
   SimpleGrid,
   Stack,
+  Text,
   Textarea,
 } from "@chakra-ui/react";
 import { useQuery } from "@tanstack/react-query";
@@ -49,6 +51,9 @@ type ConsumedForm = {
 const localTimestamp = (date: Date) =>
   new Date(date.getTime() - date.getTimezoneOffset() * 60000).toISOString().slice(0, 19);
 
+const macroEstimate = (perServing: number, quantity: number) =>
+  Math.floor((Math.round(perServing * 1000) * Math.round(quantity * 1000) + 500) / 1000) / 1000;
+
 export const FoodEntryForm = (props: FormContext & (PlannedForm | ConsumedForm)) => {
   const { entry, date, ownerId, programId, timezone, pending, onClose } = props;
   const linked = props.kind === "consumed" ? props.linkedPlan : undefined;
@@ -57,8 +62,17 @@ export const FoodEntryForm = (props: FormContext & (PlannedForm | ConsumedForm))
   const savedTime = props.kind === "consumed" ? props.entry?.data.consumedAt : undefined;
   const initialTime = savedTime ? localTimestamp(new Date(savedTime)) : "";
   const [search, setSearch] = useState("");
+  const searchTerm = search.trim();
   const [after, setAfter] = useState<string[]>([]);
   const [selected, setSelected] = useState<Food>();
+  const [quantity, setQuantity] = useState(
+    String(entry?.data.quantity ?? linked?.data.quantity ?? 1),
+  );
+  const food =
+    entry?.data.snapshot ??
+    (source === "bank" ? selected?.data : source === "planned" ? linked?.data.snapshot : undefined);
+  const servings = quantity === "" ? NaN : Number(quantity);
+  const validServings = Number.isFinite(servings) && servings >= 0 && servings <= 1000;
   const canSave = !!entry || source !== "bank" || !!selected;
   const externalId = useRef<string>(undefined);
   const panel = useRef<HTMLDivElement>(null);
@@ -66,9 +80,9 @@ export const FoodEntryForm = (props: FormContext & (PlannedForm | ConsumedForm))
     panel.current?.focus();
   }, []);
   const foods = useQuery({
-    queryKey: [...foodQueryKey(ownerId), "planner", search, after.at(-1)],
+    queryKey: [...foodQueryKey(ownerId), "planner", searchTerm, after.at(-1)],
     queryFn: ({ signal }) =>
-      foodsApi.list({ search, category: "", status: "active" }, after.at(-1), signal),
+      foodsApi.list({ search: searchTerm, category: "", status: "active" }, after.at(-1), signal),
     enabled: !entry && source === "bank",
   });
   const initialMeal = entry?.data.meal ?? linked?.data.meal ?? "";
@@ -213,10 +227,16 @@ export const FoodEntryForm = (props: FormContext & (PlannedForm | ConsumedForm))
               <FormField>
                 Search food bank
                 <Input
+                  type="search"
+                  maxLength={200}
                   value={search}
                   onChange={(event) => {
                     setSearch(event.target.value);
                     setAfter([]);
+                  }}
+                  onKeyDown={(event) => {
+                    if (event.key === "Enter" && !event.nativeEvent.isComposing)
+                      event.preventDefault();
                   }}
                 />
               </FormField>
@@ -224,28 +244,64 @@ export const FoodEntryForm = (props: FormContext & (PlannedForm | ConsumedForm))
               {foods.isError && (
                 <Notice role="alert">{errorMessage(foods.error, "Unable to load foods.")}</Notice>
               )}
-              <FormField>
-                Bank food
-                <NativeSelect.Root>
-                  <NativeSelect.Field
-                    value={selected?.id ?? ""}
-                    onChange={(event) =>
-                      setSelected(foods.data?.items.find(({ id }) => id === event.target.value))
-                    }
+              {foods.data?.items.length === 0 && (
+                <Notice role="status">
+                  {searchTerm ? "No foods match your search." : "No active foods in the food bank."}
+                </Notice>
+              )}
+              {searchTerm && selected && <Notice>Selected food: {selected.data.title}</Notice>}
+              {searchTerm ? (
+                !!foods.data?.items.length && (
+                  <Stack
+                    role="group"
+                    aria-label="Matching foods"
+                    gap="1"
+                    maxH="64"
+                    overflowY="auto"
                   >
-                    <option value="">Choose a food</option>
-                    {selected && !foods.data?.items.some(({ id }) => id === selected.id) && (
-                      <option value={selected.id}>{selected.data.title}</option>
-                    )}
-                    {foods.data?.items.map(({ id, data }) => (
-                      <option key={id} value={id}>
-                        {data.title}
-                      </option>
+                    {foods.data.items.map((food) => (
+                      <Button
+                        key={food.id}
+                        type="button"
+                        aria-pressed={selected?.id === food.id}
+                        variant={selected?.id === food.id ? "solid" : "outline"}
+                        justifyContent="start"
+                        whiteSpace="normal"
+                        textAlign="start"
+                        h="auto"
+                        minH="10"
+                        py="2"
+                        onClick={() => setSelected(food)}
+                      >
+                        {food.data.title}
+                      </Button>
                     ))}
-                  </NativeSelect.Field>
-                  <NativeSelect.Indicator />
-                </NativeSelect.Root>
-              </FormField>
+                  </Stack>
+                )
+              ) : (
+                <FormField>
+                  Bank food
+                  <NativeSelect.Root>
+                    <NativeSelect.Field
+                      value={selected?.id ?? ""}
+                      onChange={(event) =>
+                        setSelected(foods.data?.items.find(({ id }) => id === event.target.value))
+                      }
+                    >
+                      <option value="">Choose a food</option>
+                      {selected && !foods.data?.items.some(({ id }) => id === selected.id) && (
+                        <option value={selected.id}>{selected.data.title}</option>
+                      )}
+                      {foods.data?.items.map(({ id, data }) => (
+                        <option key={id} value={id}>
+                          {data.title}
+                        </option>
+                      ))}
+                    </NativeSelect.Field>
+                    <NativeSelect.Indicator />
+                  </NativeSelect.Root>
+                </FormField>
+              )}
               {(after.length > 0 || foods.data?.next) && (
                 <Flex gap="2">
                   <Button
@@ -298,9 +354,9 @@ export const FoodEntryForm = (props: FormContext & (PlannedForm | ConsumedForm))
                   <Input name="unit" required maxLength={100} placeholder="bowl" />
                 </FormField>
               </SimpleGrid>
-              <SimpleGrid columns={{ base: 2, md: 4 }} gap="3">
+              <SimpleGrid minChildWidth="min(100%, 10rem)" gap="3">
                 {macroFields.map(({ key, label, unit }) => (
-                  <FormField key={key}>
+                  <FormField key={key} gridRow="span 2" gridTemplateRows="subgrid">
                     {label} per serving ({unit})
                     <Input name={"food-" + key} type="number" min={0} max={1000000} step={0.001} />
                   </FormField>
@@ -308,7 +364,11 @@ export const FoodEntryForm = (props: FormContext & (PlannedForm | ConsumedForm))
               </SimpleGrid>
             </Stack>
           )}
-          <SimpleGrid columns={{ base: 1, sm: 3 }} gap="3">
+          <SimpleGrid
+            columns={props.kind === "planned" ? { base: 1, sm: 3 } : undefined}
+            minChildWidth={props.kind === "consumed" ? "min(100%, 10rem)" : undefined}
+            gap="3"
+          >
             <FormField>
               Date
               <Input
@@ -329,10 +389,11 @@ export const FoodEntryForm = (props: FormContext & (PlannedForm | ConsumedForm))
                 min={0}
                 max={1000}
                 step={0.001}
-                defaultValue={entry?.data.quantity ?? linked?.data.quantity ?? 1}
+                value={quantity}
+                onChange={(event) => setQuantity(event.target.value)}
               />
             </FormField>
-            {props.kind === "planned" ? (
+            {props.kind === "planned" && (
               <FormField>
                 Order
                 <Input
@@ -344,18 +405,19 @@ export const FoodEntryForm = (props: FormContext & (PlannedForm | ConsumedForm))
                   defaultValue={props.entry ? (props.entry.data.order ?? 0) : props.order}
                 />
               </FormField>
-            ) : (
-              <FormField>
-                Time ({Intl.DateTimeFormat().resolvedOptions().timeZone}, optional)
-                <Input
-                  type="datetime-local"
-                  name="consumedAt"
-                  step={1}
-                  defaultValue={initialTime}
-                />
-              </FormField>
             )}
           </SimpleGrid>
+          {food && (
+            <Text fontSize="sm" color="fg.muted">
+              One serving: {food.serving.description}
+            </Text>
+          )}
+          {props.kind === "consumed" && (
+            <FormField>
+              Time ({Intl.DateTimeFormat().resolvedOptions().timeZone}, optional)
+              <Input type="datetime-local" name="consumedAt" step={1} defaultValue={initialTime} />
+            </FormField>
+          )}
           {timeError && <Notice role="alert">{timeError}</Notice>}
           <FormField>
             Meal
@@ -379,10 +441,15 @@ export const FoodEntryForm = (props: FormContext & (PlannedForm | ConsumedForm))
           <Heading as="h3" size="sm">
             Macro overrides for the entire entry
           </Heading>
-          <SimpleGrid columns={{ base: 2, md: 4 }} gap="3">
+          {food && (
+            <Text fontSize="sm" color="fg.muted">
+              Blank fields use the food’s estimates for the number of servings entered.
+            </Text>
+          )}
+          <SimpleGrid minChildWidth="min(100%, 10rem)" gap="3">
             {macroFields.map(({ key, label, unit }) => (
-              <Stack key={key} gap="1">
-                <FormField>
+              <Grid key={key} gridRow="span 3" templateRows="subgrid" rowGap="1.5">
+                <FormField gridRow="span 2" gridTemplateRows="subgrid">
                   {label} ({unit})
                   <Input
                     name={"entry-" + key}
@@ -391,18 +458,24 @@ export const FoodEntryForm = (props: FormContext & (PlannedForm | ConsumedForm))
                     max={1000000}
                     step={0.001}
                     defaultValue={entry?.data.overrides?.[key] ?? ""}
-                    placeholder="Use estimate"
+                    placeholder={
+                      food?.macros[key] != null && validServings
+                        ? String(macroEstimate(food.macros[key], servings))
+                        : food && food.macros[key] == null
+                          ? "Unknown"
+                          : "Use estimate"
+                    }
                   />
                 </FormField>
-                <FormField display="flex" alignItems="center">
+                <FormField display="flex" alignItems="baseline">
                   <input
                     type="checkbox"
                     name={"unknown-" + key}
                     defaultChecked={entry?.data.overrides?.[key] === null}
                   />
-                  Unknown {label.toLowerCase()}
+                  <span>Unknown {label.toLowerCase()}</span>
                 </FormField>
-              </Stack>
+              </Grid>
             ))}
           </SimpleGrid>
           <FormField>
