@@ -21,6 +21,8 @@ const MetricPlotChart = ({
   line = false,
   ceiling,
   signed,
+  tickFormatter,
+  formatValue,
 }: MetricPlotProps) => {
   const chart = useChart({ data, series });
   const number = chart.formatNumber({ maximumFractionDigits: 2 });
@@ -31,6 +33,7 @@ const MetricPlotChart = ({
       key="y"
       width={48}
       tickLine={false}
+      tickFormatter={tickFormatter}
       domain={
         signed ? [(min) => Math.min(0, min), (max) => Math.max(0, max)] : [0, ceiling ?? "auto"]
       }
@@ -41,8 +44,10 @@ const MetricPlotChart = ({
       cursor={false}
       content={
         <Chart.Tooltip
-          formatter={(value) =>
-            typeof value === "number" ? `${number(value)}${unit ? ` ${unit}` : ""}` : value
+          formatter={(value, label) =>
+            typeof value === "number"
+              ? (formatValue?.(value, label) ?? `${number(value)}${unit ? ` ${unit}` : ""}`)
+              : value
           }
         />
       }
@@ -55,13 +60,14 @@ const MetricPlotChart = ({
       {line ? (
         <LineChart responsive data={chart.data} aria-label={title}>
           {axes}
-          {series.map(({ name, label, color }) => (
+          {series.map(({ name, label, color, strokeDasharray }) => (
             <Line
               key={name}
               dataKey={name}
               name={label ?? name}
               stroke={chart.color(color)}
               strokeWidth={2}
+              strokeDasharray={strokeDasharray}
               connectNulls={false}
               isAnimationActive={false}
             />

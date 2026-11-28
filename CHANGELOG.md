@@ -1,6 +1,7 @@
 ## v0.7.1
 
 - Fix bug where log food form did not search properly
+- Improve nutrition metrics display
 
 ## v0.7.0
 

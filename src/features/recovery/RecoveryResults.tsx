@@ -1,11 +1,11 @@
-import { Button, Checkbox, Flex, Heading, Stack, Table, Text } from "@chakra-ui/react";
+import { Button, Checkbox, Flex, Grid, Heading, Stack, Table, Text } from "@chakra-ui/react";
 import { useQuery } from "@tanstack/react-query";
 import { useState } from "react";
 import { Disclosure, Notice, Panel } from "../../components/ui";
 import { errorMessage } from "../../lib/api/request";
 import { addDays, dateKey, formatDate, parseDate } from "../calendar/dates";
 import { FoodNutritionMetrics } from "../compliance/FoodNutritionMetrics";
-import { FilterSelect } from "../compliance/MetricsFilters";
+import { FilterFields, FilterSelect } from "../compliance/MetricsFilters";
 import type { UpdateFilters } from "../compliance/MetricsFilters";
 import { MetricPlot, plotColors } from "../compliance/MetricPlot";
 import { hours, loadPoints } from "../compliance/format";
@@ -28,6 +28,7 @@ const shortDate = (date: string) =>
 const numericTrends = [...recoveryMetrics, ...nutritionMetrics];
 const trendOptions = [...numericTrends, ...nutritionChoices];
 const colors = [...plotColors, "green.solid", "red.solid", "cyan.solid"];
+const strokePatterns = [undefined, "6 3", "2 3"];
 
 const listCheckIns = async (
   { start, end }: NonNullable<MetricsReport["window"]>,
@@ -51,15 +52,17 @@ const DailyDetails = ({ entries }: { entries: CheckInEntry[] }) => {
 
   return (
     <Disclosure label="Daily check-in details">
-      <Stack gap="3">
-        <FilterSelect label="Check-in date" value={entry.date} onChange={setDate}>
-          {entries.map(({ date }) => (
-            <option key={date} value={date}>
-              {shortDate(date)}
-            </option>
-          ))}
-        </FilterSelect>
-        <Stack as="dl" gap="1" fontSize="sm">
+      <Stack gap="3" maxW="lg">
+        <FilterFields>
+          <FilterSelect label="Check-in date" value={entry.date} onChange={setDate}>
+            {entries.map(({ date }) => (
+              <option key={date} value={date}>
+                {shortDate(date)}
+              </option>
+            ))}
+          </FilterSelect>
+        </FilterFields>
+        <Stack as="dl" gap="1.5" fontSize="sm">
           {checkInSections.flatMap(({ fields }) =>
             fields.map((field) => {
               const value = entry[field.key];
@@ -71,14 +74,19 @@ const DailyDetails = ({ entries }: { entries: CheckInEntry[] }) => {
                     ? (field.choices.find((choice) => choice.value === value)?.label ?? value)
                     : value;
               return (
-                <Flex key={field.key} gap="2" justify="space-between" wrap="wrap">
+                <Grid
+                  key={field.key}
+                  templateColumns="minmax(0, 3fr) minmax(0, 2fr)"
+                  columnGap="3"
+                  alignItems="baseline"
+                >
                   <Text as="dt" fontWeight="medium">
                     {field.label}
                   </Text>
                   <Text as="dd" color="fg.muted" whiteSpace="pre-wrap" overflowWrap="anywhere">
                     {display}
                   </Text>
-                </Flex>
+                </Grid>
               );
             }),
           )}
@@ -129,7 +137,47 @@ export const RecoveryResults = ({
         ]
       : [],
   );
-  const units = [...new Set(selectedNumeric.map(({ unit }) => unit))];
+  const metrics = [
+    ...selectedNumeric.map(({ key, label, unit }) => ({
+      name: key as string,
+      label,
+      unit: unit as string,
+      read: (entries: CheckInEntry[]) => summarize(entries, key).mean,
+    })),
+    ...selectedChoices.flatMap(({ key, label, choices }) =>
+      choices.map(({ value, label: choiceLabel }) => ({
+        name: `${key}-${value}`,
+        label: `${label} · ${choiceLabel}`,
+        unit: "days",
+        read: (entries: CheckInEntry[]) => {
+          const responses = entries.filter((entry) => entry[key] != null);
+          return responses.length ? responses.filter((entry) => entry[key] === value).length : null;
+        },
+      })),
+    ),
+  ];
+  const unitMaxima = new Map<string, number>();
+  const measurements = chartBuckets.map(({ label, entries }) => ({
+    label,
+    values: metrics.map(({ unit, read }) => {
+      const value = read(entries);
+      unitMaxima.set(unit, Math.max(unitMaxima.get(unit) ?? (unit === "/ 5" ? 5 : 0), value ?? 0));
+      return value;
+    }),
+  }));
+  const mixedUnits = unitMaxima.size > 1;
+  const chartData = measurements.map(({ label, values }) => ({
+    label,
+    ...Object.fromEntries(
+      metrics.map(({ name, unit }, index) => {
+        const value = values[index];
+        const maximum = unitMaxima.get(unit) || 1;
+        return [name, mixedUnits && value !== null ? (value / maximum) * 100 : value];
+      }),
+    ),
+  }));
+  const unitsByLabel = new Map(metrics.map(({ label, unit }) => [label, unit]));
+  const unit = metrics[0]?.unit;
 
   if (!window) return <Notice>No dates are available for this report.</Notice>;
 
@@ -181,67 +229,39 @@ export const RecoveryResults = ({
             <Text color="fg.muted" fontSize="sm">
               {weekly ? "Daily measurements" : "Averages use days with a recorded value."}
             </Text>
-            {!units.length && !selectedChoices.length && <Notice>Select metrics to chart.</Notice>}
-            {units.map((unit) => {
-              const metrics = selectedNumeric.filter((metric) => metric.unit === unit);
-              const title = metrics.length === 1 ? metrics[0].label : "Check-in ratings (1–5)";
-              return (
-                <Stack key={unit} gap="2">
-                  <Heading as="h3" size="sm">
-                    {title}
-                  </Heading>
-                  <MetricPlot
-                    title={title}
-                    unit={unit}
-                    ceiling={unit === "/ 5" ? 5 : undefined}
-                    line
-                    series={metrics.map(({ key, label }, index) => ({
-                      name: key,
-                      label,
-                      color: colors[index],
-                    }))}
-                    data={chartBuckets.map(({ label, entries }) => ({
-                      label,
-                      ...Object.fromEntries(
-                        metrics.map(({ key }) => [key, summarize(entries, key).mean]),
-                      ),
-                    }))}
-                  />
-                </Stack>
-              );
-            })}
-            {selectedChoices.map(({ key, label, choices }) => (
-              <Stack key={key} gap="2">
-                <Heading as="h3" size="sm">
-                  {label}
-                </Heading>
-                <MetricPlot
-                  title={label}
-                  unit="days"
-                  series={choices.map(({ label, value }, index) => ({
-                    name: value,
-                    label,
-                    color: colors[index],
-                  }))}
-                  data={chartBuckets.map(({ label, entries }) => {
-                    const responses = entries
-                      .map((entry) => entry[key])
-                      .filter((value) => value != null);
-                    return {
-                      label,
-                      ...Object.fromEntries(
-                        choices.map(({ value }) => [
-                          value,
-                          responses.length
-                            ? responses.filter((response) => response === value).length
-                            : null,
-                        ]),
-                      ),
-                    };
-                  })}
-                />
-              </Stack>
-            ))}
+            {mixedUnits && (
+              <Text color="fg.muted" fontSize="sm">
+                The axis shows percent of each unit’s highest plotted value. Ratings use 5 as their
+                maximum. Hover or focus the chart to see the original values.
+              </Text>
+            )}
+            {metrics.length ? (
+              <MetricPlot
+                title="Check-in trends"
+                data={chartData}
+                series={metrics.map(({ name, label }, index) => ({
+                  name,
+                  label,
+                  color: colors[index % colors.length],
+                  strokeDasharray: strokePatterns[Math.floor(index / colors.length)],
+                }))}
+                unit={mixedUnits ? undefined : unit}
+                ceiling={mixedUnits ? 100 : unit === "/ 5" ? 5 : undefined}
+                tickFormatter={mixedUnits ? (value) => `${value}%` : undefined}
+                formatValue={
+                  mixedUnits
+                    ? (value, label) => {
+                        const unit = unitsByLabel.get(label);
+                        const maximum = (unit && unitMaxima.get(unit)) || 1;
+                        return `${metricNumber.format((value / 100) * maximum)}${unit ? ` ${unit}` : ""}`;
+                      }
+                    : undefined
+                }
+                line
+              />
+            ) : (
+              <Notice>Select metrics to chart.</Notice>
+            )}
           </Stack>
         )}
       </Panel>

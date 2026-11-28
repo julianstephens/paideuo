@@ -2,7 +2,12 @@ import { Notice } from "../../components/ui";
 import MetricPlotChart from "./MetricPlotChart";
 
 export type PlotPoint = { label: string; [key: string]: string | number | null };
-export type PlotSeries = { name: string; label?: string; color: string };
+export type PlotSeries = {
+  name: string;
+  label?: string;
+  color: string;
+  strokeDasharray?: string;
+};
 
 export const plotColors = [
   "teal.solid",
@@ -20,6 +25,8 @@ export type MetricPlotProps = {
   line?: boolean;
   ceiling?: number;
   signed?: boolean;
+  tickFormatter?: (value: number) => string;
+  formatValue?: (value: number, label: string) => string;
 };
 
 export const MetricPlot = (props: MetricPlotProps) => {

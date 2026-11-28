@@ -17,7 +17,7 @@ const MeasurementCell = ({
   value: Omit<Measurement, "partialDays"> & { partialDays?: number };
   daily: boolean;
 }) => (
-  <Table.Cell>
+  <Table.Cell textAlign="end" fontVariantNumeric="tabular-nums">
     {valueLabel(value.total)}
     {!daily && value.days > 0 && (
       <Text fontSize="xs" color="fg.muted">
@@ -32,44 +32,69 @@ const MeasurementCell = ({
   </Table.Cell>
 );
 
+type NutritionRow = { label: string; summary: FoodNutrition; daily?: boolean };
+
 const NutritionTable = ({
   rows,
-  daily = false,
+  label,
   showPlan,
 }: {
-  rows: { label?: string; summary: FoodNutrition }[];
-  daily?: boolean;
+  rows: NutritionRow[];
+  label: string;
   showPlan: boolean;
 }) => (
-  <Table.ScrollArea>
-    <Table.Root size="sm" aria-label={daily ? "Daily food totals" : "Selected range food totals"}>
+  <Table.ScrollArea w="full">
+    <Table.Root
+      size="sm"
+      aria-label={label}
+      w="full"
+      tableLayout="fixed"
+      minW={showPlan ? "52rem" : undefined}
+      css={{ "& th, & td": { verticalAlign: "top", overflowWrap: "anywhere" } }}
+    >
+      <Table.ColumnGroup>
+        <Table.Column width={showPlan ? "8rem" : "29%"} />
+        <Table.Column width={showPlan ? "10rem" : "35%"} />
+      </Table.ColumnGroup>
       <Table.Header>
         <Table.Row>
-          {daily && <Table.ColumnHeader scope="col">Date</Table.ColumnHeader>}
+          <Table.ColumnHeader scope="col">Period</Table.ColumnHeader>
           <Table.ColumnHeader scope="col">Macro</Table.ColumnHeader>
-          <Table.ColumnHeader scope="col">Food logs</Table.ColumnHeader>
+          <Table.ColumnHeader scope="col" textAlign="end">
+            Food logs
+          </Table.ColumnHeader>
           {showPlan && (
             <>
-              <Table.ColumnHeader scope="col">Planned food</Table.ColumnHeader>
-              <Table.ColumnHeader scope="col">Target</Table.ColumnHeader>
-              <Table.ColumnHeader scope="col">Target attainment</Table.ColumnHeader>
-              <Table.ColumnHeader scope="col">Actual minus planned</Table.ColumnHeader>
+              <Table.ColumnHeader scope="col" textAlign="end">
+                Planned food
+              </Table.ColumnHeader>
+              <Table.ColumnHeader scope="col" textAlign="end">
+                Target
+              </Table.ColumnHeader>
+              <Table.ColumnHeader scope="col" textAlign="end">
+                Target attainment
+              </Table.ColumnHeader>
+              <Table.ColumnHeader scope="col" textAlign="end">
+                Actual minus planned
+              </Table.ColumnHeader>
             </>
           )}
         </Table.Row>
       </Table.Header>
-      <Table.Body>
-        {rows.flatMap(({ label, summary }) =>
-          targetMacros.map((key, index) => {
+      {rows.map(({ label, summary, daily = false }) => (
+        <Table.Body key={label}>
+          {targetMacros.map((key, index) => {
             const { consumed, planned, target, attainment, planDifference } = summary.macros[key];
             return (
-              <Table.Row key={`${label ?? "range"}-${key}`}>
-                {daily && index === 0 && (
-                  <Table.Cell rowSpan={targetMacros.length} verticalAlign="top">
+              <Table.Row key={key}>
+                {index === 0 && (
+                  <Table.Cell as="th" scope="rowgroup" rowSpan={targetMacros.length}>
                     {label}
-                    <Text fontSize="xs" color="fg.muted">
-                      {summary.loggedDays ? "Logged" : "No food logs"}
-                    </Text>
+                    {daily && (
+                      <Text fontSize="xs" color="fg.muted">
+                        {summary.loggedDays ? "Logged" : "No food logs"}
+                      </Text>
+                    )}
                   </Table.Cell>
                 )}
                 <Table.Cell as="th" scope="row">
@@ -80,7 +105,7 @@ const NutritionTable = ({
                   <>
                     <MeasurementCell value={planned} daily={daily} />
                     <MeasurementCell value={target} daily={daily} />
-                    <Table.Cell>
+                    <Table.Cell textAlign="end" fontVariantNumeric="tabular-nums">
                       {attainment.ratio === null ? "—" : percentage.format(attainment.ratio)}
                       {!daily && attainment.days > 0 && (
                         <Text fontSize="xs" color="fg.muted">
@@ -93,9 +118,9 @@ const NutritionTable = ({
                 )}
               </Table.Row>
             );
-          }),
-        )}
-      </Table.Body>
+          })}
+        </Table.Body>
+      ))}
     </Table.Root>
   </Table.ScrollArea>
 );
@@ -110,16 +135,12 @@ export const FoodNutritionMetrics = ({
   const summary = report.total.foodNutrition;
   if (!summary || (!summary.loggedDays && !summary.activePlanDays)) return null;
   const showPlan = summary.activePlanDays > 0;
-  const daily = (
-    <NutritionTable
-      rows={(report.nutritionDays ?? []).map(({ date, foodNutrition }) => ({
-        label: formatDate(parseDate(date)!, { month: "short", day: "numeric", year: "numeric" }),
-        summary: foodNutrition,
-      }))}
-      daily
-      showPlan={showPlan}
-    />
-  );
+  const range = { label: "Selected range", summary };
+  const dailyRows = (report.nutritionDays ?? []).map(({ date, foodNutrition }) => ({
+    label: formatDate(parseDate(date)!, { month: "short", day: "numeric", year: "numeric" }),
+    summary: foodNutrition,
+    daily: true,
+  }));
   return (
     <Panel>
       <Stack gap="3">
@@ -130,8 +151,16 @@ export const FoodNutritionMetrics = ({
           Food logged on {summary.loggedDays} of {dayLabel(summary.days)}
           {showPlan && ` · Plan active on ${dayLabel(summary.activePlanDays)}`}
         </Text>
-        <NutritionTable rows={[{ summary }]} showPlan={showPlan} />
-        {weekly ? daily : <Disclosure label="Daily food totals">{daily}</Disclosure>}
+        <NutritionTable
+          rows={weekly ? [range, ...dailyRows] : [range]}
+          label={weekly ? "Selected range and daily food totals" : "Selected range food totals"}
+          showPlan={showPlan}
+        />
+        {!weekly && dailyRows.length > 0 && (
+          <Disclosure label="Daily food totals">
+            <NutritionTable rows={dailyRows} label="Daily food totals" showPlan={showPlan} />
+          </Disclosure>
+        )}
       </Stack>
     </Panel>
   );
