@@ -119,10 +119,10 @@ const NutritionBar = ({
       as="span"
       aria-hidden="true"
       display="block"
+      position="relative"
       h="1"
       bg="bg.emphasized"
       borderRadius="full"
-      position="relative"
     >
       {eaten !== null && (
         <Box
@@ -136,6 +136,16 @@ const NutritionBar = ({
           borderRadius="full"
         />
       )}
+      {target != null && (
+        <Box
+          as="span"
+          position="absolute"
+          insetBlock="-1"
+          insetInlineStart={position(target)}
+          w="1px"
+          bg="fg"
+        />
+      )}
       {planned !== null && (
         <Box
           as="span"
@@ -145,17 +155,6 @@ const NutritionBar = ({
           w="0.5"
           borderRadius="full"
           bg="fg.muted"
-        />
-      )}
-      {target != null && (
-        <Box
-          as="span"
-          position="absolute"
-          insetBlock="-1"
-          insetInlineStart={position(target)}
-          borderInlineStartWidth="1px"
-          borderStyle="dashed"
-          borderColor="fg"
         />
       )}
     </Box>
@@ -196,7 +195,7 @@ export const CalendarNutrition = ({
   }
   const showPlan = day.target.active || day.planned.entryCount > 0;
   const pastTolerance = day.date < today ? tolerance : undefined;
-  const values = nutritionValues(day).map(({ key, label, planned, eaten, target }) => {
+  const values = nutritionValues(day).map(({ key, label, unit, planned, eaten, target }) => {
     const plan = completeAmount(planned);
     const actual = completeAmount(eaten);
     return {
@@ -205,6 +204,7 @@ export const CalendarNutrition = ({
       plan,
       actual,
       target,
+      summary: `${label} (${unit}): Eaten ${formatAmount(eaten)} · Planned ${formatAmount(planned)} · Target ${target ?? "—"}`,
       status: adherence(plan, actual, pastTolerance),
       abovePlan: !!pastTolerance && isAbovePlan(plan, actual),
     };
@@ -215,9 +215,7 @@ export const CalendarNutrition = ({
   const hasChart = values.some(
     ({ plan, actual, target }) => plan !== null || actual !== null || target != null,
   );
-  const targets = values.flatMap(({ label, target }) =>
-    target == null ? [] : [`${label} target: ${target}`],
-  );
+  const summaries = values.map(({ summary }) => summary);
 
   return (
     <Button
@@ -235,15 +233,9 @@ export const CalendarNutrition = ({
       maxW="full"
       css={!compact && hasChart ? { container: "nutrition-preview / inline-size" } : undefined}
       focusVisibleRing={compact ? "inside" : "outside"}
-      aria-label={`Nutrition details for ${fullDate(day.date)}. ${showPlan ? `${day.planned.entryCount} planned, ` : ""}${day.consumed.entryCount} eaten. ${[...targets, ...comparisons].join(". ")}`}
+      aria-label={`Nutrition details for ${fullDate(day.date)}. ${showPlan ? `${day.planned.entryCount} planned, ` : ""}${day.consumed.entryCount} eaten. ${[...summaries, ...comparisons].join(". ")}`}
       aria-haspopup="dialog"
-      title={
-        hasChart && day.planned.entryCount > 0
-          ? "Nutrition details. Gray ticks mark planned amounts. Up arrows show past totals above plan."
-          : targets.length
-            ? targets.join(" · ")
-            : "Nutrition details"
-      }
+      title={summaries.join("\n")}
       onClick={(event) => onOpen(day.date, event.currentTarget)}
     >
       {(!compact || !hasChart) && <AppIcon name="nutrition" size={16} />}
@@ -446,9 +438,9 @@ export const CalendarNutritionDialog = ({
                 </Text>
                 {hasCalendarNutrition(day) && (
                   <Text fontSize="xs" color="fg.muted">
-                    Bars show eaten amounts.
-                    {showPlan && " Gray ticks mark planned amounts."}
-                    {day.target.active && " Dashed ticks mark targets."}
+                    Fill shows eaten.
+                    {day.planned.entryCount > 0 && " Short ticks mark planned food."}
+                    {day.target.active && " Tall ticks mark program targets."}
                   </Text>
                 )}
                 {hasCalendarNutrition(day) &&

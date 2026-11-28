@@ -1,3 +1,7 @@
+## v0.7.3
+
+- Improve macro tracking display
+
 ## v0.7.2
 
 - Fix bug where macro tracking display was not showing
