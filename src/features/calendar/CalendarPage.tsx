@@ -142,7 +142,10 @@ const Calendar = ({ ownerId }: { ownerId: string }) => {
   const start = dateKey(first);
   const end = dateKey(last);
   const queryClient = useQueryClient();
-  const targetProgramId = params.get("program") ?? "";
+  const programParam = params.get("program");
+  const targetsHidden = programParam === "none";
+  const targetProgramId = targetsHidden ? "" : (programParam ?? "");
+  const autoTargets = !programParam;
   const targetProgram = useQuery({
     queryKey: programKeys.detail(ownerId, targetProgramId),
     queryFn: ({ signal }) => programsApi.get(targetProgramId, signal),
@@ -151,14 +154,24 @@ const Calendar = ({ ownerId }: { ownerId: string }) => {
   });
   const nutritionProgram = targetProgram.data?.id;
   const nutrition = useQuery({
-    queryKey: [...consumedKey(ownerId), "summary", "calendar", start, end, nutritionProgram],
-    queryFn: ({ signal }) => consumedApi.summaryRange(start, end, nutritionProgram, signal),
+    queryKey: [
+      ...consumedKey(ownerId),
+      "summary",
+      "calendar",
+      start,
+      end,
+      nutritionProgram,
+      autoTargets,
+    ],
+    queryFn: ({ signal }) =>
+      consumedApi.summaryRange(start, end, nutritionProgram, signal, autoTargets),
     retry: false,
   });
   const nutritionByDate = new Map(nutrition.data?.days.map((day) => [day.date, day]));
-  const clearTargetProgram = () => {
+  const toggleTargets = () => {
     const next = new URLSearchParams(params);
-    next.delete("program");
+    if (targetsHidden) next.delete("program");
+    else next.set("program", "none");
     setParams(next);
   };
   const queryKey = [...calendarKey(ownerId), start, end] as const;
@@ -221,7 +234,7 @@ const Calendar = ({ ownerId }: { ownerId: string }) => {
     setCheckIn(undefined);
     setWorkoutDate(undefined);
     const next = new URLSearchParams({ date: dateKey(nextDate), view: nextView });
-    if (targetProgramId) next.set("program", targetProgramId);
+    if (programParam) next.set("program", programParam);
     setParams(next);
   };
   const move = (direction: number) =>
@@ -236,7 +249,9 @@ const Calendar = ({ ownerId }: { ownerId: string }) => {
   return (
     <Stack gap={{ base: "4", md: "5" }}>
       <PageHeader title="Calendar" />
-      {targetProgramId && (
+      {(targetProgramId ||
+        targetsHidden ||
+        nutrition.data?.days.some((day) => day.targetProgramId)) && (
         <Flex align="center" gap="2" wrap="wrap">
           {targetProgram.data && (
             <Link asChild variant="underline">
@@ -245,8 +260,8 @@ const Calendar = ({ ownerId }: { ownerId: string }) => {
               </RouterLink>
             </Link>
           )}
-          <Button variant="ghost" size="sm" onClick={clearTargetProgram}>
-            Hide nutrition targets
+          <Button variant="ghost" size="sm" onClick={toggleTargets}>
+            {targetsHidden ? "Show nutrition targets" : "Hide nutrition targets"}
           </Button>
         </Flex>
       )}
@@ -563,9 +578,9 @@ const Calendar = ({ ownerId }: { ownerId: string }) => {
           day={nutritionDetailDay}
           {...nutritionDisplay}
           ownerId={ownerId}
-          programId={nutritionProgram}
+          programId={nutritionProgram ?? nutritionDetailDay.targetProgramId}
           timezone={
-            targetProgram.data?.scheduled
+            targetProgram.data?.scheduled || nutritionDetailDay.targetProgramId
               ? undefined
               : Intl.DateTimeFormat().resolvedOptions().timeZone
           }

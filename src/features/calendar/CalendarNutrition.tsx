@@ -196,7 +196,7 @@ export const CalendarNutrition = ({
   }
   const showPlan = day.target.active || day.planned.entryCount > 0;
   const pastTolerance = day.date < today ? tolerance : undefined;
-  const values = nutritionValues(day).map(({ key, label, planned, eaten }) => {
+  const values = nutritionValues(day).map(({ key, label, planned, eaten, target }) => {
     const plan = completeAmount(planned);
     const actual = completeAmount(eaten);
     return {
@@ -204,6 +204,7 @@ export const CalendarNutrition = ({
       label,
       plan,
       actual,
+      target,
       status: adherence(plan, actual, pastTolerance),
       abovePlan: !!pastTolerance && isAbovePlan(plan, actual),
     };
@@ -211,7 +212,12 @@ export const CalendarNutrition = ({
   const comparisons = values.flatMap(({ label, status, abovePlan }) =>
     status ? [`${label}: ${abovePlan ? "above plan, " : ""}${status.label}`] : [],
   );
-  const hasChart = values.some(({ plan, actual }) => plan !== null || actual !== null);
+  const hasChart = values.some(
+    ({ plan, actual, target }) => plan !== null || actual !== null || target != null,
+  );
+  const targets = values.flatMap(({ label, target }) =>
+    target == null ? [] : [`${label} target: ${target}`],
+  );
 
   return (
     <Button
@@ -229,12 +235,14 @@ export const CalendarNutrition = ({
       maxW="full"
       css={!compact && hasChart ? { container: "nutrition-preview / inline-size" } : undefined}
       focusVisibleRing={compact ? "inside" : "outside"}
-      aria-label={`Nutrition details for ${fullDate(day.date)}. ${showPlan ? `${day.planned.entryCount} planned, ` : ""}${day.consumed.entryCount} eaten.${comparisons.length ? " " + comparisons.join(". ") : ""}`}
+      aria-label={`Nutrition details for ${fullDate(day.date)}. ${showPlan ? `${day.planned.entryCount} planned, ` : ""}${day.consumed.entryCount} eaten. ${[...targets, ...comparisons].join(". ")}`}
       aria-haspopup="dialog"
       title={
         hasChart && day.planned.entryCount > 0
           ? "Nutrition details. Gray ticks mark planned amounts. Up arrows show past totals above plan."
-          : "Nutrition details"
+          : targets.length
+            ? targets.join(" · ")
+            : "Nutrition details"
       }
       onClick={(event) => onOpen(day.date, event.currentTarget)}
     >
@@ -256,7 +264,7 @@ export const CalendarNutrition = ({
             },
           }}
         >
-          {values.map(({ key, plan, actual, status, abovePlan }) => (
+          {values.map(({ key, plan, actual, target, status, abovePlan }) => (
             <Stack as="span" key={key} gap="1" textAlign="start">
               <Text
                 as="span"
@@ -266,6 +274,7 @@ export const CalendarNutrition = ({
                 whiteSpace="nowrap"
               >
                 {previewLabels[key]}
+                {plan === null && actual === null && target != null && ` ${target}`}
               </Text>
               <Grid
                 as="span"
@@ -277,6 +286,7 @@ export const CalendarNutrition = ({
                 <NutritionBar
                   planned={plan}
                   eaten={actual}
+                  target={target}
                   status={status}
                   tolerance={pastTolerance}
                 />

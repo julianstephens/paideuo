@@ -534,17 +534,18 @@ define(
     ["days"],
   ),
 );
-const daySummary = object({ date, target: targets, planned: totals, consumed: totals }, [
-  "date",
-  "target",
-  "planned",
-  "consumed",
-]);
+const daySummary = object(
+  { date, target: targets, planned: totals, consumed: totals, targetProgramId: id },
+  ["date", "target", "planned", "consumed"],
+);
 define("days.summary", "read", object({ date, programId: id }, ["date"]), daySummary);
 define(
   "days.summary_range",
   "read",
-  object({ startDate: date, endDate: date, programId: id }, ["startDate", "endDate"]),
+  object({ startDate: date, endDate: date, programId: id, autoTargets: { type: "boolean" } }, [
+    "startDate",
+    "endDate",
+  ]),
   object({ days: array(daySummary, maxTargetDays) }, ["days"]),
 );
 

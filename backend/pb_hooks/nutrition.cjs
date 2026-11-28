@@ -458,19 +458,32 @@ const entriesByDate = (db, kind, owner, start, end) => {
   return grouped;
 };
 
-const readDailyNutrition = (db, owner, { startDate, endDate, programId }) => {
+const readDailyNutrition = (db, owner, { startDate, endDate, programId, autoTargets }) => {
   const start = civilDate(startDate).getTime();
   const end = civilDate(endDate).getTime();
   const context = targetContext(db, owner, programId);
+  const candidates =
+    autoTargets && !programId
+      ? find(db, collection("plans"), "owner = {:owner}", { owner }).flatMap((record) => {
+          const id = record.getString("program");
+          const context = targetContext(db, owner, id);
+          return context ? [{ id, context }] : [];
+        })
+      : [];
   const planned = entriesByDate(db, "planned", owner, startDate, endDate);
   const consumed = entriesByDate(db, "consumed", owner, startDate, endDate);
   const days = [];
   for (let time = start; time <= end; time += dayMilliseconds) {
     const day = new Date(time);
     const date = dates.format(day);
+    const active = candidates
+      .map(({ id, context }) => ({ id, target: effective(context, day) }))
+      .filter(({ target }) => target.active);
+    const match = active.length === 1 ? active[0] : null;
     days.push({
       date,
-      target: effective(context, day),
+      target: match?.target ?? effective(context, day),
+      ...(match && { targetProgramId: match.id }),
       planned: summarize(planned.get(date) ?? []),
       consumed: summarize(consumed.get(date) ?? []),
     });

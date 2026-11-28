@@ -46,6 +46,7 @@ export type NutritionDaySummary = {
   planned: NutritionTotals;
   consumed: NutritionTotals;
   target: EffectiveTarget;
+  targetProgramId?: string;
 };
 
 export const consumedApi = {
@@ -56,10 +57,11 @@ export const consumedApi = {
     endDate: string,
     programId: string | undefined,
     signal: AbortSignal,
+    autoTargets?: boolean,
   ) =>
     send<{ days: NutritionDaySummary[] }>(
       "days/summary_range",
-      { startDate, endDate, programId },
+      { startDate, endDate, programId, autoTargets },
       signal,
     ),
   list: async (filter: { date: string } | { plannedId: string }, signal: AbortSignal) => {

@@ -3730,6 +3730,26 @@ test("nutrition targets follow training weeks and keep exact-date overrides on c
       });
       assert.equal((await resolve("2026-11-03", overlappingId)).active, false);
       const range = { programId, startDate: "2026-11-01", endDate: "2026-11-03" };
+      const automaticRange = {
+        startDate: range.startDate,
+        endDate: range.endDate,
+        autoTargets: true,
+      };
+      const automatic = await rest("days.summary_range", automaticRange);
+      assert.equal(automatic.days[0].targetProgramId, programId);
+      assert.equal(automatic.days[0].target.active, true);
+      assert.equal(automatic.days[0].planned.entryCount, 0);
+      assert.equal(automatic.days[0].consumed.entryCount, 0);
+      assert.equal(automatic.days[1].targetProgramId, undefined);
+      assert.equal(automatic.days[1].target.active, false);
+      assert.deepEqual(automatic.days[2].target, tuesday);
+      assert.deepEqual(
+        (await mcp("days.summary_range", automaticRange, reader)).result.structuredContent,
+        automatic,
+      );
+      const hidden = await rest("days.summary_range", { ...automaticRange, autoTargets: false });
+      assert.ok(hidden.days.every((day) => !day.target.active));
+
       const bulk = await rest("targets.resolve_bulk", range);
       assert.deepEqual(bulk, {
         days: await Promise.all(

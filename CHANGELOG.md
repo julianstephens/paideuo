@@ -1,3 +1,7 @@
+## v0.7.2
+
+- Fix bug where macro tracking display was not showing
+
 ## v0.7.1
 
 - Fix bug where log food form did not search properly
